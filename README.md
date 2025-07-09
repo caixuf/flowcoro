@@ -56,10 +56,9 @@ std::string response = co_await flowcoro::CoroTask::execute_network_request<flow
 
 ## 构建要求
 
-- C++20 兼容编译器（如 GCC 10+，Clang 12+）
-- CMake 3.14 或更高版本
-- 线程支持
-- libcurl 开发库（若使用网络功能）
+- C++20 编译器 (GCC 10+, Clang 12+, MSVC 2022+)
+- CMake 3.14+
+- 支持协程的标准库
 
 ## 构建方法
 
@@ -87,3 +86,64 @@ make
 ## 许可证
 
 本项目采用 MIT 许可证。详情请查看 LICENSE 文件。
+
+## 无锁编程升级 (v2.0)
+
+FlowCoro v2.0 全面升级为使用 **C++20 无锁编程技术**，提供了更高的性能和并发能力。
+
+### 无锁数据结构
+
+| 数据结构 | 描述 | 特性 |
+|----------|------|------|
+| `lockfree::Queue<T>` | 无锁队列 (Michael & Scott算法) | 多生产者多消费者安全 |
+| `lockfree::Stack<T>` | 无锁栈 (Treiber Stack) | 高性能LIFO操作 |
+| `lockfree::RingBuffer<T, Size>` | 无锁环形缓冲区 | 单生产者单消费者，零拷贝 |
+| `lockfree::AtomicCounter` | 原子计数器 | 高性能计数操作 |
+
+### 无锁线程池
+
+- `lockfree::ThreadPool`: 基础无锁线程池
+- `lockfree::WorkStealingThreadPool`: 工作窃取线程池，提供更好的负载均衡
+
+### 协程调度器
+
+- `GlobalThreadPool`: 全局无锁线程池管理器
+- 协程自动调度到无锁线程池执行
+- 支持异步Promise和协程间通信
+
+### 性能特性
+
+- ✅ **零锁设计**: 所有数据结构使用原子操作，避免锁竞争
+- ✅ **内存对齐**: 关键数据结构使用64字节对齐，优化缓存性能
+- ✅ **内存序**: 精确的内存序控制，确保正确性和性能
+- ✅ **工作窃取**: 智能任务分发，提高CPU利用率
+
+### 无锁编程示例
+
+```cpp
+#include "flowcoro.h"
+#include "lockfree.h"
+
+// 无锁队列示例
+lockfree::Queue<int> queue;
+queue.enqueue(42);
+int value;
+if (queue.dequeue(value)) {
+    std::cout << "Dequeued: " << value << std::endl;
+}
+
+// 无锁协程示例
+auto coro_task = []() -> flowcoro::CoroTask {
+    // 异步操作
+    auto result = co_await flowcoro::sleep_for(std::chrono::milliseconds(100));
+    
+    // 使用无锁Promise
+    flowcoro::AsyncPromise<std::string> promise;
+    promise.set_value("Hello, lockfree world!");
+    std::string msg = co_await promise;
+    
+    co_return;
+}();
+
+coro_task.resume();
+```

@@ -5,13 +5,47 @@
 #include <utility>
 #include <string>
 #include <functional>
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include <mutex>
-#include <condition_variable>
+#include <future>
+#include <tuple>
+#include "lockfree.h"
+#include "lockfree_thread_pool.h"
 
 // 前向声明HttpRequest类
 class HttpRequest;
 
 namespace flowcoro {
+
+// 简化的全局线程池
+class GlobalThreadPool {
+private:
+    static std::unique_ptr<lockfree::ThreadPool> instance_;
+    static std::once_flag init_flag_;
+    
+    static void init() {
+        instance_ = std::make_unique<lockfree::ThreadPool>(std::thread::hardware_concurrency());
+    }
+    
+public:
+    static lockfree::ThreadPool& get() {
+        std::call_once(init_flag_, init);
+        return *instance_;
+    }
+    
+    static void shutdown() {
+        if (instance_) {
+            instance_->shutdown();
+            instance_.reset();
+        }
+    }
+};
+
+// 静态成员定义
+std::unique_ptr<lockfree::ThreadPool> GlobalThreadPool::instance_;
+std::once_flag GlobalThreadPool::init_flag_;
 
 // 网络请求的抽象接口
 class INetworkRequest {
@@ -48,9 +82,15 @@ struct CoroTask {
         return *this;
     }
     ~CoroTask() { if (handle) handle.destroy(); }
+    
     void resume() { 
         if (handle && !handle.done()) {
-            handle();  // 使用operator()来启动协程
+            // 使用无锁线程池调度协程
+            GlobalThreadPool::get().enqueue_void([h = handle]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
         }
     }
     bool done() const { return !handle || handle.done(); }
@@ -72,8 +112,12 @@ struct CoroTask {
                 request_->request(url_, [h, this](const T& response) {
                     // 保存响应结果
                     response_ = response;
-                    // 继续执行协程
-                    h.resume();
+                    // 使用无锁线程池继续执行协程
+                    GlobalThreadPool::get().enqueue_void([h]() {
+                        if (h && !h.done()) {
+                            h.resume();
+                        }
+                    });
                 });
             }
             
@@ -127,7 +171,7 @@ struct Task {
     }
 };
 
-// 支持异步等待的Promise
+// 支持异步等待的无锁Promise
 template<typename T>
 class AsyncPromise {
 public:
@@ -136,41 +180,182 @@ public:
     AsyncPromise() : state_(std::make_shared<State>()) {}
     
     void set_value(const T& value) {
-        std::unique_lock<std::mutex> lock(state_->mutex_);
-        state_->value_ = value;
-        state_->ready_ = true;
-        if (state_->suspended_handle_) {
-            state_->suspended_handle_.resume();
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->value_ = value;
+            state_->ready_.store(true, std::memory_order_release);
+            
+            // 在锁保护下获取等待的协程句柄
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
+        }
+        
+        // 在锁外调度协程以避免死锁
+        if (handle_to_resume) {
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
         }
     }
     
     bool await_ready() {
-        std::unique_lock<std::mutex> lock(state_->mutex_);
-        return state_->ready_;
+        return state_->ready_.load(std::memory_order_acquire);
     }
     
     void await_suspend(std::coroutine_handle<> h) {
-        std::unique_lock<std::mutex> lock(state_->mutex_);
-        if (!state_->ready_) {
-            // 保存协程句柄
-            state_->suspended_handle_ = h;
+        // 使用锁来确保线程安全
+        std::lock_guard<std::mutex> lock(state_->mutex_);
+        
+        // 在锁保护下检查是否已经有值
+        if (state_->ready_.load(std::memory_order_acquire)) {
+            // 如果已经ready，立即调度
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+            return;
+        }
+        
+        // 在锁保护下设置挂起的协程句柄
+        std::coroutine_handle<> expected = nullptr;
+        if (state_->suspended_handle_.compare_exchange_strong(expected, h, std::memory_order_acq_rel)) {
+            // 成功设置句柄，协程将被 set_value 调度
+        } else {
+            // 如果设置句柄失败，说明已经有其他协程在等待
+            // 这种情况下直接调度当前协程
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
         }
     }
     
-    const T& await_resume() {
-        std::unique_lock<std::mutex> lock(state_->mutex_);
+    T await_resume() {
+        std::lock_guard<std::mutex> lock(state_->mutex_);
         return state_->value_;
     }
     
 private:
     struct State {
-        std::mutex mutex_;
-        bool ready_ = false;
-        T value_;
-        std::coroutine_handle<> suspended_handle_;
+        std::atomic<bool> ready_{false};
+        T value_{};
+        std::atomic<std::coroutine_handle<>> suspended_handle_{nullptr};
+        std::mutex mutex_; // 保护非原子类型的value_
     };
     
     std::shared_ptr<State> state_;
 };
+
+// 无锁任务调度器
+class TaskScheduler {
+private:
+    static lockfree::Queue<std::function<void()>> task_queue_;
+    
+public:
+    // 延迟执行任务
+    template<typename F>
+    static void schedule_task(F&& task) {
+        task_queue_.enqueue(std::forward<F>(task));
+    }
+    
+    // 在线程池中执行任务
+    template<typename F, typename... Args>
+    static auto run_async(F&& f, Args&&... args) {
+        return GlobalThreadPool::get().enqueue(
+            std::forward<F>(f), std::forward<Args>(args)...
+        );
+    }
+    
+    // 处理待执行的任务
+    static void process_tasks() {
+        std::function<void()> task;
+        while (task_queue_.dequeue(task)) {
+            try {
+                task();
+            } catch (const std::exception& e) {
+                // 日志记录异常
+            }
+        }
+    }
+};
+
+// 静态成员定义
+lockfree::Queue<std::function<void()>> TaskScheduler::task_queue_;
+
+// 协程等待器：等待一定时间
+class SleepAwaiter {
+public:
+    explicit SleepAwaiter(std::chrono::milliseconds duration) 
+        : duration_(duration) {}
+    
+    bool await_ready() const noexcept { return false; }
+    
+    void await_suspend(std::coroutine_handle<> h) {
+        // 在线程池中延迟执行
+        GlobalThreadPool::get().enqueue_void([h, duration = duration_]() {
+            std::this_thread::sleep_for(duration);
+            if (h && !h.done()) {
+                h.resume();
+            }
+        });
+    }
+    
+    void await_resume() const noexcept {}
+    
+private:
+    std::chrono::milliseconds duration_;
+};
+
+// 便捷函数：休眠
+inline auto sleep_for(std::chrono::milliseconds duration) {
+    return SleepAwaiter(duration);
+}
+
+// 协程等待器：等待多个任务完成
+template<typename... Tasks>
+class WhenAllAwaiter {
+public:
+    explicit WhenAllAwaiter(Tasks&&... tasks) : tasks_(std::forward<Tasks>(tasks)...) {}
+    
+    bool await_ready() const noexcept { return false; }
+    
+    void await_suspend(std::coroutine_handle<> h) {
+        std::apply([h, this](auto&... tasks) {
+            constexpr size_t task_count = sizeof...(tasks);
+            auto counter = std::make_shared<std::atomic<size_t>>(task_count);
+            
+            auto complete_one = [h, counter]() {
+                if (counter->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                    GlobalThreadPool::get().enqueue_void([h]() {
+                        if (h && !h.done()) {
+                            h.resume();
+                        }
+                    });
+                }
+            };
+            
+            // 为每个任务启动异步执行
+            ((GlobalThreadPool::get().enqueue([&tasks, complete_one]() {
+                tasks.get(); // 等待任务完成
+                complete_one();
+            })), ...);
+        }, tasks_);
+    }
+    
+    void await_resume() const noexcept {}
+    
+private:
+    std::tuple<Tasks...> tasks_;
+};
+
+// 便捷函数：等待所有任务完成
+template<typename... Tasks>
+auto when_all(Tasks&&... tasks) {
+    return WhenAllAwaiter<Tasks...>(std::forward<Tasks>(tasks)...);
+}
 
 } // namespace flowcoro
