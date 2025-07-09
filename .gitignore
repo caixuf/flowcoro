@@ -1,0 +1,21 @@
+# 忽略构建目录
+build/
+
+# 忽略IDE配置文件
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 忽略编译产物
+*.o
+*.a
+*.so
+*.dll
+
+# 忽略日志和临时文件
+*.log
+*.tmp
+*.temp

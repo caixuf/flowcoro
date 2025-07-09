@@ -1,3 +1,0 @@
-/home/caixuf/my_code/cpp_code/FlowCoro/build/CMakeFiles/flowcoro_tests.dir
-/home/caixuf/my_code/cpp_code/FlowCoro/build/CMakeFiles/edit_cache.dir
-/home/caixuf/my_code/cpp_code/FlowCoro/build/CMakeFiles/rebuild_cache.dir
