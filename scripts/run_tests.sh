@@ -40,10 +40,7 @@ echo "构建测试项目..."
 make || { echo "构建失败"; exit 4; }
 
 # 运行测试
-echo "运行单元测试..."
-./tests/flowcoro_unit_tests || { echo "单元测试运行失败"; exit 5; }
+echo "运行FlowCoro综合测试..."
+./tests/flowcoro_tests || { echo "综合测试运行失败"; exit 5; }
 
-echo "运行简单测试..."
-./tests/flowcoro_simple_tests || { echo "简单测试运行失败"; exit 6; }
-
-echo "所有测试通过！"
+echo "所有测试通过！✅"
