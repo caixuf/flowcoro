@@ -20,11 +20,11 @@ namespace flowcoro {
 // 日志级别枚举
 enum class LogLevel : int {
     TRACE = 0,
-    DEBUG = 1,
-    INFO = 2,
-    WARN = 3,
-    ERROR = 4,
-    FATAL = 5
+    LOG_DEBUG = 1,
+    LOG_INFO = 2,
+    LOG_WARN = 3,
+    LOG_ERROR = 4,
+    LOG_FATAL = 5
 };
 
 // 日志条目结构 - 缓存友好设计
@@ -71,7 +71,7 @@ private:
     
     // 输出流
     std::unique_ptr<std::ofstream> file_stream_;
-    std::atomic<LogLevel> min_level_{LogLevel::INFO};
+    std::atomic<LogLevel> min_level_{LogLevel::LOG_INFO};
     
     // 性能统计
     alignas(64) std::atomic<uint64_t> total_logs_{0};
@@ -88,7 +88,7 @@ public:
     }
     
     // 初始化日志器
-    bool initialize(const std::string& filename = "", LogLevel min_level = LogLevel::INFO) {
+    bool initialize(const std::string& filename = "", LogLevel min_level = LogLevel::LOG_INFO) {
         min_level_.store(min_level, std::memory_order_release);
         
         if (!filename.empty()) {
@@ -230,11 +230,11 @@ private:
     static const char* level_to_string(LogLevel level) {
         switch (level) {
             case LogLevel::TRACE: return "TRACE";
-            case LogLevel::DEBUG: return "DEBUG";
-            case LogLevel::INFO:  return "INFO ";
-            case LogLevel::WARN:  return "WARN ";
-            case LogLevel::ERROR: return "ERROR";
-            case LogLevel::FATAL: return "FATAL";
+            case LogLevel::LOG_DEBUG: return "DEBUG";
+            case LogLevel::LOG_INFO:  return "INFO ";
+            case LogLevel::LOG_WARN:  return "WARN ";
+            case LogLevel::LOG_ERROR: return "ERROR";
+            case LogLevel::LOG_FATAL: return "FATAL";
             default: return "UNKNOWN";
         }
     }
@@ -253,7 +253,7 @@ public:
     static Logger& get() {
         std::call_once(init_flag_, []() {
             instance_ = std::make_unique<Logger>();
-            instance_->initialize("flowcoro.log", LogLevel::INFO);
+            instance_->initialize("flowcoro.log", LogLevel::LOG_INFO);
         });
         return *instance_;
     }
@@ -274,8 +274,8 @@ std::once_flag GlobalLogger::init_flag_;
 
 // 便捷宏定义
 #define LOG_TRACE(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::TRACE, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_DEBUG(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...)  flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::INFO,  __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...)  flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::WARN,  __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_FATAL(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::FATAL, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...)  flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::LOG_INFO,  __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...)  flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::LOG_WARN,  __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_FATAL(format, ...) flowcoro::GlobalLogger::get().log(flowcoro::LogLevel::LOG_FATAL, __FILE__, __LINE__, format, ##__VA_ARGS__)

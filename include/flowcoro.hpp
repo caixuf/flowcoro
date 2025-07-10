@@ -53,7 +53,7 @@ inline const char* version() {
  */
 bool initialize(
     size_t thread_count = 0,
-    LogLevel log_level = LogLevel::INFO,
+    LogLevel log_level = LogLevel::LOG_INFO,
     const std::string& log_file = ""
 );
 

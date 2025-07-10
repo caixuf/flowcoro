@@ -176,7 +176,7 @@ void benchmark_buffer_vs_vector() {
 
 int main() {
     // 初始化日志系统
-    flowcoro::GlobalLogger::get().set_level(flowcoro::LogLevel::DEBUG);
+    flowcoro::GlobalLogger::get().set_level(flowcoro::LogLevel::LOG_DEBUG);
     
     LOG_INFO("FlowCoro Enhanced Demo with Logging and Cache-Friendly Buffers");
     LOG_INFO("================================================================");

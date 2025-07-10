@@ -138,7 +138,7 @@ int main() {
     std::cout << "=== FlowCoro 性能基准测试 ===" << std::endl;
     
     // 初始化
-    flowcoro::GlobalLogger::get().set_level(flowcoro::LogLevel::DEBUG);
+    flowcoro::GlobalLogger::get().set_level(flowcoro::LogLevel::LOG_DEBUG);
     
     // 运行基准测试
     benchmark_coroutines();
