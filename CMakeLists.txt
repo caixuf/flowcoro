@@ -13,12 +13,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # 添加可执行文件
 add_executable(flowcoro_tests test/coro_tests.cpp)
+add_executable(example example.cpp)
 
 # 链接库
 target_link_libraries(flowcoro_tests PRIVATE Threads::Threads)
+target_link_libraries(example PRIVATE Threads::Threads)
 
 # 启用协程支持
 target_compile_options(flowcoro_tests PRIVATE -fcoroutines)
+target_compile_options(example PRIVATE -fcoroutines)
 
 # 设置编译器特定的协程标志
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
