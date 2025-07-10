@@ -13,6 +13,8 @@
 #include <tuple>
 #include "lockfree.h"
 #include "lockfree_thread_pool.h"
+#include "logger.h"
+#include "cache_friendly_buffer.h"
 
 // 前向声明HttpRequest类
 class HttpRequest;
@@ -85,10 +87,13 @@ struct CoroTask {
     
     void resume() { 
         if (handle && !handle.done()) {
+            LOG_DEBUG("Resuming coroutine handle: %p", handle.address());
             // 使用无锁线程池调度协程
             GlobalThreadPool::get().enqueue_void([h = handle]() {
                 if (h && !h.done()) {
+                    LOG_TRACE("Executing coroutine in thread pool");
                     h.resume();
+                    LOG_TRACE("Coroutine execution completed");
                 }
             });
         }
@@ -107,14 +112,17 @@ struct CoroTask {
             }
             
             void await_suspend(std::coroutine_handle<> h) {
+                LOG_INFO("Starting network request to: %s", url_.c_str());
                 // 创建网络请求实例并发起请求
                 request_ = std::make_unique<NetworkRequestT>();
                 request_->request(url_, [h, this](const T& response) {
+                    LOG_DEBUG("Network request completed, response size: %zu", response.size());
                     // 保存响应结果
                     response_ = response;
                     // 使用无锁线程池继续执行协程
                     GlobalThreadPool::get().enqueue_void([h]() {
                         if (h && !h.done()) {
+                            LOG_TRACE("Resuming coroutine after network response");
                             h.resume();
                         }
                     });
@@ -180,6 +188,7 @@ public:
     AsyncPromise() : state_(std::make_shared<State>()) {}
     
     void set_value(const T& value) {
+        LOG_DEBUG("Setting AsyncPromise value");
         std::coroutine_handle<> handle_to_resume = nullptr;
         {
             std::lock_guard<std::mutex> lock(state_->mutex_);
@@ -192,6 +201,7 @@ public:
         
         // 在锁外调度协程以避免死锁
         if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise");
             GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
                 if (handle_to_resume && !handle_to_resume.done()) {
                     handle_to_resume.resume();
