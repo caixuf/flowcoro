@@ -234,7 +234,7 @@ ninja && ctest
 
 - **GitHub Issues**: [问题反馈](https://github.com/flowcoro/flowcoro/issues)
 - **讨论区**: [GitHub Discussions](https://github.com/flowcoro/flowcoro/discussions)
-- **邮件列表**: flowcoro@example.com
+- **邮件列表**: 2024740941@qq.com
 
 ## 🙏 致谢
 
