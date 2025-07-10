@@ -1,5 +1,4 @@
-#include "flowcoro.h"
-#include "lockfree.h"
+#include <flowcoro.hpp>
 #include <iostream>
 #include <atomic>
 

@@ -1,7 +1,4 @@
-#include "flowcoro.h"
-#include "logger.h"
-#include "cache_friendly_buffer.h"
-#include "http_request_simple.h"
+#include <flowcoro.hpp>
 #include <iostream>
 #include <chrono>
 #include <thread>

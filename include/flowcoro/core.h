@@ -12,9 +12,9 @@
 #include <future>
 #include <tuple>
 #include "lockfree.h"
-#include "lockfree_thread_pool.h"
+#include "thread_pool.h"
 #include "logger.h"
-#include "cache_friendly_buffer.h"
+#include "buffer.h"
 
 // 前向声明HttpRequest类
 class HttpRequest;

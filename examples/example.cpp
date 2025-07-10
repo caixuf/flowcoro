@@ -1,7 +1,4 @@
-#include "flowcoro.h"
-#include "http_request_simple.h"
-#include "lockfree.h"
-#include "lockfree_thread_pool.h"
+#include <flowcoro.hpp>
 #include <iostream>
 #include <atomic>
 #include <chrono>
