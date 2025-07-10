@@ -29,6 +29,7 @@
 #include "flowcoro/buffer.h"
 #include "flowcoro/memory.h"
 #include "flowcoro/network.h"
+#include "flowcoro/net.h"
 
 /**
  * @namespace flowcoro

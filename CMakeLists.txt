@@ -49,7 +49,22 @@ target_include_directories(flowcoro INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
+# =============================================================================
+# FlowCoro网络库 (实现库)
+# =============================================================================
+
+add_library(flowcoro_net STATIC
+    src/net_impl.cpp
+    src/globals.cpp
+)
+
+target_include_directories(flowcoro_net PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
 target_compile_features(flowcoro INTERFACE cxx_std_20)
+target_compile_features(flowcoro_net PUBLIC cxx_std_20)
 
 # 链接系统库
 target_link_libraries(flowcoro INTERFACE 
@@ -57,8 +72,19 @@ target_link_libraries(flowcoro INTERFACE
     $<$<PLATFORM_ID:Linux>:atomic>
 )
 
+target_link_libraries(flowcoro_net PUBLIC 
+    flowcoro
+    Threads::Threads
+    $<$<PLATFORM_ID:Linux>:atomic>
+)
+
 # 协程支持
 target_compile_options(flowcoro INTERFACE
+    $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>
+    $<$<CXX_COMPILER_ID:Clang>:-stdlib=libc++>
+)
+
+target_compile_options(flowcoro_net PUBLIC
     $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>
     $<$<CXX_COMPILER_ID:Clang>:-stdlib=libc++>
 )

@@ -11,7 +11,7 @@ if(NOT BENCHMARK_FOUND)
     
     # 简单基准测试
     add_executable(simple_benchmarks simple_bench.cpp)
-    target_link_libraries(simple_benchmarks PRIVATE flowcoro)
+    target_link_libraries(simple_benchmarks PRIVATE flowcoro_net)
     
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
@@ -24,7 +24,7 @@ else()
         lockfree_bench.cpp
     )
     target_link_libraries(full_benchmarks PRIVATE 
-        flowcoro 
+        flowcoro_net 
         ${BENCHMARK_LIBRARIES}
     )
     target_include_directories(full_benchmarks PRIVATE ${BENCHMARK_INCLUDE_DIRS})

@@ -77,9 +77,6 @@ private:
     alignas(64) std::atomic<uint64_t> total_logs_{0};
     alignas(64) std::atomic<uint64_t> dropped_logs_{0};
     
-    // 格式化缓存
-    thread_local static std::array<char, 512> format_buffer_;
-    
 public:
     Logger() = default;
     
@@ -127,10 +124,11 @@ public:
         }
         
         // 格式化消息
-        std::snprintf(format_buffer_.data(), format_buffer_.size(), format, std::forward<Args>(args)...);
+        std::array<char, 512> format_buffer;
+        std::snprintf(format_buffer.data(), format_buffer.size(), format, std::forward<Args>(args)...);
         
         // 创建日志条目
-        LogEntry entry(level, format_buffer_.data(), file, line);
+        LogEntry entry(level, format_buffer.data(), file, line);
         
         // 尝试写入环形缓冲区
         if (!log_buffer_.push(std::move(entry))) {
@@ -240,9 +238,6 @@ private:
     }
 };
 
-// 线程局部格式化缓冲区
-thread_local std::array<char, 512> Logger::format_buffer_;
-
 // 全局日志器实例
 class GlobalLogger {
 private:
@@ -265,11 +260,6 @@ public:
         }
     }
 };
-
-// 静态成员定义
-std::unique_ptr<Logger> GlobalLogger::instance_;
-std::once_flag GlobalLogger::init_flag_;
-
 } // namespace flowcoro
 
 // 便捷宏定义

@@ -45,10 +45,6 @@ public:
     }
 };
 
-// 静态成员定义
-std::unique_ptr<lockfree::ThreadPool> GlobalThreadPool::instance_;
-std::once_flag GlobalThreadPool::init_flag_;
-
 // 网络请求的抽象接口
 class INetworkRequest {
 public:
@@ -208,6 +204,98 @@ struct Task {
         if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
         return std::move(handle.promise().value);
     }
+    
+    // 使Task可等待
+    bool await_ready() const {
+        return handle && handle.done();
+    }
+    
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        if (handle && !handle.done()) {
+            // 在线程池中运行当前任务，然后恢复等待的协程
+            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
+                if (task_handle && !task_handle.done()) {
+                    task_handle.resume();
+                }
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        } else {
+            // 任务已完成，直接恢复等待的协程
+            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        }
+    }
+    
+    T await_resume() {
+        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+        return std::move(handle.promise().value);
+    }
+};
+
+// Task<void>特化
+template<>
+struct Task<void> {
+    struct promise_type {
+        std::exception_ptr exception;
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() { exception = std::current_exception(); }
+    };
+    std::coroutine_handle<promise_type> handle;
+    Task(std::coroutine_handle<promise_type> h) : handle(h) {}
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+    Task(Task&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
+    Task& operator=(Task&& other) noexcept {
+        if (this != &other) {
+            if (handle) handle.destroy();
+            handle = other.handle;
+            other.handle = nullptr;
+        }
+        return *this;
+    }
+    ~Task() { if (handle) handle.destroy(); }
+    void get() {
+        if (handle && !handle.done()) handle.resume();
+        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+    }
+    
+    // 使Task<void>可等待
+    bool await_ready() const {
+        return handle && handle.done();
+    }
+    
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        if (handle && !handle.done()) {
+            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
+                if (task_handle && !task_handle.done()) {
+                    task_handle.resume();
+                }
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        } else {
+            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        }
+    }
+    
+    void await_resume() {
+        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+    }
 };
 
 // 支持异步等待的无锁Promise
@@ -226,13 +314,34 @@ public:
             state_->value_ = value;
             state_->ready_.store(true, std::memory_order_release);
             
-            // 在锁保护下获取等待的协程句柄
+            // 在锁保护下获取等待的协 coroutine
             handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
         }
         
         // 在锁外调度协程以避免死锁
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise");
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
+        }
+    }
+    
+    void set_exception(std::exception_ptr ex) {
+        LOG_DEBUG("Setting AsyncPromise exception");
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->exception_ = ex;
+            state_->ready_.store(true, std::memory_order_release);
+            
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
+        }
+        
+        if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise exception");
             GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
                 if (handle_to_resume && !handle_to_resume.done()) {
                     handle_to_resume.resume();
@@ -277,6 +386,9 @@ public:
     
     T await_resume() {
         std::lock_guard<std::mutex> lock(state_->mutex_);
+        if (state_->exception_) {
+            std::rethrow_exception(state_->exception_);
+        }
         return state_->value_;
     }
     
@@ -284,48 +396,321 @@ private:
     struct State {
         std::atomic<bool> ready_{false};
         T value_{};
+        std::exception_ptr exception_;
         std::atomic<std::coroutine_handle<>> suspended_handle_{nullptr};
-        std::mutex mutex_; // 保护非原子类型的value_
+        std::mutex mutex_; // 保护非原子类型的value_和exception_
     };
     
     std::shared_ptr<State> state_;
 };
 
-// 无锁任务调度器
-class TaskScheduler {
-private:
-    static lockfree::Queue<std::function<void()>> task_queue_;
-    
+// AsyncPromise的void特化
+template<>
+class AsyncPromise<void> {
 public:
-    // 延迟执行任务
-    template<typename F>
-    static void schedule_task(F&& task) {
-        task_queue_.enqueue(std::forward<F>(task));
-    }
+    AsyncPromise() : state_(std::make_shared<State>()) {}
     
-    // 在线程池中执行任务
-    template<typename F, typename... Args>
-    static auto run_async(F&& f, Args&&... args) {
-        return GlobalThreadPool::get().enqueue(
-            std::forward<F>(f), std::forward<Args>(args)...
-        );
-    }
-    
-    // 处理待执行的任务
-    static void process_tasks() {
-        std::function<void()> task;
-        while (task_queue_.dequeue(task)) {
-            try {
-                task();
-            } catch (const std::exception& e) {
-                // 日志记录异常
-            }
+    void set_value() {
+        LOG_DEBUG("Setting AsyncPromise<void> value");
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->ready_.store(true, std::memory_order_release);
+            
+            // 在锁保护下获取等待的协程句柄
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
         }
+        
+        // 在锁外调度协程以避免死锁
+        if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise<void>");
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
+        }
+    }
+    
+    void set_exception(std::exception_ptr ex) {
+        LOG_DEBUG("Setting AsyncPromise<void> exception");
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->exception_ = ex;
+            state_->ready_.store(true, std::memory_order_release);
+            
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
+        }
+        
+        if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise<void> exception");
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
+        }
+    }
+    
+    bool await_ready() {
+        return state_->ready_.load(std::memory_order_acquire);
+    }
+    
+    void await_suspend(std::coroutine_handle<> h) {
+        std::lock_guard<std::mutex> lock(state_->mutex_);
+        
+        if (state_->ready_.load(std::memory_order_acquire)) {
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+            return;
+        }
+        
+        std::coroutine_handle<> expected = nullptr;
+        if (state_->suspended_handle_.compare_exchange_strong(expected, h, std::memory_order_acq_rel)) {
+            // 成功设置句柄
+        } else {
+            // 如果设置句柄失败，直接调度当前协程
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+        }
+    }
+    
+    void await_resume() {
+        std::lock_guard<std::mutex> lock(state_->mutex_);
+        if (state_->exception_) {
+            std::rethrow_exception(state_->exception_);
+        }
+    }
+    
+private:
+    struct State {
+        std::atomic<bool> ready_{false};
+        std::exception_ptr exception_;
+        std::atomic<std::coroutine_handle<>> suspended_handle_{nullptr};
+        std::mutex mutex_;
+    };
+    
+    std::shared_ptr<State> state_;
+};
+
+// AsyncPromise的unique_ptr特化，支持移动语义
+template<typename T>
+class AsyncPromise<std::unique_ptr<T>> {
+public:
+    AsyncPromise() : state_(std::make_shared<State>()) {}
+    
+    void set_value(std::unique_ptr<T> value) {
+        LOG_DEBUG("Setting AsyncPromise<unique_ptr> value");
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->value_ = std::move(value);
+            state_->ready_.store(true, std::memory_order_release);
+            
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
+        }
+        
+        if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise<unique_ptr>");
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
+        }
+    }
+    
+    void set_exception(std::exception_ptr ex) {
+        LOG_DEBUG("Setting AsyncPromise<unique_ptr> exception");
+        std::coroutine_handle<> handle_to_resume = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex_);
+            state_->exception_ = ex;
+            state_->ready_.store(true, std::memory_order_release);
+            
+            handle_to_resume = state_->suspended_handle_.exchange(nullptr, std::memory_order_acq_rel);
+        }
+        
+        if (handle_to_resume) {
+            LOG_TRACE("Resuming waiting coroutine from AsyncPromise<unique_ptr> exception");
+            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
+                if (handle_to_resume && !handle_to_resume.done()) {
+                    handle_to_resume.resume();
+                }
+            });
+        }
+    }
+    
+    bool await_ready() {
+        return state_->ready_.load(std::memory_order_acquire);
+    }
+    
+    void await_suspend(std::coroutine_handle<> h) {
+        std::lock_guard<std::mutex> lock(state_->mutex_);
+        
+        if (state_->ready_.load(std::memory_order_acquire)) {
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+            return;
+        }
+        
+        std::coroutine_handle<> expected = nullptr;
+        if (state_->suspended_handle_.compare_exchange_strong(expected, h, std::memory_order_acq_rel)) {
+            // 成功设置句柄
+        } else {
+            GlobalThreadPool::get().enqueue_void([h]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+        }
+    }
+    
+    std::unique_ptr<T> await_resume() {
+        std::lock_guard<std::mutex> lock(state_->mutex_);
+        if (state_->exception_) {
+            std::rethrow_exception(state_->exception_);
+        }
+        return std::move(state_->value_);
+    }
+    
+private:
+    struct State {
+        std::atomic<bool> ready_{false};
+        std::unique_ptr<T> value_;
+        std::exception_ptr exception_;
+        std::atomic<std::coroutine_handle<>> suspended_handle_{nullptr};
+        std::mutex mutex_;
+    };
+    
+    std::shared_ptr<State> state_;
+};
+
+// Task<unique_ptr<T>>特化，支持移动语义
+template<typename T>
+struct Task<std::unique_ptr<T>> {
+    struct promise_type {
+        std::unique_ptr<T> value;
+        std::exception_ptr exception;
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_value(std::unique_ptr<T> v) noexcept { value = std::move(v); }
+        void unhandled_exception() { exception = std::current_exception(); }
+    };
+    std::coroutine_handle<promise_type> handle;
+    Task(std::coroutine_handle<promise_type> h) : handle(h) {}
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+    Task(Task&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
+    Task& operator=(Task&& other) noexcept {
+        if (this != &other) {
+            if (handle) handle.destroy();
+            handle = other.handle;
+            other.handle = nullptr;
+        }
+        return *this;
+    }
+    ~Task() { if (handle) handle.destroy(); }
+    std::unique_ptr<T> get() {
+        if (handle && !handle.done()) handle.resume();
+        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+        return std::move(handle.promise().value);
+    }
+    
+    // 使Task<unique_ptr<T>>可等待
+    bool await_ready() const {
+        return handle && handle.done();
+    }
+    
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        if (handle && !handle.done()) {
+            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
+                if (task_handle && !task_handle.done()) {
+                    task_handle.resume();
+                }
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        } else {
+            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        }
+    }
+    
+    std::unique_ptr<T> await_resume() {
+        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+        return std::move(handle.promise().value);
     }
 };
 
-// 静态成员定义
-lockfree::Queue<std::function<void()>> TaskScheduler::task_queue_;
+// 支持异步任务的无锁队列
+class AsyncQueue {
+private:
+    struct Node {
+        std::function<void()> task;
+        std::shared_ptr<Node> next;
+    };
+    
+    std::atomic<std::shared_ptr<Node>> head_;
+    std::atomic<std::shared_ptr<Node>> tail_;
+    
+public:
+    AsyncQueue() {
+        // 初始化哨兵节点
+        auto sentinel = std::make_shared<Node>();
+        head_.store(sentinel);
+        tail_.store(sentinel);
+    }
+    
+    // 入队操作
+    void enqueue(std::function<void()> task) {
+        auto new_tail = std::make_shared<Node>();
+        new_tail->task = std::move(task);
+        
+        // 尝试将新节点链接到当前尾节点
+        std::shared_ptr<Node> old_tail = tail_.load();
+        while (!tail_.compare_exchange_weak(old_tail, new_tail, std::memory_order_release));
+        
+        // 将旧尾节点的next指针指向新节点
+        old_tail->next = new_tail;
+    }
+    
+    // 出队操作
+    bool dequeue(std::function<void()>& task) {
+        // 读取当前头节点
+        std::shared_ptr<Node> old_head = head_.load();
+        
+        // 检查队列是否为空
+        if (old_head == tail_.load()) {
+            return false; // 队列为空
+        }
+        
+        // 尝试将头节点向前移动一个节点
+        if (head_.compare_exchange_strong(old_head, old_head->next, std::memory_order_acquire)) {
+            task = std::move(old_head->task);
+            return true;
+        }
+        
+        return false;
+    }
+};
 
 // 协程等待器：等待一定时间
 class SleepAwaiter {

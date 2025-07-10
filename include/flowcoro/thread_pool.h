@@ -228,6 +228,4 @@ private:
 };
 
 // 定义thread_local变量
-thread_local size_t WorkStealingThreadPool::worker_id_ = SIZE_MAX;
-
 } // namespace lockfree
