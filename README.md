@@ -2,10 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
-[![CMake](https://img.shields.io/badge/CMake-3.16+-green.svg)](https:### 📞 **问题反馈**
-- [GitHub Issues](https://github.com/your-username/flowcoro/issues) - Bug报告和功能请求
-- [讨论区](https://github.com/your-username/flowcoro/discussions) - 技术讨论
-- **邮件**: 2024740941@qq.com - 商业合作ake.org/)
+[![CMake](https://img.shields.io/badge/CMake-3.16+-green.svg)](https://cmake.org/)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
 [![Performance](https://img.shields.io/badge/Performance-Industrial%20Grade-red.svg)]()
 
