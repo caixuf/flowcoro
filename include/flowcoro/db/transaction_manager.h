@@ -218,12 +218,12 @@ public:
         -> Task<decltype(func(std::declval<Transaction<ConnectionType>&>()).get())> {
         
         int retry_count = 0;
+        decltype(func(std::declval<Transaction<ConnectionType>&>()).get()) result;
         while (retry_count <= options.max_retries) {
             try {
                 auto tx = co_await begin_transaction(options);
                 
-                // 执行用户代码
-                auto result = co_await func(tx);
+                result = co_await func(tx); // 执行用户代码
                 
                 // 提交事务
                 co_await tx.commit();
