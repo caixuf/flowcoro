@@ -28,9 +28,39 @@ option(FLOWCORO_BUILD_EXAMPLES "Build examples" ON)
 option(FLOWCORO_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(FLOWCORO_BUILD_DOCS "Build documentation" OFF)
 option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers" OFF)
+option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
 
 # 查找依赖
 find_package(Threads REQUIRED)
+
+# 数据库支持
+if(FLOWCORO_ENABLE_DATABASE)
+    # 查找MySQL客户端库
+    find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
+        PATHS
+        /usr/include
+        /usr/local/include
+        /opt/homebrew/include
+        PATH_SUFFIXES mysql
+    )
+    
+    find_library(MYSQL_LIBRARY
+        NAMES mysqlclient mysql libmysql
+        PATHS
+        /usr/lib
+        /usr/local/lib
+        /opt/homebrew/lib
+        PATH_SUFFIXES mysql
+    )
+    
+    if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
+        set(MYSQL_FOUND TRUE)
+        message(STATUS "Found MySQL: ${MYSQL_LIBRARY}")
+    else()
+        set(MYSQL_FOUND FALSE)
+        message(WARNING "MySQL not found, database examples will be disabled")
+    endif()
+endif()
 
 # 包含cmake模块
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
