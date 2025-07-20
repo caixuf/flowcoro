@@ -351,9 +351,15 @@ public:
         throw std::runtime_error("MySQL support not compiled");
     }
     
-    Task<void> begin_transaction() override { throw std::runtime_error("MySQL support not compiled"); }
-    Task<void> commit() override { throw std::runtime_error("MySQL support not compiled"); }
-    Task<void> rollback() override { throw std::runtime_error("MySQL support not compiled"); }
+    Task<QueryResult> begin_transaction() override { 
+        throw std::runtime_error("MySQL support not compiled"); 
+    }
+    Task<QueryResult> commit() override { 
+        throw std::runtime_error("MySQL support not compiled"); 
+    }
+    Task<QueryResult> rollback() override { 
+        throw std::runtime_error("MySQL support not compiled"); 
+    }
     bool is_valid() const override { return false; }
     Task<bool> ping() override { co_return false; }
     void close() override {}

@@ -16,12 +16,21 @@ enum class TransactionState {
     FAILED
 };
 
+// 事务隔离级别
+enum class IsolationLevel {
+    READ_UNCOMMITTED,
+    READ_COMMITTED,
+    REPEATABLE_READ,
+    SERIALIZABLE
+};
+
 // 事务选项
 struct TransactionOptions {
     std::chrono::milliseconds timeout{30000};  // 30秒超时
     bool auto_rollback_on_error{true};         // 错误时自动回滚
     int max_retries{3};                        // 最大重试次数
     std::chrono::milliseconds retry_delay{100}; // 重试延迟
+    IsolationLevel isolation_level{IsolationLevel::READ_COMMITTED}; // 默认隔离级别
 };
 
 // 事务管理器 - 提供RAII事务管理
@@ -85,21 +94,44 @@ public:
         
         check_timeout();
         
-        // 不使用异常，而是检查结果
-        auto commit_result = co_await connection_->commit();
-        if (commit_result.success) {
-            state_ = TransactionState::COMMITTED;
-        } else {
-            state_ = TransactionState::FAILED;
-            LOG_ERROR("Transaction commit failed: %s", commit_result.error.c_str());
-            if (options_.auto_rollback_on_error) {
-                auto rollback_result = co_await rollback();
-                if (!rollback_result.success) {
-                    LOG_ERROR("Auto rollback failed: %s", rollback_result.error.c_str());
-                }
+        bool should_auto_rollback = false;
+        
+        try {
+            // 处理可能抛出异常的commit调用
+            auto commit_result = co_await connection_->commit();
+            if (commit_result.success) {
+                state_ = TransactionState::COMMITTED;
+            } else {
+                state_ = TransactionState::FAILED;
+                LOG_ERROR("Transaction commit failed: %s", commit_result.error.c_str());
+                should_auto_rollback = options_.auto_rollback_on_error;
             }
+        } catch (const std::exception& e) {
+            state_ = TransactionState::FAILED;
+            LOG_ERROR("Transaction commit threw exception: %s", e.what());
+            should_auto_rollback = options_.auto_rollback_on_error;
+        }
+        
+        // 在try-catch之外处理回滚
+        if (should_auto_rollback) {
+            co_await auto_rollback();
         }
     }
+    
+private:
+    // 自动回滚辅助方法
+    Task<void> auto_rollback() {
+        try {
+            auto rollback_result = co_await rollback();
+            if (!rollback_result.success) {
+                LOG_ERROR("Auto rollback failed: %s", rollback_result.error.c_str());
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Auto rollback threw exception: %s", e.what());
+        }
+    }
+    
+public:
     
     // 回滚事务
     Task<QueryResult> rollback() {
@@ -111,14 +143,23 @@ public:
             co_return result;
         }
         
-        auto rollback_result = co_await connection_->rollback();
-        if (rollback_result.success) {
-            state_ = TransactionState::ROLLED_BACK;
-        } else {
+        try {
+            auto rollback_result = co_await connection_->rollback();
+            if (rollback_result.success) {
+                state_ = TransactionState::ROLLED_BACK;
+            } else {
+                state_ = TransactionState::FAILED;
+                LOG_ERROR("Transaction rollback failed: %s", rollback_result.error.c_str());
+            }
+            co_return rollback_result;
+        } catch (const std::exception& e) {
             state_ = TransactionState::FAILED;
-            LOG_ERROR("Transaction rollback failed: %s", rollback_result.error.c_str());
+            QueryResult result;
+            result.success = false;
+            result.error = "Transaction rollback threw exception: " + std::string(e.what());
+            LOG_ERROR("Transaction rollback threw exception: %s", e.what());
+            co_return result;
         }
-        co_return rollback_result;
     }
     
     // 执行SQL - 自动事务管理

@@ -23,6 +23,17 @@ namespace flowcoro::db {
 template<typename Driver>
 class ConnectionPool;
 
+// 连接池配置
+struct ConnectionPoolConfig {
+    size_t min_connections = 5;      // 最小连接数
+    size_t max_connections = 20;     // 最大连接数
+    std::chrono::seconds connection_timeout{30};  // 连接超时
+    std::chrono::seconds idle_timeout{300};       // 空闲超时
+    std::chrono::seconds wait_timeout{10};        // 等待连接超时
+    bool auto_reconnect = true;                   // 自动重连
+    size_t max_reconnect_attempts = 3;            // 最大重连尝试次数
+};
+
 // 查询结果结构体
 struct QueryResult {
     bool success{false};

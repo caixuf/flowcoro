@@ -10,6 +10,10 @@
 
 // 包含FlowCoro核心功能
 #include "flowcoro.hpp"
+#include "flowcoro/db/connection_pool.h"
+#include "flowcoro/db/mysql_driver.h"
+#include "flowcoro/db/redis_driver.h"
+#include "flowcoro/db/transaction_manager.h"
 
 using namespace flowcoro;
 using namespace flowcoro::db;

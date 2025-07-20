@@ -14,9 +14,7 @@
 
 namespace flowcoro::db {
 
-#ifdef FLOWCORO_HAS_REDIS
-
-// Redis数据类型
+// Redis数据类型（无论是否有Redis支持都需要）
 enum class RedisDataType {
     NIL,
     STRING,
@@ -26,18 +24,20 @@ enum class RedisDataType {
     STATUS
 };
 
-// Redis响应值
+// Redis值类型（无论是否有Redis支持都需要）
 struct RedisValue {
-    RedisDataType type;
-    std::string str_val;
-    int64_t int_val{0};
+    RedisDataType type = RedisDataType::NIL;
+    std::string string_val;
+    int64_t int_val = 0;
     std::vector<RedisValue> array_val;
     
-    RedisValue() : type(RedisDataType::NIL) {}
-    RedisValue(const std::string& str) : type(RedisDataType::STRING), str_val(str) {}
-    RedisValue(int64_t val) : type(RedisDataType::INTEGER), int_val(val) {}
-    RedisValue(std::vector<RedisValue> arr) : type(RedisDataType::ARRAY), array_val(std::move(arr)) {}
+    RedisValue() = default;
+    RedisValue(RedisDataType t) : type(t) {}
+    RedisValue(const std::string& s) : type(RedisDataType::STRING), string_val(s) {}
+    RedisValue(int64_t i) : type(RedisDataType::INTEGER), int_val(i) {}
+    RedisValue(const std::vector<RedisValue>& arr) : type(RedisDataType::ARRAY), array_val(arr) {}
     
+    // 类型检查方法
     bool is_nil() const { return type == RedisDataType::NIL; }
     bool is_string() const { return type == RedisDataType::STRING; }
     bool is_integer() const { return type == RedisDataType::INTEGER; }
@@ -49,7 +49,7 @@ struct RedisValue {
             case RedisDataType::STRING:
             case RedisDataType::STATUS:
             case RedisDataType::ERROR:
-                return str_val;
+                return string_val;
             case RedisDataType::INTEGER:
                 return std::to_string(int_val);
             case RedisDataType::NIL:
@@ -66,7 +66,7 @@ struct RedisValue {
     operator bool() const { return type != RedisDataType::NIL && type != RedisDataType::ERROR; }
 };
 
-// Redis查询结果
+// Redis查询结果（无论是否有Redis支持都需要）
 struct RedisResult {
     bool success{false};
     std::string error;
@@ -78,6 +78,8 @@ struct RedisResult {
     
     operator bool() const { return success; }
 };
+
+#ifdef FLOWCORO_HAS_REDIS
 
 // Redis连接实现
 class RedisConnection : public IConnection {
@@ -514,15 +516,110 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
     
-    Task<void> begin_transaction() override { throw std::runtime_error("Redis support not compiled"); }
-    Task<void> commit() override { throw std::runtime_error("Redis support not compiled"); }
-    Task<void> rollback() override { throw std::runtime_error("Redis support not compiled"); }
+    Task<QueryResult> begin_transaction() override { 
+        throw std::runtime_error("Redis support not compiled"); 
+    }
+    Task<QueryResult> commit() override { 
+        throw std::runtime_error("Redis support not compiled"); 
+    }
+    Task<QueryResult> rollback() override { 
+        throw std::runtime_error("Redis support not compiled"); 
+    }
     bool is_valid() const override { return false; }
     Task<bool> ping() override { co_return false; }
     void close() override {}
     std::string get_error() const override { return "Redis support not compiled"; }
     uint64_t get_last_insert_id() const override { return 0; }
     uint64_t get_affected_rows() const override { return 0; }
+    
+    // Redis特有方法的占位实现
+    Task<RedisResult> execute_redis(const std::string&) { 
+        throw std::runtime_error("Redis support not compiled"); 
+    }
+    Task<RedisResult> execute_redis(const std::vector<std::string>&) { 
+        throw std::runtime_error("Redis support not compiled"); 
+    }
+    
+    // 字符串操作
+    Task<RedisResult> set(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> set(const std::string&, const std::string&, std::chrono::seconds) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> get(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> del(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> exists(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    
+    // 哈希操作
+    Task<RedisResult> hset(const std::string&, const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> hget(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> hgetall(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> hdel(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    
+    // 列表操作
+    Task<RedisResult> lpush(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> rpush(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> lpop(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> rpop(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> lrange(const std::string&, int64_t, int64_t) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    
+    // 集合操作
+    Task<RedisResult> sadd(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> srem(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> smembers(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> sismember(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    
+    // 有序集合操作
+    Task<RedisResult> zadd(const std::string&, double, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> zrange(const std::string&, int64_t, int64_t) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> zrem(const std::string&, const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    
+    // 过期时间操作
+    Task<RedisResult> expire(const std::string&, std::chrono::seconds) {
+        throw std::runtime_error("Redis support not compiled");
+    }
+    Task<RedisResult> ttl(const std::string&) {
+        throw std::runtime_error("Redis support not compiled");
+    }
 };
 
 class RedisDriver : public IDriver<RedisConnection> {
