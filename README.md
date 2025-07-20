@@ -16,51 +16,24 @@ FlowCoro 是一个工业级的异步编程框架，基于C++20原生协程和无
 
 | 文档名称 | 内容概要 |
 |---------|----------|
-| [API 与技术指南](docs/API_AND_TECHNICAL_GUIDE.md) | 协程核心 API 与技术实现详解 |
-| [网络编程指南](docs/NETWORK_GUIDE.md) | 异步 Socket、TCP 服务器与事件循环使用说明 |
-| [数据库与项目指南](docs/DATABASE_AND_PROJECT_GUIDE.md) | 数据库连接池使用说明与项目工程化状态 |
-| [性能优化指南](docs/PERFORMANCE_GUIDE.md) | 性能调优技巧与最佳实践 |
+| [API 参考手册](docs/API_REFERENCE.md) | 完整的协程API接口文档与使用示例 |
+| [网络编程指南](docs/NETWORK_GUIDE.md) | 异步Socket、TCP服务器与事件循环使用说明 |
+| [数据库使用指南](docs/DATABASE_GUIDE.md) | 数据库连接池使用说明与最佳实践 |
+| [性能调优指南](docs/PERFORMANCE_GUIDE.md) | 性能优化技巧与调优最佳实践 |
 
-### 📝 开发指南
-
-| 文档名称 | 内容概要 |
-|---------|----------|
-| [执行计划](docs/EXECUTION_PLAN.md) | 项目开发路线与迭代计划 |
-| [学习指南](docs/LEARNING_GUIDE.md) | 新手入门与进阶学习资源 |
-
-### 📦 附加文档
+### 📝 项目文档
 
 | 文档名称 | 内容概要 |
 |---------|----------|
-| [扩展路线图](docs/EXTENSION_ROADMAP.md) | 未来功能扩展计划 |
-| [Phase2 实现](docs/PHASE2_IMPLEMENTATION.md) | 协程调度与执行引擎实现细节 |
-| [项目状态](docs/PROJECT_STATUS.md) | 当前开发进度与稳定性说明 |
+| [项目总览](docs/PROJECT_SUMMARY.md) | 项目成就、技术亮点与当前状态 |
+| [技术深度分析](docs/TECHNICAL_SUMMARY.md) | 架构设计与核心技术实现详解 |
+| [发展路线图](docs/ROADMAP.md) | 功能扩展计划与开发时间规划 |
 
-## 📚 文档导航
-
-### 📖 核心文档
+### 📦 实现文档
 
 | 文档名称 | 内容概要 |
 |---------|----------|
-| [API 与技术指南](docs/API_AND_TECHNICAL_GUIDE.md) | 协程核心 API 与技术实现详解 |
-| [网络编程指南](docs/NETWORK_GUIDE.md) | 异步 Socket、TCP 服务器与事件循环使用说明 |
-| [数据库与项目指南](docs/DATABASE_AND_PROJECT_GUIDE.md) | 数据库连接池使用说明与项目工程化状态 |
-| [性能优化指南](docs/PERFORMANCE_GUIDE.md) | 性能调优技巧与最佳实践 |
-
-### 📝 开发指南
-
-| 文档名称 | 内容概要 |
-|---------|----------|
-| [执行计划](docs/EXECUTION_PLAN.md) | 项目开发路线与迭代计划 |
-| [学习指南](docs/LEARNING_GUIDE.md) | 新手入门与进阶学习资源 |
-
-### 📦 附加文档
-
-| 文档名称 | 内容概要 |
-|---------|----------|
-| [扩展路线图](docs/EXTENSION_ROADMAP.md) | 未来功能扩展计划 |
-| [Phase2 实现](docs/PHASE2_IMPLEMENTATION.md) | 协程调度与执行引擎实现细节 |
-| [项目状态](docs/PROJECT_STATUS.md) | 当前开发进度与稳定性说明 |
+| [Phase2 实现报告](docs/PHASE2_IMPLEMENTATION.md) | 数据访问层实现细节与技术方案 |
 
 ## ✨ 核心特性
 
@@ -285,10 +258,10 @@ int main() {
 ## 📖 学习资源
 
 ### 📚 **文档指南**
-- [🎯 学习指南](docs/LEARNING_GUIDE.md) - 从零开始掌握协程编程
-- [🔧 API参考](docs/API_REFERENCE.md) - 完整的接口文档
-- [⚡ 性能调优](docs/PERFORMANCE_GUIDE.md) - 高性能编程技巧
-- [🌐 网络编程](docs/NETWORK_GUIDE.md) - 异步网络开发
+- [⚡ 性能调优指南](docs/PERFORMANCE_GUIDE.md) - 高性能编程技巧和最佳实践
+- [🔧 API参考手册](docs/API_REFERENCE.md) - 完整的接口文档
+- [🌐 网络编程指南](docs/NETWORK_GUIDE.md) - 异步网络开发
+- [🗄️ 数据库使用指南](docs/DATABASE_GUIDE.md) - 数据库连接池使用
 
 ### 💡 **示例代码**
 - [基础示例](examples/basic_example.cpp) - 协程入门
