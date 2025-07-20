@@ -11,6 +11,8 @@
 #include <mutex>
 #include <future>
 #include <tuple>
+#include <optional>
+#include <type_traits>
 #include "lockfree.h"
 #include "thread_pool.h"
 #include "logger.h"
@@ -175,7 +177,7 @@ struct CoroTask {
 template<typename T>
 struct Task {
     struct promise_type {
-        T value;
+        std::optional<T> value;
         std::exception_ptr exception;
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -201,8 +203,30 @@ struct Task {
     ~Task() { if (handle) handle.destroy(); }
     T get() {
         if (handle && !handle.done()) handle.resume();
-        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
-        return std::move(handle.promise().value);
+        if (handle.promise().exception) {
+            // 不使用异常，记录错误日志并返回默认值
+            LOG_ERROR("Task execution failed with exception");
+            if constexpr (std::is_default_constructible_v<T>) {
+                return T{};
+            } else {
+                // 对于不可默认构造的类型，尝试使用value的移动构造
+                if (handle.promise().value.has_value()) {
+                    return std::move(handle.promise().value.value());
+                }
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
+                std::terminate(); // 这种情况下只能终止程序
+            }
+        }
+        if (handle.promise().value.has_value()) {
+            return std::move(handle.promise().value.value());
+        } else {
+            LOG_ERROR("Task completed without setting a value");
+            if constexpr (std::is_default_constructible_v<T>) {
+                return T{};
+            } else {
+                std::terminate();
+            }
+        }
     }
     
     // 使Task可等待
@@ -232,8 +256,27 @@ struct Task {
     }
     
     T await_resume() {
-        if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
-        return std::move(handle.promise().value);
+        if (handle.promise().exception) {
+            LOG_ERROR("Task await_resume: exception occurred");
+            if constexpr (std::is_default_constructible_v<T>) {
+                return T{};
+            } else {
+                if (handle.promise().value.has_value()) {
+                    return std::move(handle.promise().value.value());
+                }
+                std::terminate();
+            }
+        }
+        if (handle.promise().value.has_value()) {
+            return std::move(handle.promise().value.value());
+        } else {
+            LOG_ERROR("Task await_resume: no value set");
+            if constexpr (std::is_default_constructible_v<T>) {
+                return T{};
+            } else {
+                std::terminate();
+            }
+        }
     }
 };
 
@@ -782,6 +825,39 @@ private:
 template<typename... Tasks>
 auto when_all(Tasks&&... tasks) {
     return WhenAllAwaiter<Tasks...>(std::forward<Tasks>(tasks)...);
+}
+
+// 同步等待协程完成的函数
+template<typename T>
+T sync_wait(Task<T>&& task) {
+    // 直接使用Task的get()方法，它会阻塞直到完成
+    try {
+        return task.get();
+    } catch (...) {
+        // 不使用异常，记录错误日志并返回默认值
+        LOG_ERROR("sync_wait: Task execution failed");
+        if constexpr (std::is_void_v<T>) {
+            return;
+        } else {
+            return T{};
+        }
+    }
+}
+
+// void版本的特化
+inline void sync_wait(Task<void>&& task) {
+    try {
+        task.get();
+    } catch (...) {
+        LOG_ERROR("sync_wait: Task execution failed");
+    }
+}
+
+// 重载版本 - 接受lambda并返回Task
+template<typename Func>
+auto sync_wait(Func&& func) {
+    auto task = func();
+    return sync_wait(std::move(task));
 }
 
 } // namespace flowcoro

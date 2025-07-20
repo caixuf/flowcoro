@@ -60,6 +60,55 @@ if(FLOWCORO_ENABLE_DATABASE)
         set(MYSQL_FOUND FALSE)
         message(WARNING "MySQL not found, database examples will be disabled")
     endif()
+    
+    # 查找Redis客户端库 (hiredis)
+    find_path(HIREDIS_INCLUDE_DIR hiredis/hiredis.h
+        PATHS
+        /usr/include
+        /usr/local/include
+        /opt/homebrew/include
+    )
+    
+    find_library(HIREDIS_LIBRARY
+        NAMES hiredis
+        PATHS
+        /usr/lib
+        /usr/local/lib
+        /opt/homebrew/lib
+    )
+    
+    if(HIREDIS_INCLUDE_DIR AND HIREDIS_LIBRARY)
+        set(HIREDIS_FOUND TRUE)
+        message(STATUS "Found hiredis: ${HIREDIS_LIBRARY}")
+    else()
+        set(HIREDIS_FOUND FALSE)
+        message(WARNING "hiredis not found, Redis examples will be disabled")
+    endif()
+    
+    # 查找JSON库 (jsoncpp)
+    find_path(JSONCPP_INCLUDE_DIR json/json.h
+        PATHS
+        /usr/include
+        /usr/local/include
+        /opt/homebrew/include
+        PATH_SUFFIXES jsoncpp
+    )
+    
+    find_library(JSONCPP_LIBRARY
+        NAMES jsoncpp
+        PATHS
+        /usr/lib
+        /usr/local/lib
+        /opt/homebrew/lib
+    )
+    
+    if(JSONCPP_INCLUDE_DIR AND JSONCPP_LIBRARY)
+        set(JSONCPP_FOUND TRUE)
+        message(STATUS "Found jsoncpp: ${JSONCPP_LIBRARY}")
+    else()
+        set(JSONCPP_FOUND FALSE)
+        message(WARNING "jsoncpp not found, monitoring features will be limited")
+    endif()
 endif()
 
 # 包含cmake模块

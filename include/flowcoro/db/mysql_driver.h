@@ -1,10 +1,17 @@
 #pragma once
 
 #include "connection_pool.h"
+
+// 条件编译MySQL支持
+#ifdef FLOWCORO_HAS_MYSQL
 #include <mysql/mysql.h>
+#endif
+
 #include <regex>
 
 namespace flowcoro::db {
+
+#ifdef FLOWCORO_HAS_MYSQL
 
 // MySQL连接实现
 class MySQLConnection : public IConnection {
@@ -330,5 +337,47 @@ inline std::unique_ptr<ConnectionPool<MySQLConnection>> create_mysql_pool(
     return std::make_unique<ConnectionPool<MySQLConnection>>(
         std::move(driver), connection_string, config);
 }
+
+#else // !FLOWCORO_HAS_MYSQL
+
+// 当没有MySQL支持时的占位实现
+class MySQLConnection : public IConnection {
+public:
+    Task<QueryResult> execute(const std::string&) override {
+        throw std::runtime_error("MySQL support not compiled");
+    }
+    
+    Task<QueryResult> execute(const std::string&, const std::vector<std::string>&) override {
+        throw std::runtime_error("MySQL support not compiled");
+    }
+    
+    Task<void> begin_transaction() override { throw std::runtime_error("MySQL support not compiled"); }
+    Task<void> commit() override { throw std::runtime_error("MySQL support not compiled"); }
+    Task<void> rollback() override { throw std::runtime_error("MySQL support not compiled"); }
+    bool is_valid() const override { return false; }
+    Task<bool> ping() override { co_return false; }
+    void close() override {}
+    std::string get_error() const override { return "MySQL support not compiled"; }
+    uint64_t get_last_insert_id() const override { return 0; }
+    uint64_t get_affected_rows() const override { return 0; }
+};
+
+class MySQLDriver : public IDriver<MySQLConnection> {
+public:
+    Task<std::unique_ptr<MySQLConnection>> create_connection(const std::string&) override {
+        throw std::runtime_error("MySQL support not compiled");
+    }
+    
+    bool validate_connection_string(const std::string&) const override { return false; }
+    std::string get_driver_name() const override { return "MySQL (Disabled)"; }
+    std::string get_version() const override { return "0.0.0"; }
+};
+
+inline std::unique_ptr<ConnectionPool<MySQLConnection>> create_mysql_pool(
+    const std::string&, const PoolConfig& = {}) {
+    throw std::runtime_error("MySQL support not compiled");
+}
+
+#endif // FLOWCORO_HAS_MYSQL
 
 } // namespace flowcoro::db

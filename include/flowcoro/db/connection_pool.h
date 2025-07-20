@@ -11,6 +11,7 @@
 #include <future>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 
 #include "../core.h"
@@ -22,32 +23,7 @@ namespace flowcoro::db {
 template<typename Driver>
 class ConnectionPool;
 
-// 数据库连接接口
-class IConnection {
-public:
-    virtual ~IConnection() = default;
-    
-    // 执行SQL查询
-    virtual Task<QueryResult> execute(const std::string& sql) = 0;
-    virtual Task<QueryResult> execute(const std::string& sql, const std::vector<std::string>& params) = 0;
-    
-    // 事务支持
-    virtual Task<void> begin_transaction() = 0;
-    virtual Task<void> commit() = 0;
-    virtual Task<void> rollback() = 0;
-    
-    // 连接管理
-    virtual bool is_valid() const = 0;
-    virtual Task<bool> ping() = 0;
-    virtual void close() = 0;
-    
-    // 连接信息
-    virtual std::string get_error() const = 0;
-    virtual uint64_t get_last_insert_id() const = 0;
-    virtual uint64_t get_affected_rows() const = 0;
-};
-
-// 查询结果
+// 查询结果结构体
 struct QueryResult {
     bool success{false};
     std::string error;
@@ -66,6 +42,31 @@ struct QueryResult {
     // 迭代器支持
     auto begin() const { return rows.begin(); }
     auto end() const { return rows.end(); }
+};
+
+// 数据库连接接口
+class IConnection {
+public:
+    virtual ~IConnection() = default;
+    
+    // 执行SQL查询
+    virtual Task<QueryResult> execute(const std::string& sql) = 0;
+    virtual Task<QueryResult> execute(const std::string& sql, const std::vector<std::string>& params) = 0;
+    
+    // 事务支持
+    virtual Task<QueryResult> begin_transaction() = 0;
+    virtual Task<QueryResult> commit() = 0;
+    virtual Task<QueryResult> rollback() = 0;
+    
+    // 连接管理
+    virtual bool is_valid() const = 0;
+    virtual Task<bool> ping() = 0;
+    virtual void close() = 0;
+    
+    // 连接信息
+    virtual std::string get_error() const = 0;
+    virtual uint64_t get_last_insert_id() const = 0;
+    virtual uint64_t get_affected_rows() const = 0;
 };
 
 // 数据库驱动抽象接口
@@ -193,6 +194,9 @@ struct PoolStats {
 template<typename ConnectionType>
 class ConnectionGuard {
 public:
+    // 默认构造函数 - 用于Task的promise_type
+    ConnectionGuard() : connection_(nullptr), pool_(nullptr) {}
+    
     ConnectionGuard(std::shared_ptr<PooledConnection<ConnectionType>> conn,
                    ConnectionPool<ConnectionType>* pool)
         : connection_(std::move(conn)), pool_(pool) {
@@ -632,7 +636,7 @@ private:
                 if (is_healthy) {
                     healthy_connections.push_back(conn);
                 } else {
-                    LOG_WARNING("Connection failed health check, removing from pool");
+                    LOG_WARN("Connection failed health check, removing from pool");
                     std::lock_guard<std::mutex> lock(pool_mutex_);
                     remove_connection_unsafe(conn);
                     stats_.failed_connections.fetch_add(1, std::memory_order_relaxed);
