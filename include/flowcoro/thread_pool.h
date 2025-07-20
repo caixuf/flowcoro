@@ -29,7 +29,36 @@ public:
     }
     
     ~ThreadPool() {
-        shutdown();
+        // 设置析构标志，避免新任务入队
+        stop_.store(true, std::memory_order_release);
+        
+        // 给工作线程一些时间完成当前任务
+        auto start_time = std::chrono::steady_clock::now();
+        auto timeout = std::chrono::milliseconds(100);
+        
+        // 等待活跃线程数降为0或超时
+        while (active_threads_.load(std::memory_order_acquire) > 0) {
+            auto current_time = std::chrono::steady_clock::now();
+            if (current_time - start_time > timeout) {
+                break; // 超时，停止等待
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        // 尝试 join 所有线程
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                // 给每个线程一个短暂的join机会
+                try {
+                    worker.join();
+                } catch (...) {
+                    // 如果join失败，使用detach
+                    worker.detach();
+                }
+            }
+        }
+        
+        workers_.clear();
     }
     
     // 提交任务并返回future
@@ -56,12 +85,16 @@ public:
     void enqueue_void(std::function<void()> task) {
         if (!stop_.load(std::memory_order_acquire)) {
             task_queue_.enqueue(std::move(task));
+        } else {
+            throw std::runtime_error("ThreadPool is stopped, cannot enqueue tasks");
         }
     }
     
     void shutdown() {
+        // 设置 stop 标志
         stop_.store(true, std::memory_order_release);
         
+        // 等待所有工作线程完成当前任务并退出
         for (auto& worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
@@ -69,6 +102,12 @@ public:
         }
         
         workers_.clear();
+        
+        // 清理队列中剩余的任务
+        std::function<void()> unused_task;
+        while (task_queue_.dequeue(unused_task)) {
+            // 清空队列，避免析构时访问已失效的对象
+        }
     }
     
     size_t active_thread_count() const {
@@ -92,11 +131,21 @@ private:
                 }
             } else {
                 // 没有任务时短暂休眠，避免忙等待
-                std::this_thread::yield();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
         
+        // 线程退出前减少计数
         active_threads_.fetch_sub(1, std::memory_order_acq_rel);
+        
+        // 线程退出前再次尝试处理剩余任务
+        while (task_queue_.dequeue(task)) {
+            try {
+                task();
+            } catch (...) {
+                // 忽略异常
+            }
+        }
     }
 };
 

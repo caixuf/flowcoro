@@ -24,34 +24,66 @@ private:
     
     alignas(64) std::atomic<Node*> head;
     alignas(64) std::atomic<Node*> tail;
+    alignas(64) std::atomic<bool> destroyed{false}; // 添加析构标志
     
 public:
     Queue() {
         Node* dummy = new Node;
         head.store(dummy);
         tail.store(dummy);
+        destroyed.store(false);
     }
     
     ~Queue() {
-        while (Node* const old_head = head.load()) {
-            head.store(old_head->next.load());
-            delete old_head;
+        // 设置析构标志
+        destroyed.store(true, std::memory_order_release);
+        
+        // 先清理所有数据，避免析构时访问无效内存
+        T unused_item;
+        while (dequeue_unsafe(unused_item)) {
+            // 清空队列
+        }
+        
+        // 然后清理节点链表
+        Node* current = head.load();
+        while (current) {
+            Node* next = current->next.load();
+            delete current;
+            current = next;
         }
     }
     
     void enqueue(T item) {
+        if (destroyed.load(std::memory_order_acquire)) {
+            return; // 队列已析构，丢弃任务
+        }
+        
         Node* new_node = new Node;
         T* data_ptr = new T(std::move(item));
         new_node->data.store(data_ptr);
         
         Node* prev_tail = tail.exchange(new_node);
-        prev_tail->next.store(new_node);
+        if (prev_tail) {
+            prev_tail->next.store(new_node);
+        }
     }
     
     bool dequeue(T& result) {
-        Node* head_node = head.load();
-        Node* next = head_node->next.load();
+        if (destroyed.load(std::memory_order_acquire)) {
+            return false; // 队列已析构
+        }
         
+        return dequeue_unsafe(result);
+    }
+    
+private:
+    bool dequeue_unsafe(T& result) {
+        Node* head_node = head.load();
+        if (!head_node) {
+            return false; // 队列已被析构
+        }
+        
+        Node* next = head_node->next.load();
         if (next == nullptr) {
             return false; // 队列为空
         }
@@ -64,7 +96,7 @@ public:
         result = *data_ptr;
         delete data_ptr;
         
-        // 尝试更新head
+        // 尝试更新head，如果失败也不要紧，下次调用会重试
         Node* expected = head_node;
         if (head.compare_exchange_weak(expected, next)) {
             delete head_node;
@@ -72,6 +104,8 @@ public:
         
         return true;
     }
+    
+public:
     
     bool empty() const {
         Node* head_node = head.load();

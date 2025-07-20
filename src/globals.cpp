@@ -10,7 +10,8 @@
 namespace flowcoro {
 
 // GlobalThreadPool 静态成员定义
-std::unique_ptr<lockfree::ThreadPool> GlobalThreadPool::instance_;
+std::atomic<bool> GlobalThreadPool::shutdown_requested_{false};
+std::atomic<lockfree::ThreadPool*> GlobalThreadPool::instance_{nullptr};
 std::once_flag GlobalThreadPool::init_flag_;
 
 // GlobalLogger 静态成员定义  

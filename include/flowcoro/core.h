@@ -26,23 +26,31 @@ namespace flowcoro {
 // 简化的全局线程池
 class GlobalThreadPool {
 private:
-    static std::unique_ptr<lockfree::ThreadPool> instance_;
+    static std::atomic<bool> shutdown_requested_;
+    static std::atomic<lockfree::ThreadPool*> instance_;
     static std::once_flag init_flag_;
     
     static void init() {
-        instance_ = std::make_unique<lockfree::ThreadPool>(std::thread::hardware_concurrency());
+        static lockfree::ThreadPool* pool = new lockfree::ThreadPool(std::thread::hardware_concurrency());
+        instance_.store(pool, std::memory_order_release);
     }
     
 public:
     static lockfree::ThreadPool& get() {
         std::call_once(init_flag_, init);
-        return *instance_;
+        return *instance_.load(std::memory_order_acquire);
+    }
+    
+    static bool is_shutdown_requested() {
+        return shutdown_requested_.load(std::memory_order_acquire);
     }
     
     static void shutdown() {
-        if (instance_) {
-            instance_->shutdown();
-            instance_.reset();
+        shutdown_requested_.store(true, std::memory_order_release);
+        // 获取线程池实例并调用 shutdown，但不要删除它
+        lockfree::ThreadPool* pool = instance_.load(std::memory_order_acquire);
+        if (pool) {
+            pool->shutdown();
         }
     }
 };
@@ -764,13 +772,29 @@ public:
     bool await_ready() const noexcept { return false; }
     
     void await_suspend(std::coroutine_handle<> h) {
-        // 在线程池中延迟执行
-        GlobalThreadPool::get().enqueue_void([h, duration = duration_]() {
-            std::this_thread::sleep_for(duration);
+        // 检查线程池是否已经 shutdown
+        if (GlobalThreadPool::is_shutdown_requested()) {
+            // 如果已经 shutdown，直接恢复协程而不执行 sleep
             if (h && !h.done()) {
                 h.resume();
             }
-        });
+            return;
+        }
+        
+        // 在线程池中延迟执行
+        try {
+            GlobalThreadPool::get().enqueue_void([h, duration = duration_]() {
+                std::this_thread::sleep_for(duration);
+                if (h && !h.done()) {
+                    h.resume();
+                }
+            });
+        } catch (const std::exception&) {
+            // 如果线程池已关闭，直接恢复协程而不执行 sleep
+            if (h && !h.done()) {
+                h.resume();
+            }
+        }
     }
     
     void await_resume() const noexcept {}
