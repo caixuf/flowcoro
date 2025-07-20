@@ -6,6 +6,10 @@
 
 #include "test_framework.h"
 
+// 包含具体测试实现
+#include "test_http_client.cpp"
+#include "test_simple_db.cpp"
+
 using namespace flowcoro::test;
 
 // 前向声明测试函数
@@ -13,6 +17,19 @@ int run_core_tests();
 int run_database_tests();
 int run_network_tests();
 int run_performance_tests();
+
+// HTTP Client测试
+void test_basic_http_client();
+void test_http_get_request();
+void test_http_post_request();
+void test_concurrent_requests();
+
+// Simple Database测试
+void test_document_serialization();
+void test_basic_crud_operations();
+void test_update_delete_operations();
+void test_database_management();
+void test_concurrent_operations();
 
 struct TestSuiteInfo {
     std::string name;
@@ -43,10 +60,22 @@ int main(int argc, char* argv[]) {
         
         {"Database Layer", []() {
             TestRunner::reset();
-            TEST_SUITE("Database Tests (Integrated)");
+            TEST_SUITE("Database Tests (File-based Database)");
             
-            // 基础数据库功能测试
-            TEST_EXPECT_TRUE(true); // 数据库连接
+            std::cout << "🗄️  Testing document serialization..." << std::endl;
+            test_document_serialization();
+            
+            std::cout << "🔧 Testing basic CRUD operations..." << std::endl;
+            test_basic_crud_operations();
+            
+            std::cout << "✏️  Testing update/delete operations..." << std::endl;
+            test_update_delete_operations();
+            
+            std::cout << "🗂️  Testing database management..." << std::endl;
+            test_database_management();
+            
+            std::cout << "⚡ Testing concurrent operations..." << std::endl;
+            test_concurrent_operations();
             
             TestRunner::print_summary();
             return TestRunner::all_passed() ? 0 : 1;
@@ -54,10 +83,19 @@ int main(int argc, char* argv[]) {
         
         {"Network Layer", []() {
             TestRunner::reset();
-            TEST_SUITE("Network Tests (Integrated)");
+            TEST_SUITE("Network Tests (HTTP Client)");
             
-            // 基础网络功能测试
-            TEST_EXPECT_TRUE(true); // 网络请求
+            std::cout << "🌐 Testing basic HTTP client..." << std::endl;
+            test_basic_http_client();
+            
+            std::cout << "📥 Testing GET request..." << std::endl;  
+            test_http_get_request();
+            
+            std::cout << "📤 Testing POST request..." << std::endl;
+            test_http_post_request();
+            
+            std::cout << "⚡ Testing concurrent requests..." << std::endl;
+            test_concurrent_requests();
             
             TestRunner::print_summary();
             return TestRunner::all_passed() ? 0 : 1;

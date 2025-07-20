@@ -16,6 +16,14 @@ target_link_libraries(network_example PRIVATE flowcoro_net)
 add_executable(phase2_simple phase2_simple.cpp)
 target_link_libraries(phase2_simple PRIVATE flowcoro_net)
 
+# HTTP + Database 集成演示
+add_executable(http_db_integration_demo http_db_integration_demo.cpp)
+target_link_libraries(http_db_integration_demo PRIVATE flowcoro_net)
+
+# 简单集成演示
+add_executable(simple_integration_demo simple_integration_demo.cpp)
+target_link_libraries(simple_integration_demo PRIVATE flowcoro_net)
+
 # 数据库连接池示例 (需要MySQL支持)
 if(FLOWCORO_ENABLE_DATABASE AND MYSQL_FOUND)
     add_executable(db_connection_pool_example db_connection_pool_example.cpp)

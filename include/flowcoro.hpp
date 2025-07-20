@@ -30,6 +30,7 @@
 #include "flowcoro/memory.h"
 #include "flowcoro/network.h"
 #include "flowcoro/net.h"
+#include "flowcoro/http_client.h"
 
 /**
  * @namespace flowcoro

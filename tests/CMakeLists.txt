@@ -18,6 +18,8 @@ find_package(Threads REQUIRED)
 set(TEST_SOURCES
     test_core_minimal.cpp
     test_database_minimal.cpp
+    test_http_client.cpp
+    test_simple_db.cpp
 )
 
 # 为每个测试文件创建单独的可执行文件
@@ -82,7 +84,7 @@ endif()
 
 # 设置输出目录
 set_target_properties(
-    test_core_minimal test_database_minimal run_all_tests
+    test_core_minimal test_database_minimal test_http_client run_all_tests
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
