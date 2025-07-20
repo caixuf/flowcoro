@@ -5,8 +5,10 @@ cmake_minimum_required(VERSION 3.16)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 编译选项（简化版本，避免内存问题）
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines -pthread -g -O1")
+# 编译选项（内存优化版本）
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines -pthread -g0 -O0 -fno-inline")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftemplate-depth=128 -ftemplate-backtrace-limit=10")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-stack-protector --param ggc-min-expand=10 --param ggc-min-heapsize=32768")
 
 # 包含目录
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -20,6 +22,7 @@ set(TEST_SOURCES
     test_database_minimal.cpp
     test_http_client.cpp
     test_simple_db.cpp
+    test_rpc.cpp
 )
 
 # 为每个测试文件创建单独的可执行文件

@@ -9,6 +9,7 @@
 // 包含具体测试实现
 #include "test_http_client.cpp"
 #include "test_simple_db.cpp"
+#include "test_rpc.cpp"
 
 using namespace flowcoro::test;
 
@@ -30,6 +31,11 @@ void test_basic_crud_operations();
 void test_update_delete_operations();
 void test_database_management();
 void test_concurrent_operations();
+
+// RPC系统测试
+void test_sync_rpc();
+void test_async_rpc();
+void test_rpc_performance();
 
 struct TestSuiteInfo {
     std::string name;
@@ -101,7 +107,22 @@ int main(int argc, char* argv[]) {
             return TestRunner::all_passed() ? 0 : 1;
         }},
         
-        {"Performance", []() {
+                {"RPC System", []() {
+            TestRunner::reset();
+            TEST_SUITE("RPC Tests (Sync & Async)");
+            
+            std::cout << "🔄 Testing synchronous RPC..." << std::endl;
+            test_sync_rpc();
+            
+            std::cout << "⚡ Testing asynchronous RPC..." << std::endl;
+            test_async_rpc();
+            
+            std::cout << "🏎️  Testing RPC performance..." << std::endl;
+            test_rpc_performance();
+            
+            TestRunner::print_summary();
+            return TestRunner::all_passed() ? 0 : 1;
+        }},
             TestRunner::reset();
             TEST_SUITE("Performance Tests (Integrated)");
             
