@@ -16,13 +16,14 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # 查找必要的库
 find_package(Threads REQUIRED)
 
-# 定义测试可执行文件（最简化版本）
+# 定义测试可执行文件（整理后版本）
 set(TEST_SOURCES
-    test_core_minimal.cpp
-    test_database_minimal.cpp
+    test_core.cpp
+    test_database.cpp
     test_http_client.cpp
     test_simple_db.cpp
     test_rpc.cpp
+    test_sleep_only.cpp
 )
 
 # 为每个测试文件创建单独的可执行文件
@@ -87,7 +88,7 @@ endif()
 
 # 设置输出目录
 set_target_properties(
-    test_core_minimal test_database_minimal test_http_client run_all_tests
+    test_core test_database test_http_client test_sleep_only run_all_tests
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )

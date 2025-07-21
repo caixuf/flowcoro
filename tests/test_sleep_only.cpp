@@ -20,9 +20,8 @@ int main() {
         std::cout << "Sleep test failed: " << e.what() << std::endl;
     }
     
-    // 主动关闭线程池，避免析构时的竞态条件
-    std::cout << "Shutting down thread pool..." << std::endl;
-    GlobalThreadPool::shutdown();
+    // 给协程任务一些时间完成
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
     std::cout << "Test completed, exiting..." << std::endl;
     

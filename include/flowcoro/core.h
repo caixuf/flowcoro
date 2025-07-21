@@ -48,9 +48,13 @@ public:
     static void shutdown() {
         shutdown_requested_.store(true, std::memory_order_release);
         // 获取线程池实例并调用 shutdown，但不要删除它
-        lockfree::ThreadPool* pool = instance_.load(std::memory_order_acquire);
-        if (pool) {
-            pool->shutdown();
+        try {
+            lockfree::ThreadPool* pool = instance_.load(std::memory_order_acquire);
+            if (pool && !pool->is_stopped()) {
+                pool->shutdown();
+            }
+        } catch (...) {
+            // 忽略shutdown过程中的异常
         }
     }
 };
@@ -763,44 +767,134 @@ public:
     }
 };
 
+// 全局睡眠管理器
+class SleepManager {
+public:
+    struct SleepRequest {
+        std::coroutine_handle<> handle;
+        std::chrono::steady_clock::time_point wake_time;
+        std::atomic<bool> cancelled{false};
+        
+        SleepRequest(std::coroutine_handle<> h, std::chrono::steady_clock::time_point wt)
+            : handle(h), wake_time(wt) {}
+    };
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<std::shared_ptr<SleepRequest>> requests_;
+    std::condition_variable cv_;
+    std::atomic<bool> shutdown_{false};
+    std::thread worker_thread_;
+    
+    SleepManager() {
+        worker_thread_ = std::thread([this]() {
+            worker_loop();
+        });
+    }
+    
+    void worker_loop() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        
+        while (!shutdown_.load(std::memory_order_acquire)) {
+            auto now = std::chrono::steady_clock::now();
+            
+            // 处理到期的请求
+            auto it = requests_.begin();
+            while (it != requests_.end()) {
+                auto& req = *it;
+                if (req->cancelled.load(std::memory_order_acquire)) {
+                    // 请求被取消，移除
+                    it = requests_.erase(it);
+                } else if (req->wake_time <= now) {
+                    // 请求到期，恢复协程
+                    auto handle = req->handle;
+                    it = requests_.erase(it);
+                    
+                    // 在锁外恢复协程
+                    lock.unlock();
+                    try {
+                        if (handle && !handle.done()) {
+                            handle.resume();
+                        }
+                    } catch (...) {
+                        // 忽略resume异常
+                    }
+                    lock.lock();
+                } else {
+                    ++it;
+                }
+            }
+            
+            // 计算下次唤醒时间
+            auto next_wake_time = std::chrono::steady_clock::time_point::max();
+            for (const auto& req : requests_) {
+                if (!req->cancelled.load(std::memory_order_acquire)) {
+                    next_wake_time = std::min(next_wake_time, req->wake_time);
+                }
+            }
+            
+            // 等待直到下次唤醒或被通知
+            if (next_wake_time != std::chrono::steady_clock::time_point::max()) {
+                cv_.wait_until(lock, next_wake_time);
+            } else {
+                cv_.wait(lock);
+            }
+        }
+    }
+    
+public:
+    static SleepManager& get() {
+        static SleepManager instance;
+        return instance;
+    }
+    
+    ~SleepManager() {
+        shutdown_.store(true, std::memory_order_release);
+        cv_.notify_all();
+        if (worker_thread_.joinable()) {
+            worker_thread_.join();
+        }
+    }
+    
+    std::shared_ptr<SleepRequest> add_request(std::coroutine_handle<> handle, std::chrono::milliseconds duration) {
+        auto wake_time = std::chrono::steady_clock::now() + duration;
+        auto request = std::make_shared<SleepRequest>(handle, wake_time);
+        
+        std::lock_guard<std::mutex> lock(mutex_);
+        requests_.push_back(request);
+        cv_.notify_one();
+        
+        return request;
+    }
+};
+
 // 协程等待器：等待一定时间
 class SleepAwaiter {
 public:
     explicit SleepAwaiter(std::chrono::milliseconds duration) 
         : duration_(duration) {}
     
-    bool await_ready() const noexcept { return false; }
+    ~SleepAwaiter() {
+        // 取消睡眠请求
+        if (sleep_request_) {
+            sleep_request_->cancelled.store(true, std::memory_order_release);
+        }
+    }
+    
+    bool await_ready() const noexcept { 
+        return duration_.count() <= 0;
+    }
     
     void await_suspend(std::coroutine_handle<> h) {
-        // 检查线程池是否已经 shutdown
-        if (GlobalThreadPool::is_shutdown_requested()) {
-            // 如果已经 shutdown，直接恢复协程而不执行 sleep
-            if (h && !h.done()) {
-                h.resume();
-            }
-            return;
-        }
-        
-        // 在线程池中延迟执行
-        try {
-            GlobalThreadPool::get().enqueue_void([h, duration = duration_]() {
-                std::this_thread::sleep_for(duration);
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
-        } catch (const std::exception&) {
-            // 如果线程池已关闭，直接恢复协程而不执行 sleep
-            if (h && !h.done()) {
-                h.resume();
-            }
-        }
+        // 使用全局sleep管理器
+        sleep_request_ = SleepManager::get().add_request(h, duration_);
     }
     
     void await_resume() const noexcept {}
     
 private:
     std::chrono::milliseconds duration_;
+    std::shared_ptr<SleepManager::SleepRequest> sleep_request_;
 };
 
 // 便捷函数：休眠
