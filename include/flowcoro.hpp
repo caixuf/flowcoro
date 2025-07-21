@@ -17,9 +17,9 @@
 
 // 版本信息
 #define FLOWCORO_VERSION_MAJOR 2
-#define FLOWCORO_VERSION_MINOR 0
+#define FLOWCORO_VERSION_MINOR 1
 #define FLOWCORO_VERSION_PATCH 0
-#define FLOWCORO_VERSION "2.0.0"
+#define FLOWCORO_VERSION "2.1.0"
 
 // 核心组件
 #include "flowcoro/core.h"
@@ -31,6 +31,9 @@
 #include "flowcoro/network.h"
 #include "flowcoro/net.h"
 #include "flowcoro/http_client.h"
+
+// 增强的协程生命周期管理（v2.1新增）
+#include "flowcoro/lifecycle.h"
 // #include "flowcoro/rpc.h"  // 暂时注释掉复杂的RPC实现
 
 /**
