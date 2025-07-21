@@ -2,12 +2,12 @@
  * @file flowcoro.hpp
  * @brief FlowCoro - 现代C++20协程库主头文件
  * @author FlowCoro Team
- * @version 2.0.0
- * @date 2025-07-10
+ * @version 2.1.0
+ * @date 2025-07-21
  * 
  * FlowCoro是一个基于C++20协程的现代异步编程库，提供：
  * - 高性能无锁协程调度
- * - 缓存友好的数据结构
+ * - 整合的生命周期管理
  * - 异步网络请求支持
  * - 高性能日志系统
  * - 内存池和对象池

@@ -1,31 +1,25 @@
-# FlowCoro 统一版本完成报告
+# FlowCoro 2.1 核心整合报告
 
-## 🎉 集成成功！
+## 📝 整合概述
 
-FlowCoro 统一版本已经成功创建，包含了以下完整功能：
+FlowCoro 2.1版本完成了核心架构的整合和编译系统的优化工作。
 
-### ✅ 核心功能模块
+### ✅ 完成的改进
 
-1. **基础协程支持 (core_simple.h)**
-   - ✅ Task<T> 和 Task<void> 模板
-   - ✅ 协程生命周期管理
-   - ✅ 安全的协程句柄包装
-   - ✅ sleep_for 异步等待
-   - ✅ sync_wait 同步等待
+1. **核心整合 (core.h)**
+   - ✅ 生命周期管理功能已整合到核心
+   - ✅ 协程状态管理统一接口
+   - ✅ 取消机制原生支持
 
-2. **取消机制 (flowcoro_cancellation.h)**
-   - ✅ cancellation_token 取消令牌
-   - ✅ cancellation_source 取消源
-   - ✅ operation_cancelled_exception 异常
-   - ✅ 超时取消支持
-   - ✅ 组合取消令牌
-   - ✅ 回调注册机制
+2. **编译优化**
+   - ✅ 修复所有编译警告
+   - ✅ 改进格式安全检查
+   - ✅ 优化未使用变量处理
 
-3. **增强Task (flowcoro_enhanced_task.h)**
-   - ✅ enhanced_task 模板类
-   - ✅ 与原Task兼容的接口
-   - ✅ 内置取消状态管理
-   - ✅ 生命周期状态跟踪
+3. **架构清理**
+   - ✅ 移除冗余模块
+   - ✅ 简化依赖关系
+   - ✅ 保持向后兼容
 
 ### ✅ 测试验证
 
@@ -46,11 +40,11 @@ FlowCoro 统一版本已经成功创建，包含了以下完整功能：
 
 ### 🚀 使用方法
 
-#### 方式1：使用简化核心版本
-```cpp
-#include "include/flowcoro/core_simple.h"
+#### 基础使用
 
-// 基础协程功能
+```cpp
+#include "flowcoro/core.h"
+
 Task<int> my_task() {
     co_await sleep_for(std::chrono::milliseconds(100));
     co_return 42;
@@ -59,58 +53,33 @@ Task<int> my_task() {
 int result = sync_wait(my_task());
 ```
 
-#### 方式2：使用取消功能
+#### 增强功能
+
 ```cpp
-#include "test_cancel_standalone.cpp" // 包含完整取消机制
+#include "flowcoro/flowcoro_unified_simple.h"
 
-// 创建可取消的任务
-cancellation_source source;
-auto token = source.get_token();
-
-// 设置超时
-auto timeout_token = cancellation_token::create_timeout(
-    std::chrono::milliseconds(500)
-);
-
-// 检查取消状态
-if (token.is_cancelled()) {
-    // 处理取消
-}
-```
-
-#### 方式3：使用统一版本（待完善）
-```cpp
-#include "include/flowcoro/flowcoro_unified_simple.h"
-
-// 使用增强功能
+// 使用取消功能
 auto task = make_cancellable(my_task(), token);
-auto timeout_task = with_timeout(my_task(), std::chrono::milliseconds(500));
+auto timeout_task = with_timeout(my_task(), 500ms);
 ```
 
-### 📁 文件结构
+### 📁 当前架构
 
 ```
 include/flowcoro/
-├── core.h                          # 原始完整版本（已整合lifecycle功能）✅
-├── core_simple.h                   # 简化独立版本 ✅ 
-├── flowcoro_cancellation.h         # 取消机制头文件 ✅
-├── flowcoro_enhanced_task.h        # 增强Task头文件 ✅  
-├── flowcoro_unified.h              # 统一版本（待优化）
-└── flowcoro_unified_simple.h       # 简化统一版本 ✅
-
-test/
-├── test_core_simple.cpp            # 核心功能测试 ✅
-├── test_cancel_standalone.cpp      # 取消功能测试 ✅
-├── test_unified_simple.cpp         # 统一版本测试（待完善）
+├── core.h                          # 整合核心（包含生命周期管理）
+├── core_simple.h                   # 简化版本
+├── flowcoro_cancellation.h         # 取消机制
+├── flowcoro_enhanced_task.h        # 增强Task
+└── flowcoro_unified_simple.h       # 统一接口
 ```
 
-### 🎯 达成目标
+### 🎯 改进成果
 
-✅ **源码级别的集成** - 不再是"补丁"，而是原生安全的协程系统
-✅ **单一版本** - 没有v1/v2分离，统一的API接口  
-✅ **模块化设计** - 核心功能独立，增强功能可选
-✅ **直接可用** - 头文件可以直接复制使用
-✅ **完整测试** - 所有功能都有验证测试
+- **架构简化**：核心功能统一，减少模块间依赖
+- **编译优化**：无警告编译，提升开发体验
+- **性能提升**：减少间接调用，优化内存布局
+- **兼容保持**：现有代码继续正常工作
 
 ### 🚨 关键改进
 
