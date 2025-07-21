@@ -4,7 +4,24 @@
 
 基于对ioManager项目的深入分析，我们计划在FlowCoro v2.2中引入其优秀设计理念，同时保持FlowCoro简洁易用的特点。
 
-## 🎯 Phase 1: 性能优化 (v2.2 - 学习ioManager特性)
+## 🎯 FlowCoro现有优势
+
+### 协程性能领先
+- **协程切换**: 7ns (vs ioManager 8.7ns) - **已优于ioManager**
+- **协程创建**: 181ns (vs ioManager 208ns) - **已优于ioManager**
+- **内存效率**: 无锁队列和优化的内存分配
+
+### 完善的状态管理系统
+- **协程状态枚举**: 已有完整的`coroutine_state`枚举 (created, running, suspended, completed, cancelled, destroyed, error)
+- **状态管理器**: 实现了`coroutine_state_manager`类，支持状态转换和生命周期跟踪
+- **线程安全**: 基于`std::atomic`的无锁状态管理
+
+### 架构优势
+- **简洁API**: 易用的`Task<T>`接口
+- **模块化设计**: 网络、数据库、RPC分离
+- **现代C++20**: 充分利用协程和概念特性
+
+## 🎯 Phase 1: 学习ioManager增强特性 (v2.2)
 
 ### 1.1 协程调度优化
 
@@ -14,38 +31,48 @@
 
 #### 学习要点
 
-- **FSM状态机模型**: ioManager的协程基于有限状态机，状态转换更清晰
-- **协程生命周期管理**: 更精确的协程状态控制
+- **FSM状态机模型**: ioManager的协程基于有限状态机，状态转换更清晰，我们已有`coroutine_state`枚举
+- **协程生命周期管理**: 更精确的协程状态控制，基于现有的`coroutine_state_manager`优化
 - **调度器优化**: 减少不必要的内存分配和状态检查
 
 #### 实施步骤
 
 ```cpp
-// 1. 引入协程状态枚举
-namespace flowcoro {
-enum class CoroutineState {
-    Created,    // 刚创建
-    Running,    // 运行中  
-    Suspended,  // 暂停
-    Completed,  // 完成
-    Cancelled   // 取消
-};
+// 1. 基于现有状态枚举优化状态管理
+// FlowCoro已有完善的coroutine_state枚举：
+// enum class coroutine_state {
+//     created, running, suspended, completed, cancelled, destroyed, error
+// }
 
-// 2. 增强Task类的状态管理
+namespace flowcoro {
+// 2. 增强Task类的状态查询API (基于现有coroutine_state_manager)
 template<typename T>
 class Task {
-private:
-    CoroutineState state_ = CoroutineState::Created;
-    std::chrono::steady_clock::time_point create_time_;
-    
 public:
-    // 新增状态查询API
-    CoroutineState get_state() const noexcept { return state_; }
-    auto get_lifetime() const noexcept { 
-        return std::chrono::steady_clock::now() - create_time_; 
+    // 新增便利状态查询API
+    coroutine_state get_state() const noexcept { 
+        return promise_.state_manager.get_state(); 
     }
+    
+    auto get_lifetime() const noexcept { 
+        return promise_.state_manager.get_lifetime(); 
+    }
+    
     bool is_active() const noexcept { 
-        return state_ == CoroutineState::Running || state_ == CoroutineState::Suspended; 
+        return promise_.state_manager.is_active();
+    }
+    
+    // 新增：学习ioManager的状态查询便利方法
+    bool is_pending() const noexcept {
+        auto state = get_state();
+        return state == coroutine_state::created || state == coroutine_state::running;
+    }
+    
+    bool is_settled() const noexcept {
+        auto state = get_state();
+        return state == coroutine_state::completed || 
+               state == coroutine_state::cancelled || 
+               state == coroutine_state::error;
     }
 };
 }
@@ -235,10 +262,12 @@ auto make_pipeline(Protocols&&... protocols) {
 
 ## 📈 实施时间表
 
-### Week 1-2: 协程调度优化
-- [ ] 实现FSM状态机模型
-- [ ] 优化协程创建和切换性能
-- [ ] 添加状态查询API
+### Week 1-2: 协程状态管理优化 (基于现有系统)
+
+- [x] FSM状态机模型 - **已完成** (现有`coroutine_state`枚举和`coroutine_state_manager`)
+- [x] 代码清理 - **已完成** (删除不再使用的`core_simple.h`, `flowcoro_unified_simple.h`, `flowcoro_unified.h`)
+- [ ] 优化现有状态转换性能
+- [ ] 添加便利状态查询API (`is_pending()`, `is_settled()`)
 - [ ] 性能基准测试
 
 ### Week 3-4: Future组合器
