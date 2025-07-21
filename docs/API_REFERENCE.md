@@ -1,5 +1,28 @@
 # FlowCoro API 参考手册
 
+## 📋 目录
+
+### 核心模块
+- [1. 协程核心 (core.h)](#1-协程核心-coreh) - Task、enhanced_task、协程工具函数
+- [2. 无锁数据结构 (lockfree.h)](#2-无锁数据结构-lockfreeh) - 队列、栈、环形缓冲区  
+- [3. 线程池 (thread_pool.h)](#3-线程池-thread_poolh) - 全局线程池、工作线程
+- [4. 网络IO (net.h)](#4-网络io-neth) - Socket、TCP连接、事件循环、HTTP客户端
+
+### 系统模块  
+- [5. 日志系统 (logger.h)](#5-日志系统-loggerh) - 异步日志记录器
+- [6. 缓冲区管理 (buffer.h)](#6-缓冲区管理-bufferh) - 对齐分配器、缓存友好缓冲区
+- [7. 内存管理 (memory.h)](#7-内存管理-memoryh) - 内存池、对象池
+
+### 高级功能
+- [9. 生命周期管理](#9-生命周期管理-已整合到coreh) - 状态管理、取消令牌
+- [10. 增强Task](#10-增强task-flowcoro_enhanced_taskh) - 完整功能Task实现
+- [11. 便利功能](#11-便利功能-coreh) - 转换函数、工具函数
+
+### 其他
+- [错误处理](#错误处理) - 异常类型、错误代码
+- [性能提示](#性能提示) - 最佳实践、优化建议
+- [编译和链接](#编译和链接) - CMake配置、编译器要求
+
 ## 概述
 
 FlowCoro 提供了一套完整的现代C++20协程编程接口，包括协程核心、无锁数据结构、线程池、网络IO、日志系统和内存管理等模块。
@@ -418,6 +441,62 @@ public:
 };
 ```
 
+#### HttpClient
+现代HTTP客户端，支持异步请求和协程化接口。
+
+```cpp
+namespace flowcoro::net {
+
+// HTTP方法
+enum class HttpMethod {
+    GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH
+};
+
+// HTTP响应
+struct HttpResponse {
+    int status_code;
+    std::string status_message;
+    std::unordered_map<std::string, std::string> headers;
+    std::string body;
+    std::chrono::milliseconds duration;
+    
+    bool is_success() const { return status_code >= 200 && status_code < 300; }
+};
+
+// HTTP客户端
+class HttpClient {
+public:
+    HttpClient();
+    ~HttpClient();
+    
+    // 异步HTTP请求
+    Task<HttpResponse> request(
+        HttpMethod method,
+        const std::string& url,
+        const std::unordered_map<std::string, std::string>& headers = {},
+        const std::string& body = ""
+    );
+    
+    // 便捷方法
+    Task<HttpResponse> get(const std::string& url, 
+                          const std::unordered_map<std::string, std::string>& headers = {});
+    Task<HttpResponse> post(const std::string& url, const std::string& body,
+                           const std::unordered_map<std::string, std::string>& headers = {});
+    Task<HttpResponse> put(const std::string& url, const std::string& body,
+                          const std::unordered_map<std::string, std::string>& headers = {});
+    Task<HttpResponse> delete_request(const std::string& url,
+                                     const std::unordered_map<std::string, std::string>& headers = {});
+    
+    // 配置选项
+    void set_timeout(std::chrono::milliseconds timeout);
+    void set_user_agent(const std::string& user_agent);
+    void set_follow_redirects(bool follow);
+    void set_max_redirects(int max_redirects);
+};
+
+}
+```
+
 ### 5. 日志系统 (logger.h)
 
 #### Logger
@@ -636,9 +715,6 @@ public:
 提供便捷的协程创建和管理功能。
 
 ```cpp
-// 启用FlowCoro v2增强功能
-inline void enable_v2_features();
-
 // 将现有Task转换为增强Task
 template<typename T>
 auto make_enhanced(Task<T>&& task) -> enhanced_task<T>;
@@ -651,11 +727,124 @@ auto make_cancellable_task(Task<T> task) -> enhanced_task<T>;
 template<typename T>
 auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
 
+// 异步睡眠
+auto sleep_for(std::chrono::milliseconds duration) -> SleepAwaiter;
+
+// 等待所有任务完成
+template<typename... Tasks>
+auto when_all(Tasks&&... tasks) -> WhenAllAwaiter<Tasks...>;
+
+// 同步等待协程完成
+template<typename T>
+T sync_wait(Task<T>&& task);
+
 // 性能报告
 inline void print_performance_report();
 ```
 
-### 6. 内存管理 (memory.h)
+### 6. 缓冲区管理 (buffer.h)
+
+#### AlignedAllocator
+内存对齐分配器，确保数据按照指定边界对齐以优化缓存性能。
+
+```cpp
+template<size_t Alignment = CACHE_LINE_SIZE>
+class AlignedAllocator {
+public:
+    // 分配对齐内存
+    static void* allocate(size_t size);
+    
+    // 释放内存
+    static void deallocate(void* ptr);
+};
+```
+
+#### CacheFriendlyRingBuffer
+缓存友好的循环缓冲区，避免false sharing，适用于高性能生产者-消费者场景。
+
+```cpp
+template<typename T, size_t Capacity>
+class CacheFriendlyRingBuffer {
+public:
+    CacheFriendlyRingBuffer();
+    
+    // 写入操作
+    bool try_write(const T& item);
+    bool try_write(T&& item);
+    
+    // 读取操作
+    bool try_read(T& item);
+    
+    // 批量操作
+    size_t write_batch(const T* items, size_t count);
+    size_t read_batch(T* items, size_t count);
+    
+    // 状态查询
+    bool empty() const;
+    bool full() const;
+    size_t size() const;
+    static constexpr size_t capacity() { return Capacity; }
+};
+```
+
+#### CacheFriendlyMemoryPool
+缓存友好的内存池，针对特定大小的内存块进行优化。
+
+```cpp
+template<size_t BlockSize>
+class CacheFriendlyMemoryPool {
+public:
+    CacheFriendlyMemoryPool(size_t initial_blocks = 1024);
+    ~CacheFriendlyMemoryPool();
+    
+    // 内存分配和释放
+    void* allocate();
+    void deallocate(void* ptr);
+    
+    // 统计信息
+    struct PoolStats {
+        size_t total_blocks;
+        size_t allocated_blocks;
+        size_t free_blocks;
+        double hit_rate;
+    };
+    
+    PoolStats get_stats() const;
+    void reset_stats();
+};
+```
+
+#### StringBuffer
+高性能字符串缓冲区，支持高效的字符串拼接和格式化。
+
+```cpp
+class StringBuffer {
+public:
+    StringBuffer(size_t initial_capacity = 4096);
+    
+    // 字符串操作
+    StringBuffer& append(const std::string& str);
+    StringBuffer& append(const char* str);
+    StringBuffer& append(char c);
+    
+    // 格式化操作
+    template<typename... Args>
+    StringBuffer& format(const std::string& fmt, Args&&... args);
+    
+    // 访问和转换
+    const char* c_str() const;
+    std::string to_string() const;
+    size_t size() const;
+    size_t capacity() const;
+    
+    // 缓冲区管理
+    void clear();
+    void reserve(size_t new_capacity);
+    void shrink_to_fit();
+};
+```
+
+### 7. 内存管理 (memory.h)
 
 #### MemoryPool
 高性能内存池，减少动态内存分配开销。
