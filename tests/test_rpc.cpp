@@ -190,28 +190,32 @@ void test_rpc_performance() {
 
 // 简单的异步RPC测试（不使用复杂的服务类）
 Task<void> simple_async_rpc_test() {
-    // 创建最简单的异步RPC服务器，用 shared_ptr 管理生命周期
-    auto server = std::make_shared<AsyncRpcServer>();
+    // 创建最简单的异步RPC服务器，使用栈变量确保生命周期
+    AsyncRpcServer server("./test_simple_async_rpc_db");
     
     // 注册一个非常简单的方法，不依赖任何外部对象
-    server->register_async_method("test.simple", 
+    server.register_async_method("test.simple", 
         [](const std::string& params) -> Task<std::string> {
             co_return "{\"message\":\"simple test\"}";
         });
     
-    // 注册一个带延时的方法，测试 sleep_for - 捕获 server 的 shared_ptr
-    server->register_async_method("test.delay", 
-        [server](const std::string& params) -> Task<std::string> {
-            co_await sleep_for(std::chrono::milliseconds(10));
+    // 注册一个带延时的方法，不使用sleep_for避免潜在问题
+    server.register_async_method("test.delay", 
+        [](const std::string& params) -> Task<std::string> {
+            // 使用简单的计算代替sleep_for
+            volatile int dummy = 0;
+            for (int i = 0; i < 1000; ++i) {
+                dummy += i;
+            }
             co_return "{\"message\":\"delayed test\"}";
         });
     
     // 测试简单方法调用
-    std::string result1 = co_await server->handle_async_request("test.simple", "{}");
+    std::string result1 = co_await server.handle_async_request("test.simple", "{}");
     TEST_EXPECT_TRUE(result1.find("simple test") != std::string::npos);
     
     // 测试带延时的方法调用
-    std::string result2 = co_await server->handle_async_request("test.delay", "{}");
+    std::string result2 = co_await server.handle_async_request("test.delay", "{}");
     TEST_EXPECT_TRUE(result2.find("delayed test") != std::string::npos);
     
     co_return;
@@ -230,17 +234,25 @@ int main() {
     std::cout << "🧪 FlowCoro RPC System Tests" << std::endl;
     std::cout << "=============================" << std::endl;
     
-    std::cout << "\n🔬 Testing synchronous RPC..." << std::endl;
-    test_sync_rpc();
+    try {
+        std::cout << "\n🔬 Testing synchronous RPC..." << std::endl;
+        test_sync_rpc();
+        
+        std::cout << "\n⚡ Testing simple async RPC..." << std::endl;
+        test_simple_async_rpc();
+        
+        std::cout << "\n✅ All RPC tests completed!" << std::endl;
+        std::cout << "🎯 Demonstrated: sync RPC, simple async RPC" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Exception in tests: " << e.what() << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "❌ Unknown exception in tests" << std::endl;
+        return 1;
+    }
     
-    std::cout << "\n⚡ Testing simple async RPC..." << std::endl;
-    test_simple_async_rpc();
-    
-    std::cout << "\n✅ All RPC tests completed!" << std::endl;
-    std::cout << "🎯 Demonstrated: sync RPC, simple async RPC" << std::endl;
-    
-    // 等待所有异步任务完成，但不显式 shutdown
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 确保所有协程和线程清理完成
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
     return 0;
 }

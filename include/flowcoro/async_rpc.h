@@ -30,11 +30,17 @@ class AsyncRpcServer {
 private:
     std::unordered_map<std::string, AsyncRpcHandler> handlers_;
     std::shared_ptr<db::SimpleFileDB> db_;
-    int request_counter_ = 0;
+    std::atomic<int> request_counter_{0};
 
 public:
     AsyncRpcServer(const std::string& db_path = "./rpc_server_db") 
         : db_(std::make_shared<db::SimpleFileDB>(db_path)) {}
+    
+    // 析构函数确保清理
+    ~AsyncRpcServer() {
+        handlers_.clear();
+        db_.reset();
+    }
     
     // 注册异步RPC方法
     void register_async_method(const std::string& name, AsyncRpcHandler handler) {
@@ -43,11 +49,8 @@ public:
     
     // 处理异步RPC请求
     Task<std::string> handle_async_request(const std::string& method, const std::string& params) {
-        std::string request_id = "req_" + std::to_string(++request_counter_);
+        std::string request_id = "req_" + std::to_string(request_counter_.fetch_add(1));
         RpcContext ctx(request_id, method, params);
-        
-        // 记录请求开始
-        co_await log_request_start(ctx);
         
         std::string result;
         try {
@@ -60,10 +63,9 @@ public:
             }
         } catch (const std::exception& e) {
             result = "{\"error\":\"Handler error: " + std::string(e.what()) + "\"}";
+        } catch (...) {
+            result = "{\"error\":\"Unknown error occurred\"}";
         }
-        
-        // 记录请求完成
-        co_await log_request_complete(ctx, result);
         
         co_return result;
     }
@@ -93,12 +95,9 @@ public:
     
     // 获取服务器状态
     Task<std::string> get_server_stats() {
-        auto stats_collection = db_->collection("rpc_stats");
-        auto all_requests = co_await stats_collection->find_all();
-        
         std::ostringstream oss;
         oss << "{"
-            << "\"total_requests\":" << all_requests.size() << ","
+            << "\"total_requests\":" << request_counter_.load() << ","
             << "\"registered_methods\":" << handlers_.size() << ","
             << "\"methods\":[";
         
