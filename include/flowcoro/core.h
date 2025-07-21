@@ -454,6 +454,38 @@ struct Task {
         return handle && !handle.done() && !is_cancelled();
     }
     
+    // ==========================================
+    // Phase 1 新增: JavaScript Promise 风格状态查询API
+    // ==========================================
+    
+    /// @brief 检查任务是否仍在进行中 (JavaScript Promise.pending 风格)
+    /// @return true if task is created or running, false otherwise
+    bool is_pending() const noexcept {
+        if (!handle) return false;
+        return !handle.done() && !is_cancelled();
+    }
+    
+    /// @brief 检查任务是否已结束 (JavaScript Promise.settled 风格)
+    /// @return true if task is completed, cancelled, or has error
+    bool is_settled() const noexcept {
+        if (!handle) return true;  // 无效句柄视为已结束
+        return handle.done() || is_cancelled();
+    }
+    
+    /// @brief 检查任务是否成功完成 (JavaScript Promise.fulfilled 风格)
+    /// @return true if task completed successfully
+    bool is_fulfilled() const noexcept {
+        if (!handle) return false;
+        return handle.done() && !is_cancelled() && !handle.promise().exception;
+    }
+    
+    /// @brief 检查任务是否被拒绝/失败 (JavaScript Promise.rejected 风格)
+    /// @return true if task was cancelled or has exception
+    bool is_rejected() const noexcept {
+        if (!handle) return false;
+        return is_cancelled() || (handle.promise().exception != nullptr);
+    }
+    
     T get() {
         if (handle && !handle.done()) handle.resume();
         if (handle.promise().exception) {
@@ -621,6 +653,38 @@ struct Task<void> {
     
     bool is_active() const {
         return handle && !handle.done() && !is_cancelled();
+    }
+    
+    // ==========================================
+    // Phase 1 新增: JavaScript Promise 风格状态查询API (Task<void>特化版本)
+    // ==========================================
+    
+    /// @brief 检查任务是否仍在进行中 (JavaScript Promise.pending 风格)
+    /// @return true if task is created or running, false otherwise
+    bool is_pending() const noexcept {
+        if (!handle) return false;
+        return !handle.done() && !is_cancelled();
+    }
+    
+    /// @brief 检查任务是否已结束 (JavaScript Promise.settled 风格)
+    /// @return true if task is completed, cancelled, or has error
+    bool is_settled() const noexcept {
+        if (!handle) return true;  // 无效句柄视为已结束
+        return handle.done() || is_cancelled();
+    }
+    
+    /// @brief 检查任务是否成功完成 (JavaScript Promise.fulfilled 风格)
+    /// @return true if task completed successfully
+    bool is_fulfilled() const noexcept {
+        if (!handle) return false;
+        return handle.done() && !is_cancelled() && !handle.promise().exception;
+    }
+    
+    /// @brief 检查任务是否被拒绝/失败 (JavaScript Promise.rejected 风格)
+    /// @return true if task was cancelled or has exception
+    bool is_rejected() const noexcept {
+        if (!handle) return false;
+        return is_cancelled() || (handle.promise().exception != nullptr);
     }
     
     void get() {
@@ -994,6 +1058,38 @@ struct Task<std::unique_ptr<T>> {
             }
         }
     }
+    
+    // ==========================================
+    // Phase 1 新增: JavaScript Promise 风格状态查询API (Task<unique_ptr<T>>特化版本)
+    // ==========================================
+    
+    /// @brief 检查任务是否仍在进行中 (JavaScript Promise.pending 风格)
+    /// @return true if task is created or running, false otherwise
+    bool is_pending() const noexcept {
+        return handle && !handle.done();
+    }
+    
+    /// @brief 检查任务是否已结束 (JavaScript Promise.settled 风格)
+    /// @return true if task is completed or has error
+    bool is_settled() const noexcept {
+        if (!handle) return true;  // 无效句柄视为已结束
+        return handle.done();
+    }
+    
+    /// @brief 检查任务是否成功完成 (JavaScript Promise.fulfilled 风格)
+    /// @return true if task completed successfully
+    bool is_fulfilled() const noexcept {
+        if (!handle) return false;
+        return handle.done() && !handle.promise().exception;
+    }
+    
+    /// @brief 检查任务是否被拒绝/失败 (JavaScript Promise.rejected 风格)
+    /// @return true if task has exception
+    bool is_rejected() const noexcept {
+        if (!handle) return false;
+        return handle.promise().exception != nullptr;
+    }
+    
     std::unique_ptr<T> get() {
         if (handle && !handle.done()) handle.resume();
         if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);

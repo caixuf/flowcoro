@@ -126,6 +126,49 @@ int main() {
 }
 ```
 
+### 🆕 Promise风格状态查询API (v2.1新增)
+
+FlowCoro 新增了类似JavaScript Promise的状态查询接口，让异步任务状态管理更直观：
+
+```cpp
+#include <flowcoro.hpp>
+
+flowcoro::Task<int> async_computation(int value) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    co_return value * 2;
+}
+
+int main() {
+    auto task = async_computation(42);
+    
+    // JavaScript Promise风格的状态查询
+    if (task.is_pending()) {
+        std::cout << "Task is still running..." << std::endl;
+    }
+    
+    // 等待完成
+    auto result = task.get();
+    
+    // 检查最终状态
+    if (task.is_fulfilled()) {
+        std::cout << "Task completed successfully with: " << result << std::endl;
+    } else if (task.is_rejected()) {
+        std::cout << "Task failed or was cancelled." << std::endl;
+    }
+    
+    return 0;
+}
+```
+
+**可用的状态查询方法：**
+
+| 方法 | 说明 | JavaScript对应 |
+|------|------|---------------|
+| `is_pending()` | 任务正在运行中 | `Promise.pending` |
+| `is_settled()` | 任务已结束（成功或失败） | `Promise.settled` |
+| `is_fulfilled()` | 任务成功完成 | `Promise.fulfilled` |
+| `is_rejected()` | 任务失败或被取消 | `Promise.rejected` |
+
 ## 🚀 快速开始
 
 ### 环境要求
