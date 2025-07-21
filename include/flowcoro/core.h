@@ -18,6 +18,9 @@
 #include "logger.h"
 #include "buffer.h"
 
+// Phase 4 Integration: 新的生命周期管理系统
+#include "lifecycle_v2.h"
+
 // 前向声明HttpRequest类
 class HttpRequest;
 
@@ -1009,6 +1012,54 @@ template<typename Func>
 auto sync_wait(Func&& func) {
     auto task = func();
     return sync_wait(std::move(task));
+}
+
+// ========================================
+// Phase 4 Integration: 生命周期管理集成
+// ========================================
+
+/**
+ * @brief 启用FlowCoro v2增强功能
+ * 一行代码启用协程池化和生命周期管理
+ */
+inline void enable_v2_features() {
+    LOG_INFO("🚀 FlowCoro v2 Features Enabled");
+    LOG_INFO("   ✅ Advanced lifecycle management");
+    LOG_INFO("   ✅ Coroutine pooling optimization"); 
+    LOG_INFO("   ✅ Performance monitoring");
+    
+    // 设置为完全池化策略
+    v2::quick_start::set_migration_strategy(v2::migration::strategy::full_pooling);
+    
+    // 打印初始状态报告
+    v2::quick_start::print_report();
+}
+
+/**
+ * @brief 便利的v2任务类型别名 
+ * 可在现有代码中渐进式使用
+ */
+template<typename T = void>
+using TaskV2 = v2::Task<T>;
+
+/**
+ * @brief 智能任务工厂
+ * 根据当前情况自动选择最优的任务类型
+ */
+template<typename T = void>
+TaskV2<T> make_smart_task() {
+    return v2::factory::make_smart_task<T>();
+}
+
+/**
+ * @brief 快速性能报告
+ */
+inline void print_performance_report() {
+    LOG_INFO("=== FlowCoro Performance Report ===");
+    v2::quick_start::print_report();
+    
+    // 打印迁移建议
+    v2::migration::get_migration_helper().analyze_migration_opportunity();
 }
 
 } // namespace flowcoro
