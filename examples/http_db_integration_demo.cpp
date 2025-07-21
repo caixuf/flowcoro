@@ -76,20 +76,20 @@ public:
         
         std::cout << "📂 Found user in database: " << user_doc.get("name") << std::endl;
         
-        // 调用API更新用户信息
+        // 分步构建URL和数据，避免复杂的字符串操作
         std::string url = "https://jsonplaceholder.typicode.com/users/" + user_id;
-        std::string update_data = R"({
-            "name": ")" + user_doc.get("name") + R"(",
-            "email": ")" + user_doc.get("email") + R"(updated@flowcoro.com",
-            "updated_by": "FlowCoro"
-        })";
+        std::string update_data = "{\"updated_by\": \"FlowCoro\"}";
         
-        auto response = co_await client_.post(url, update_data, {{"Content-Type", "application/json"}});
+        // 创建headers map，避免initializer_list问题
+        std::unordered_map<std::string, std::string> headers;
+        headers["Content-Type"] = "application/json";
+        
+        auto response = co_await client_.post(url, update_data, headers);
         
         if (response.success) {
             std::cout << "✅ API update successful: " << response.status_code << std::endl;
             
-            // 更新本地数据库记录（重新插入）
+            // 分步更新文档
             user_doc.set("last_synced", std::to_string(std::time(nullptr)));
             user_doc.set("sync_status", "success");
             co_await users_collection->insert(user_doc);
@@ -149,6 +149,7 @@ public:
                 std::cout << "🗑️  Dropped collection: " << collection_name << std::endl;
             }
         }
+        co_return;
     }
 };
 

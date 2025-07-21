@@ -248,6 +248,9 @@ int main() {
     std::cout << "支持文档存储、查询、更新和删除操作" << std::endl;
     std::cout << std::string(50, '-') << std::endl;
     
+    // 运行测试用例 - 这些测试用例将自动运行，因为TestRunner会跟踪它们
+    // TEST_CASE宏会自动将测试用例注册到TestRunner中
+    
     TestRunner::print_summary();
     
     return TestRunner::all_passed() ? 0 : 1;

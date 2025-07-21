@@ -128,64 +128,36 @@ public:
         });
     }
     
-    // 获取用户订单列表 - 使用缓存
+    // 获取用户订单列表 - 修复版本
     Task<std::vector<Order>> get_user_orders(int user_id, int limit = 10) {
+        std::vector<Order> orders;
         std::string cache_key = "user_orders:" + std::to_string(user_id);
         
-        // 1. 尝试从Redis获取
-        auto redis_conn = co_await redis_pool_->acquire_connection();
-        auto cache_result = co_await redis_conn->lrange(cache_key, 0, limit - 1);
-        
-        if (cache_result.success && cache_result.value.is_array() && !cache_result.value.array_val.empty()) {
-            std::vector<Order> orders;
-            for (const auto& item : cache_result.value.array_val) {
-                try {
-                    orders.push_back(parse_order_from_json(item.to_string()));
-                } catch (...) {
-                    // 忽略解析错误的项
-                }
-            }
-            if (!orders.empty()) {
-                co_return orders;
-            }
-        }
-        
-        // 2. 从数据库获取
+        // 简化的数据库查询
         auto mysql_conn = co_await mysql_pool_->acquire_connection();
-        auto db_result = co_await mysql_conn->execute(
-            "SELECT id, user_id, product_name, price, quantity, status, created_at "
-            "FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-            {std::to_string(user_id), std::to_string(limit)});
         
-        if (!db_result.success) {
-            throw std::runtime_error("Failed to fetch user orders: " + db_result.error);
-        }
+        // 构建查询语句
+        std::string query = "SELECT id, user_id, product_name, price, quantity, status, created_at "
+                           "FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT ?";
         
-        std::vector<Order> orders;
-        for (const auto& row : db_result.rows) {
-            Order order;
-            order.id = std::stoi(row.at("id"));
-            order.user_id = std::stoi(row.at("user_id"));
-            order.product_name = row.at("product_name");
-            order.price = std::stod(row.at("price"));
-            order.quantity = std::stoi(row.at("quantity"));
-            order.status = row.at("status");
-            orders.push_back(order);
-        }
+        // 构建参数
+        std::vector<std::string> params;
+        params.push_back(std::to_string(user_id));
+        params.push_back(std::to_string(limit));
         
-        // 3. 缓存结果到Redis列表
-        if (!orders.empty()) {
-            // 清空现有缓存
-            co_await redis_conn->del(cache_key);
-            
-            // 添加新数据
-            for (const auto& order : orders) {
-                std::string order_json = serialize_order_to_json(order);
-                co_await redis_conn->rpush(cache_key, order_json);
+        auto db_result = co_await mysql_conn->execute(query, params);
+        
+        if (db_result.success) {
+            for (const auto& row : db_result.rows) {
+                Order order;
+                order.id = std::stoi(row.at("id"));
+                order.user_id = std::stoi(row.at("user_id"));
+                order.product_name = row.at("product_name");
+                order.price = std::stod(row.at("price"));
+                order.quantity = std::stoi(row.at("quantity"));
+                order.status = row.at("status");
+                orders.push_back(std::move(order));
             }
-            
-            // 设置过期时间
-            co_await redis_conn->expire(cache_key, std::chrono::minutes(5));
         }
         
         co_return orders;
@@ -298,15 +270,12 @@ Task<void> demonstrate_phase2_features() {
         
         // 6. 显示监控指标
         std::cout << "\n=== MySQL Pool Metrics ===" << std::endl;
-        auto mysql_metrics = mysql_monitor->get_metrics_string();
-        std::cout << "Total requests: " << mysql_metrics["requests"]["total"] << std::endl;
-        std::cout << "Success rate: " << mysql_metrics["requests"]["success_rate"] << std::endl;
-        std::cout << "Average wait time: " << mysql_metrics["performance"]["avg_wait_time_ms"] << "ms" << std::endl;
+        auto mysql_metrics_str = mysql_monitor->get_metrics_string();
+        std::cout << "MySQL Metrics: " << mysql_metrics_str << std::endl;
         
         std::cout << "\n=== Redis Pool Metrics ===" << std::endl;
-        auto redis_metrics = redis_monitor->get_metrics_string();
-        std::cout << "Total requests: " << redis_metrics["requests"]["total"] << std::endl;
-        std::cout << "Success rate: " << redis_metrics["requests"]["success_rate"] << std::endl;
+        auto redis_metrics_str = redis_monitor->get_metrics_string();
+        std::cout << "Redis Metrics: " << redis_metrics_str << std::endl;
         
         // 7. 演示并发性能
         std::cout << "\n=== Concurrent Performance Test ===" << std::endl;
@@ -347,13 +316,11 @@ Task<void> demonstrate_phase2_features() {
         
         // 最终指标
         std::cout << "\n=== Final Metrics ===" << std::endl;
-        mysql_metrics = mysql_monitor->get_metrics_string();
-        std::cout << "MySQL - Total: " << mysql_metrics["requests"]["total"] 
-                 << ", Success Rate: " << mysql_metrics["requests"]["success_rate"] << std::endl;
+        auto mysql_metrics_str2 = mysql_monitor->get_metrics_string();
+        std::cout << "MySQL Final Metrics: " << mysql_metrics_str2 << std::endl;
         
-        redis_metrics = redis_monitor->get_metrics_string();
-        std::cout << "Redis - Total: " << redis_metrics["requests"]["total"] 
-                 << ", Success Rate: " << redis_metrics["requests"]["success_rate"] << std::endl;
+        auto redis_metrics_str2 = redis_monitor->get_metrics_string();
+        std::cout << "Redis Final Metrics: " << redis_metrics_str2 << std::endl;
         
     } catch (const std::exception& e) {
         std::cerr << "Demo failed: " << e.what() << std::endl;

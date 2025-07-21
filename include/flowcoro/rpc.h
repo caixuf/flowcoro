@@ -89,7 +89,7 @@ private:
 public:
     RpcClient(const std::string& server_url) : server_url_(server_url) {}
     
-    // 远程方法调用
+    // 远程方法调用 - 修复编译器内部错误
     Task<std::string> call(const std::string& method, const std::string& params = "{}") {
         RpcMessage request;
         request.id = std::to_string(++request_id_counter_);
@@ -99,21 +99,22 @@ public:
         
         std::string json_data = request.to_json();
         
-        auto response = co_await http_client_.post(
-            server_url_ + "/rpc",
-            json_data,
-            {{"Content-Type", "application/json"}}
-        );
+        // 分步构建请求，避免复杂的临时对象
+        std::string url = server_url_ + "/rpc";
+        std::unordered_map<std::string, std::string> headers;
+        headers["Content-Type"] = "application/json";
+        
+        auto response = co_await http_client_.post(url, json_data, headers);
         
         if (!response.success) {
-            std::string error_result = "{\"error\":\"Network error: " + response.error_message + "\"}";
-            co_return error_result;
+            std::string error_msg = "{\"error\":\"Network error: " + response.error_message + "\"}";
+            co_return error_msg;
         }
         
         auto rpc_response = RpcMessage::from_json(response.body);
         if (!rpc_response.error.empty()) {
-            std::string error_result = "{\"error\":\"" + rpc_response.error + "\"}";
-            co_return error_result;
+            std::string error_msg = "{\"error\":\"" + rpc_response.error + "\"}";
+            co_return error_msg;
         }
         
         co_return rpc_response.result;
@@ -188,8 +189,9 @@ public:
         while (running_) {
             // 在实际实现中，这里会监听TCP连接
             // 并为每个连接调用handle_request
-            co_await Task<void>::sleep(std::chrono::milliseconds(100));
+            co_await sleep_for(std::chrono::milliseconds(100));
         }
+        co_return;
     }
     
     void stop() {
