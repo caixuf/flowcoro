@@ -393,10 +393,28 @@ cmake -DFLOWCORO_ENABLE_SANITIZERS=ON ..
 
 ### 🚀 **发展路线**
 
-- [ ] **v2.2**: HTTP/2协议支持
-- [ ] **v2.3**: WebSocket实现
-- [ ] **v2.4**: 分布式协程调度
-- [ ] **v3.0**: CUDA协程支持
+#### Phase 1: 性能优化 (v2.2 - 学习ioManager特性)
+- [ ] **协程调度优化**: 学习ioManager的FSM状态机模型，优化协程切换性能
+- [ ] **Future组合器**: 实现类似JS的all/any/race/allSettle操作
+- [ ] **Channel通信**: 添加类似Golang的chan机制用于协程间通信
+- [ ] **Pipeline模式**: 引入流式数据处理的Pipeline概念
+
+#### Phase 2: 架构增强 (v2.3)
+- [ ] **协议抽象**: 学习ioManager的Protocol概念，抽象输入输出协议
+- [ ] **多线程协程**: 改进跨线程协程调度和通信机制
+- [ ] **WebSocket支持**: 基于协议抽象实现WebSocket
+- [ ] **HTTP/2协议**: 支持现代HTTP协议栈
+
+#### Phase 3: 高级特性 (v2.4)
+- [ ] **分布式协程调度**: 支持多节点协程调度
+- [ ] **内存优化**: 参考ioManager的零分配设计
+- [ ] **性能监控**: 集成性能分析和监控工具
+- [ ] **生态扩展**: 更多数据库和消息队列支持
+
+#### Phase 4: 未来展望 (v3.0+)
+- [ ] **CUDA协程支持**: GPU计算协程化
+- [ ] **边缘计算**: IoT和边缘设备支持
+- [ ] **云原生**: Kubernetes和容器化支持
 
 ## 📄 许可证
 
