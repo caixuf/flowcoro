@@ -100,7 +100,6 @@ public:
     
     // 批量操作 - 更好的缓存局部性
     size_t push_batch(const T* items, size_t count) {
-        size_t pushed = 0;
         const size_t write_pos = write_pos_.load(std::memory_order_relaxed);
         const size_t read_pos = read_pos_.load(std::memory_order_acquire);
         
@@ -120,7 +119,6 @@ public:
     }
     
     size_t pop_batch(T* items, size_t count) {
-        size_t popped = 0;
         const size_t read_pos = read_pos_.load(std::memory_order_relaxed);
         const size_t write_pos = write_pos_.load(std::memory_order_acquire);
         

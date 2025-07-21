@@ -297,6 +297,7 @@ Task<void> demonstrate_phase2_features() {
                 try {
                     auto order_id = sync_wait(order_service.create_order(order));
                     auto retrieved = sync_wait(order_service.get_order(order_id));
+                    (void)retrieved; // 标记为已使用，避免警告
                 } catch (const std::exception& e) {
                     std::cerr << "Concurrent request " << i << " failed: " << e.what() << std::endl;
                 }

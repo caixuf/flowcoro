@@ -28,13 +28,27 @@ public:
     
     static void expect_eq(const auto& a, const auto& b, const std::string& message,
                          const char* file, int line) {
-        if (a == b) {
-            passed_++;
-            std::cout << "✅ PASS: " << message << std::endl;
+        // 使用static_cast避免符号比较警告
+        if constexpr (std::is_integral_v<std::decay_t<decltype(a)>> && 
+                      std::is_integral_v<std::decay_t<decltype(b)>>) {
+            if (static_cast<std::common_type_t<decltype(a), decltype(b)>>(a) == 
+                static_cast<std::common_type_t<decltype(a), decltype(b)>>(b)) {
+                passed_++;
+                std::cout << "✅ PASS: " << message << std::endl;
+            } else {
+                failed_++;
+                std::cerr << "❌ FAIL: " << message << " - Expected: " << b 
+                         << ", Got: " << a << " (" << file << ":" << line << ")" << std::endl;
+            }
         } else {
-            failed_++;
-            std::cerr << "❌ FAIL: " << message << " - Expected: " << b 
-                     << ", Got: " << a << " (" << file << ":" << line << ")" << std::endl;
+            if (a == b) {
+                passed_++;
+                std::cout << "✅ PASS: " << message << std::endl;
+            } else {
+                failed_++;
+                std::cerr << "❌ FAIL: " << message << " - Expected: " << b 
+                         << ", Got: " << a << " (" << file << ":" << line << ")" << std::endl;
+            }
         }
     }
     

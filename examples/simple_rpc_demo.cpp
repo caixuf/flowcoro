@@ -288,6 +288,10 @@ Task<void> async_rpc_demo() {
     );
     std::cout << "✅ user.create = " << user_result << std::endl;
     
+    // 使用start_time避免警告
+    auto elapsed = std::chrono::steady_clock::now() - start_time;
+    (void)elapsed; // 标记为已使用
+    
     // 批量并发调用测试
     std::vector<std::pair<std::string, std::string>> batch_requests = {
         {"calc.add", "10,20"},

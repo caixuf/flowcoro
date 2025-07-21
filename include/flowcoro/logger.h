@@ -125,7 +125,13 @@ public:
         
         // 格式化消息
         std::array<char, 512> format_buffer;
-        std::snprintf(format_buffer.data(), format_buffer.size(), format, std::forward<Args>(args)...);
+        if constexpr (sizeof...(args) > 0) {
+            std::snprintf(format_buffer.data(), format_buffer.size(), format, std::forward<Args>(args)...);
+        } else {
+            // 没有参数时直接复制格式字符串
+            std::strncpy(format_buffer.data(), format, format_buffer.size() - 1);
+            format_buffer[format_buffer.size() - 1] = '\0';
+        }
         
         // 创建日志条目
         LogEntry entry(level, format_buffer.data(), file, line);
