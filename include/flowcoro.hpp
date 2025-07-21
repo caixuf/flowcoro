@@ -32,8 +32,6 @@
 #include "flowcoro/net.h"
 #include "flowcoro/http_client.h"
 
-// 增强的协程生命周期管理（v2.1新增）
-#include "flowcoro/lifecycle.h"
 // #include "flowcoro/rpc.h"  // 暂时注释掉复杂的RPC实现
 
 /**

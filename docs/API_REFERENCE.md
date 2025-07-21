@@ -9,7 +9,7 @@ FlowCoro 提供了一套完整的现代C++20协程编程接口，包括协程核
 ### 1. 协程核心 (core.h)
 
 #### Task<T>
-协程任务模板类，支持co_await语法。
+协程任务模板类，支持co_await语法，集成了生命周期管理。
 
 ```cpp
 template<typename T>
@@ -26,6 +26,13 @@ public:
     
     // 检查是否完成
     bool is_ready() const;
+    
+    // 生命周期管理功能
+    coroutine_state get_state() const;
+    std::chrono::milliseconds get_lifetime() const;
+    bool is_active() const;
+    bool is_cancelled() const;
+    void cancel();
 };
 ```
 
@@ -341,6 +348,204 @@ public:
 
 // 便捷宏
 #define LOG_DEBUG(msg) GlobalLogger::get().debug(msg)
+```
+
+### 9. 生命周期管理 (已整合到core.h)
+
+原独立的生命周期管理功能现已完全整合到core.h中。
+
+#### coroutine_state
+协程状态枚举，表示协程在不同执行阶段的状态。
+
+```cpp
+enum class coroutine_state {
+    created,    // 刚创建，尚未开始执行
+    running,    // 正在运行
+    suspended,  // 已挂起等待
+    completed,  // 正常完成
+    destroyed,  // 已销毁（发生异常）
+    cancelled   // 被取消
+};
+```
+
+#### coroutine_state_manager
+协程状态管理器，负责跟踪和转换协程状态。
+
+```cpp
+class coroutine_state_manager {
+public:
+    // 尝试状态转换
+    bool try_transition(coroutine_state from, coroutine_state to) noexcept;
+    
+    // 强制状态转换
+    void force_transition(coroutine_state to) noexcept;
+    
+    // 获取当前状态
+    coroutine_state get_state() const noexcept;
+    
+    // 检查是否处于某个状态
+    bool is_state(coroutine_state expected) const noexcept;
+    
+    // 获取运行时长
+    std::chrono::milliseconds get_lifetime() const noexcept;
+    
+    // 检查是否活跃
+    bool is_active() const noexcept;
+};
+```
+
+#### cancellation_token
+取消令牌，用于在协程执行过程中检查和处理取消请求。
+
+```cpp
+class cancellation_token {
+public:
+    cancellation_token() = default;
+    
+    // 检查是否已取消
+    bool is_cancelled() const noexcept;
+    
+    // 如果已取消则抛出异常
+    void throw_if_cancelled() const;
+    
+    // 注册取消回调
+    template<typename Callback>
+    void register_callback(Callback&& callback);
+    
+    // 创建超时令牌
+    static cancellation_token create_timeout(std::chrono::milliseconds timeout);
+    
+    // 创建组合令牌
+    static cancellation_token combine(const cancellation_token& a, const cancellation_token& b);
+};
+```
+
+#### cancellation_source
+取消源，用于请求取消关联的令牌。
+
+```cpp
+class cancellation_source {
+public:
+    cancellation_source();
+    
+    // 获取关联的令牌
+    cancellation_token get_token() const;
+    
+    // 请求取消
+    void request_cancellation() noexcept;
+    
+    // 检查是否已取消
+    bool is_cancellation_requested() const noexcept;
+};
+```
+
+#### safe_coroutine_handle
+安全的协程句柄包装器，自动处理协程析构和状态管理。
+
+```cpp
+class safe_coroutine_handle {
+public:
+    safe_coroutine_handle() = default;
+    explicit safe_coroutine_handle(std::coroutine_handle<> handle);
+    
+    // 移动语义
+    safe_coroutine_handle(safe_coroutine_handle&& other) noexcept;
+    safe_coroutine_handle& operator=(safe_coroutine_handle&& other) noexcept;
+    
+    // 禁止拷贝
+    safe_coroutine_handle(const safe_coroutine_handle&) = delete;
+    safe_coroutine_handle& operator=(const safe_coroutine_handle&) = delete;
+    
+    // 析构函数自动处理资源释放
+    ~safe_coroutine_handle();
+    
+    // 操作句柄
+    bool valid() const noexcept;
+    void resume();
+    bool done() const;
+    void* address() const;
+    
+    // 获取promise
+    template<typename Promise>
+    Promise& promise();
+};
+```
+
+### 10. 增强Task (flowcoro_enhanced_task.h)
+
+增强版协程Task实现，完全兼容原Task接口，并扩展了生命周期管理和取消功能。
+
+```cpp
+template<typename T>
+class enhanced_task {
+public:
+    // 构造函数
+    explicit enhanced_task(safe_coroutine_handle handle);
+    
+    // 移动语义
+    enhanced_task(enhanced_task&& other) noexcept;
+    enhanced_task& operator=(enhanced_task&& other) noexcept;
+    
+    // 禁止拷贝
+    enhanced_task(const enhanced_task&) = delete;
+    enhanced_task& operator=(const enhanced_task&) = delete;
+    
+    // 从普通Task创建
+    static enhanced_task from_task(Task<T>&& task, cancellation_token token = {});
+    
+    // 获取结果（兼容原Task接口）
+    T get();
+    
+    // 可等待接口（兼容原Task接口）
+    bool await_ready() const;
+    void await_suspend(std::coroutine_handle<> waiting_handle);
+    T await_resume();
+    
+    // 新增功能：取消支持
+    void cancel();
+    bool is_cancelled() const;
+    
+    // 新增功能：状态查询
+    bool is_ready() const;
+    coroutine_state get_state() const;
+    std::chrono::milliseconds get_lifetime() const;
+    bool is_active() const;
+    
+    // 新增功能：设置取消令牌
+    void set_cancellation_token(cancellation_token token);
+    
+    // 调试信息
+    void* get_handle_address() const;
+    bool is_handle_valid() const;
+};
+```
+
+### 11. 统一版API (flowcoro_unified_simple.h)
+
+提供统一和简化的API接口，整合了核心功能、取消机制和增强Task。
+
+```cpp
+// 便捷类型别名
+template<typename T = void>
+using UnifiedTask = Task<T>;
+
+template<typename T = void>
+using CancellableTask = enhanced_task<T>;
+
+// 创建可取消的任务
+template<typename T>
+auto make_cancellable(Task<T>&& task, cancellation_token token = {}) -> enhanced_task<T>;
+
+// 创建带超时的任务
+template<typename T>
+auto with_timeout(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
+
+// 启用统一功能
+inline void enable_unified_features();
+
+// 打印统一版本报告
+inline void print_unified_report();
+```
 #define LOG_INFO(msg)  GlobalLogger::get().info(msg)
 #define LOG_WARN(msg)  GlobalLogger::get().warn(msg)
 #define LOG_ERROR(msg) GlobalLogger::get().error(msg)

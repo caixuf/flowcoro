@@ -32,20 +32,6 @@ target_link_libraries(simple_rpc_demo PRIVATE flowcoro_net)
 add_executable(simple_integration_demo simple_integration_demo.cpp)
 target_link_libraries(simple_integration_demo PRIVATE flowcoro_net)
 
-# 协程生命周期管理集成演示 (v2.1新增)
-add_executable(lifecycle_integration_demo lifecycle_integration_demo.cpp)
-target_link_libraries(lifecycle_integration_demo PRIVATE flowcoro_net)
-target_compile_features(lifecycle_integration_demo PRIVATE cxx_std_20)
-
-# 简化的生命周期演示 (更稳定版本)
-add_executable(simple_lifecycle_demo simple_lifecycle_demo.cpp)
-target_link_libraries(simple_lifecycle_demo PRIVATE flowcoro_net)
-target_compile_features(simple_lifecycle_demo PRIVATE cxx_std_20)
-
-# 生命周期集成测试 (新的简化版本)
-add_executable(lifecycle_integration_test lifecycle_integration_test.cpp)
-target_link_libraries(lifecycle_integration_test PRIVATE flowcoro_net)
-target_compile_features(lifecycle_integration_test PRIVATE cxx_std_20)
 
 # Phase 2 演示程序 (完整的数据访问层功能)
 if(FLOWCORO_ENABLE_DATABASE)
