@@ -1,13 +1,11 @@
 #pragma once
 
 #include "core.h"
-#include "cancellation.h" 
-#include "../core.h"  // 为了使用GlobalThreadPool
-#include "../logger.h"
+#include "flowcoro_cancellation.h" 
 #include <optional>
 #include <exception>
 
-namespace flowcoro::lifecycle {
+namespace flowcoro {
 
 // 增强的Task实现，保持与原接口兼容
 template<typename T>
@@ -109,6 +107,18 @@ public:
     // 析构函数：自动清理，比原Task更安全
     ~enhanced_task() = default;
     
+    // 从普通Task创建enhanced_task的工厂方法
+    static enhanced_task from_task(Task<T>&& task, cancellation_token token = {}) {
+        // 这里先返回一个简单的包装
+        // 实际实现可能需要更复杂的转换
+        return enhanced_task::create_wrapper(std::move(task), token);
+    }
+    
+    // 创建包装器的辅助方法
+    static enhanced_task create_wrapper(Task<T>&& task, cancellation_token token) {
+        co_return co_await task;
+    }
+    
     // 获取结果（与原Task接口兼容）
     T get() {
         if (!handle_.valid()) {
@@ -203,7 +213,8 @@ public:
             ]() mutable {
                 try {
                     // 从地址重构句柄
-                    auto handle = safe_coroutine_handle{std::coroutine_handle<>::from_address(handle_addr)};
+                    auto raw_handle = std::coroutine_handle<>::from_address(handle_addr);
+                    auto handle = safe_coroutine_handle{raw_handle};
                     if (handle.valid() && !handle.done()) {
                         handle.resume();
                     }
@@ -325,41 +336,5 @@ public:
         return handle_.valid();
     }
 };
-
-} // namespace flowcoro::lifecycle
-
-// 为了保持兼容性，在flowcoro命名空间中提供别名
-namespace flowcoro {
-
-// 可以选择性地启用增强任务
-#ifdef FLOWCORO_USE_ENHANCED_TASK
-    template<typename T>
-    using Task = lifecycle::enhanced_task<T>;
-#endif
-
-// 便利函数：创建带取消令牌的任务
-template<typename T>
-auto make_cancellable_task(lifecycle::enhanced_task<T> task, lifecycle::cancellation_token token) {
-    task.set_cancellation_token(std::move(token));
-    return task;
-}
-
-// 便利函数：创建带超时的任务
-template<typename T>
-auto make_timeout_task(lifecycle::enhanced_task<T> task, std::chrono::milliseconds timeout) {
-    lifecycle::cancellation_source timeout_source;
-    
-    // 启动超时计时器
-    GlobalThreadPool::get().enqueue_void([
-        source = std::move(timeout_source), 
-        timeout
-    ]() mutable {
-        std::this_thread::sleep_for(timeout);
-        source.cancel();
-    });
-    
-    task.set_cancellation_token(timeout_source.get_token());
-    return task;
-}
 
 } // namespace flowcoro

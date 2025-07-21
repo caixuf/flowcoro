@@ -23,6 +23,182 @@ class HttpRequest;
 
 namespace flowcoro {
 
+// 协程状态枚举
+enum class coroutine_state {
+    created,    // 刚创建，尚未开始执行
+    running,    // 正在运行
+    suspended,  // 挂起等待
+    completed,  // 已完成
+    cancelled,  // 已取消
+    destroyed,  // 已销毁
+    error       // 执行出错
+};
+
+// 协程状态管理器
+class coroutine_state_manager {
+private:
+    std::atomic<coroutine_state> state_{coroutine_state::created};
+    
+public:
+    coroutine_state_manager() = default;
+    
+    // 尝试状态转换
+    bool try_transition(coroutine_state from, coroutine_state to) noexcept {
+        return state_.compare_exchange_strong(from, to);
+    }
+    
+    // 强制状态转换
+    void force_transition(coroutine_state to) noexcept {
+        state_.store(to, std::memory_order_release);
+    }
+    
+    // 获取当前状态
+    coroutine_state get_state() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
+    
+    // 检查是否处于某个状态
+    bool is_state(coroutine_state expected) const noexcept {
+        return state_.load(std::memory_order_acquire) == expected;
+    }
+};
+
+// 取消状态（被cancellation_token使用）
+class cancellation_state {
+private:
+    std::atomic<bool> cancelled_{false};
+    std::mutex callbacks_mutex_;
+    std::vector<std::function<void()>> callbacks_;
+    
+public:
+    cancellation_state() = default;
+    
+    // 请求取消
+    void request_cancellation() noexcept {
+        bool expected = false;
+        if (cancelled_.compare_exchange_strong(expected, true)) {
+            // 第一次取消，触发回调
+            std::lock_guard<std::mutex> lock(callbacks_mutex_);
+            for (auto& callback : callbacks_) {
+                try {
+                    callback();
+                } catch (...) {
+                    // 忽略回调异常
+                }
+            }
+        }
+    }
+    
+    // 检查是否已取消
+    bool is_cancelled() const noexcept {
+        return cancelled_.load(std::memory_order_acquire);
+    }
+    
+    // 注册取消回调
+    template<typename Callback>
+    void register_callback(Callback&& cb) {
+        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        callbacks_.emplace_back(std::forward<Callback>(cb));
+        
+        // 如果已经取消，立即调用回调
+        if (is_cancelled()) {
+            try {
+                cb();
+            } catch (...) {
+                // 忽略回调异常
+            }
+        }
+    }
+    
+    // 清空回调
+    void clear_callbacks() noexcept {
+        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        callbacks_.clear();
+    }
+};
+
+// 安全协程句柄包装器
+class safe_coroutine_handle {
+private:
+    std::coroutine_handle<> handle_;
+    std::atomic<bool> valid_{false};
+    
+public:
+    safe_coroutine_handle() = default;
+    
+    // 从任意类型的协程句柄构造
+    template<typename Promise>
+    explicit safe_coroutine_handle(std::coroutine_handle<Promise> h)
+        : handle_(h), valid_(h && !h.done()) {}
+    
+    // 从void句柄构造（特化版本）  
+    explicit safe_coroutine_handle(std::coroutine_handle<> h)
+        : handle_(h), valid_(h && !h.done()) {}
+    
+    // 移动构造
+    safe_coroutine_handle(safe_coroutine_handle&& other) noexcept
+        : handle_(std::exchange(other.handle_, {}))
+        , valid_(other.valid_.exchange(false)) {}
+    
+    safe_coroutine_handle& operator=(safe_coroutine_handle&& other) noexcept {
+        if (this != &other) {
+            handle_ = std::exchange(other.handle_, {});
+            valid_.store(other.valid_.exchange(false));
+        }
+        return *this;
+    }
+    
+    // 禁止拷贝
+    safe_coroutine_handle(const safe_coroutine_handle&) = delete;
+    safe_coroutine_handle& operator=(const safe_coroutine_handle&) = delete;
+    
+    ~safe_coroutine_handle() {
+        if (valid() && handle_) {
+            try {
+                handle_.destroy();
+            } catch (...) {
+                // 忽略析构异常
+            }
+        }
+    }
+    
+    // 检查句柄是否有效
+    bool valid() const noexcept {
+        return valid_.load(std::memory_order_acquire) && handle_;
+    }
+    
+    // 检查协程是否完成
+    bool done() const noexcept {
+        return !valid() || handle_.done();
+    }
+    
+    // 恢复协程执行
+    void resume() {
+        if (valid() && !handle_.done()) {
+            handle_.resume();
+        }
+    }
+    
+    // 获取Promise（类型安全）
+    template<typename Promise>
+    Promise& promise() {
+        if (!valid()) {
+            throw std::runtime_error("Invalid coroutine handle");
+        }
+        return std::coroutine_handle<Promise>::from_address(handle_.address()).promise();
+    }
+    
+    // 使句柄无效
+    void invalidate() noexcept {
+        valid_.store(false, std::memory_order_release);
+    }
+    
+    // 获取原始地址
+    void* address() const noexcept {
+        return handle_ ? handle_.address() : nullptr;
+    }
+};
+
 // 简化的全局线程池
 class GlobalThreadPool {
 private:
@@ -1110,3 +1286,13 @@ inline void print_performance_report() {
 }
 
 } // namespace flowcoro
+
+// 可选的增强功能 - 按需包含
+// #include "flowcoro_cancellation.h"     // 取消令牌支持
+// #include "flowcoro_enhanced_task.h"    // 增强Task功能
+
+// 便利宏：一键启用所有增强功能
+#ifdef FLOWCORO_ENABLE_ALL
+#include "flowcoro_cancellation.h"
+#include "flowcoro_enhanced_task.h"
+#endif
