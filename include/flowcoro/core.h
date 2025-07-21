@@ -212,7 +212,18 @@ struct Task {
         }
         return *this;
     }
-    ~Task() { if (handle) handle.destroy(); }
+    ~Task() { 
+        if (handle) {
+            try {
+                // 检查协程句柄是否有效
+                if (handle.address() != nullptr) {
+                    handle.destroy();
+                }
+            } catch (...) {
+                // 忽略析构时的异常
+            }
+        }
+    }
     T get() {
         if (handle && !handle.done()) handle.resume();
         if (handle.promise().exception) {
@@ -318,7 +329,18 @@ struct Task<void> {
         }
         return *this;
     }
-    ~Task() { if (handle) handle.destroy(); }
+    ~Task() { 
+        if (handle) {
+            try {
+                // 检查协程句柄是否有效
+                if (handle.address() != nullptr) {
+                    handle.destroy();
+                }
+            } catch (...) {
+                // 忽略析构时的异常
+            }
+        }
+    }
     void get() {
         if (handle && !handle.done()) handle.resume();
         if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
@@ -678,7 +700,18 @@ struct Task<std::unique_ptr<T>> {
         }
         return *this;
     }
-    ~Task() { if (handle) handle.destroy(); }
+    ~Task() { 
+        if (handle) {
+            try {
+                // 检查协程句柄是否有效
+                if (handle.address() != nullptr) {
+                    handle.destroy();
+                }
+            } catch (...) {
+                // 忽略析构时的异常
+            }
+        }
+    }
     std::unique_ptr<T> get() {
         if (handle && !handle.done()) handle.resume();
         if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);

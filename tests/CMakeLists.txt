@@ -88,7 +88,7 @@ endif()
 
 # 设置输出目录
 set_target_properties(
-    test_core test_database test_http_client test_sleep_only run_all_tests
+    test_core test_database test_http_client test_simple_db test_rpc test_sleep_only run_all_tests
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
