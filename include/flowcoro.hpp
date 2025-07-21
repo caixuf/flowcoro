@@ -23,6 +23,7 @@
 
 // 核心组件
 #include "flowcoro/core.h"
+#include "flowcoro/future_combinators.h"  // v2.2新增: Future组合器
 #include "flowcoro/lockfree.h"
 #include "flowcoro/thread_pool.h"
 #include "flowcoro/logger.h"
