@@ -8,15 +8,17 @@ FlowCoro 提供了一套完整的现代C++20协程编程接口，包括协程核
 
 ### 1. 协程核心 (core.h)
 
-#### Task<T>
-协程任务模板类，支持co_await语法，集成了生命周期管理。
+FlowCoro 提供了两层协程任务设计：**基础Task**用于日常开发，**增强Task**用于需要精细控制的场景。
+
+#### Task<T> - 主要协程类型
+FlowCoro的主要协程任务模板类，提供高性能的协程执行和基本的生命周期管理。**这是日常开发中使用的主要类型**。
 
 ```cpp
 template<typename T>
 class Task {
 public:
     // 构造函数
-    Task(std::coroutine_handle<Promise> handle);
+    Task(std::coroutine_handle<promise_type> handle);
     
     // 获取结果 (阻塞等待)
     T get();
@@ -25,10 +27,9 @@ public:
     auto operator co_await();
     
     // 检查是否完成
-    bool is_ready() const;
+    bool await_ready() const;
     
-    // 生命周期管理功能
-    coroutine_state get_state() const;
+    // 基本生命周期管理功能
     std::chrono::milliseconds get_lifetime() const;
     bool is_active() const;
     bool is_cancelled() const;
@@ -36,9 +37,102 @@ public:
 };
 ```
 
+**使用场景：**
+- ✅ 日常协程编程 - 所有示例代码都使用此类型
+- ✅ 高性能场景 - 最小运行时开销
+- ✅ 简单的取消和状态查询
+- ✅ RPC、数据库、网络等所有内置模块
+
 **特化版本：**
 - `Task<void>` - 无返回值的协程
 - `Task<std::unique_ptr<T>>` - 返回智能指针的协程
+
+#### enhanced_task<T> - 高级协程类型
+增强版协程任务类，提供完整的生命周期管理和精细状态控制。**仅在需要复杂状态管理时使用**。
+
+```cpp
+template<typename T>
+class enhanced_task {
+public:
+    // 构造函数
+    enhanced_task(safe_coroutine_handle handle);
+    
+    // 与Task<T>兼容的接口
+    T get();
+    auto operator co_await();
+    bool await_ready() const;
+    
+    // 增强的生命周期管理功能
+    coroutine_state get_state() const;          // 精确状态查询
+    std::chrono::milliseconds get_lifetime() const;
+    bool is_active() const;
+    bool is_cancelled() const;
+    void cancel();
+    
+    // 高级取消令牌支持
+    void set_cancellation_token(cancellation_token token);
+    
+    // 从基础Task创建
+    static enhanced_task from_task(Task<T>&& task, cancellation_token token = {});
+    
+    // 调试信息
+    void* get_handle_address() const;
+    bool is_handle_valid() const;
+};
+```
+
+**使用场景：**
+- ⚡ 需要精确状态控制的场景
+- ⚡ 复杂的取消策略（超时、组合取消等）
+- ⚡ 调试和性能监控
+- ⚡ 与外部系统的集成
+
+**设计理念：**
+- **Task<T>** - "零开销抽象"，专注性能
+- **enhanced_task<T>** - "功能完整"，专注可控性
+
+### 使用建议
+
+#### 🚀 推荐使用 Task<T> 的场景（95%的情况）
+
+```cpp
+// ✅ 日常协程函数
+Task<std::string> fetch_user_data(int user_id) {
+    // 简洁、高性能
+    co_return "user_data";
+}
+
+// ✅ 网络和数据库操作
+Task<void> handle_request() {
+    auto data = co_await database.query("SELECT ...");
+    co_await network.send(data);
+}
+
+// ✅ RPC服务
+server.register_method("get_user", [](const std::string& params) -> Task<std::string> {
+    co_return process_user_request(params);
+});
+```
+
+#### ⚡ 使用 enhanced_task<T> 的场景（特殊需求）
+
+```cpp
+// ⚡ 需要精确状态控制
+auto task = some_long_operation();
+if (task.get_state() == coroutine_state::suspended) {
+    // 精确状态处理
+}
+
+// ⚡ 复杂取消策略
+auto timeout_token = cancellation_token::create_timeout(5s);
+auto enhanced = enhanced_task<int>::from_task(std::move(basic_task), timeout_token);
+
+// ⚡ 调试和监控
+enhanced.set_cancellation_token(debug_token);
+LOG_INFO("Task handle: %p, lifetime: %lld ms", 
+         enhanced.get_handle_address(), 
+         enhanced.get_lifetime().count());
+```
 
 #### AsyncPromise<T>
 协程promise类型，管理协程的生命周期和结果。
@@ -63,13 +157,30 @@ public:
 
 ```cpp
 // 异步睡眠
-Task<void> sleep_for(std::chrono::milliseconds duration);
+auto sleep_for(std::chrono::milliseconds duration) -> SleepAwaiter;
 
-// 切换到指定线程池执行
-Task<void> switch_to_thread_pool();
+// 等待所有任务完成
+template<typename... Tasks>
+auto when_all(Tasks&&... tasks) -> WhenAllAwaiter<Tasks...>;
 
-// 协程异常处理
-void handle_coroutine_exception(std::exception_ptr eptr);
+// 同步等待协程完成
+template<typename T>
+T sync_wait(Task<T>&& task);
+
+template<typename Func>
+auto sync_wait(Func&& func) -> decltype(sync_wait(func()));
+
+// 创建增强版任务
+template<typename T>
+auto make_enhanced(Task<T>&& task) -> enhanced_task<T>;
+
+// 创建可取消任务  
+template<typename T>
+auto make_cancellable_task(Task<T> task) -> enhanced_task<T>;
+
+// 创建超时任务
+template<typename T>
+auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
 ```
 
 ### 2. 无锁数据结构 (lockfree.h)
@@ -505,7 +616,7 @@ public:
     void cancel();
     bool is_cancelled() const;
     
-    // 新增功能：状态查询
+    // 新增功能：完整状态查询
     bool is_ready() const;
     coroutine_state get_state() const;
     std::chrono::milliseconds get_lifetime() const;
@@ -520,36 +631,28 @@ public:
 };
 ```
 
-### 11. 统一版API (flowcoro_unified_simple.h)
+### 11. 便利功能 (core.h)
 
-提供统一和简化的API接口，整合了核心功能、取消机制和增强Task。
+提供便捷的协程创建和管理功能。
 
 ```cpp
-// 便捷类型别名
-template<typename T = void>
-using UnifiedTask = Task<T>;
+// 启用FlowCoro v2增强功能
+inline void enable_v2_features();
 
-template<typename T = void>
-using CancellableTask = enhanced_task<T>;
-
-// 创建可取消的任务
+// 将现有Task转换为增强Task
 template<typename T>
-auto make_cancellable(Task<T>&& task, cancellation_token token = {}) -> enhanced_task<T>;
+auto make_enhanced(Task<T>&& task) -> enhanced_task<T>;
+
+// 创建可取消任务
+template<typename T>
+auto make_cancellable_task(Task<T> task) -> enhanced_task<T>;
 
 // 创建带超时的任务
 template<typename T>
-auto with_timeout(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
+auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
 
-// 启用统一功能
-inline void enable_unified_features();
-
-// 打印统一版本报告
-inline void print_unified_report();
-```
-#define LOG_INFO(msg)  GlobalLogger::get().info(msg)
-#define LOG_WARN(msg)  GlobalLogger::get().warn(msg)
-#define LOG_ERROR(msg) GlobalLogger::get().error(msg)
-#define LOG_FATAL(msg) GlobalLogger::get().fatal(msg)
+// 性能报告
+inline void print_performance_report();
 ```
 
 ### 6. 内存管理 (memory.h)
@@ -679,10 +782,17 @@ enum class ErrorCode {
 
 ### 协程最佳实践
 
-1. **使用移动语义**：协程参数优先使用移动语义
-2. **避免阻塞调用**：在协程中避免使用阻塞的同步API
-3. **合理使用co_await**：只对真正的异步操作使用co_await
-4. **资源管理**：使用RAII和智能指针管理资源
+1. **选择合适的Task类型**：
+   - 默认使用`Task<T>` - 性能最优，满足99%场景
+   - 仅在需要精确状态控制时使用`enhanced_task<T>`
+   
+2. **使用移动语义**：协程参数优先使用移动语义
+
+3. **避免阻塞调用**：在协程中避免使用阻塞的同步API
+
+4. **合理使用co_await**：只对真正的异步操作使用co_await
+
+5. **资源管理**：使用RAII和智能指针管理资源
 
 ### 内存优化
 
