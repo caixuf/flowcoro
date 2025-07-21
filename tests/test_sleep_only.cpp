@@ -18,12 +18,11 @@ int main() {
         std::cout << "Sleep test passed!" << std::endl;
     } catch (const std::exception& e) {
         std::cout << "Sleep test failed: " << e.what() << std::endl;
+        return 1;
     }
-    
-    // 给协程任务一些时间完成
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
     std::cout << "Test completed, exiting..." << std::endl;
     
-    return 0;
+    // 立即退出，避免全局对象析构问题
+    std::_Exit(0);
 }
