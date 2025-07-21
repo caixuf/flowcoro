@@ -12,9 +12,8 @@
 
 #pragma once
 
-#include "lifecycle/core.h"
-#include "lifecycle/cancellation.h"
 #include "core.h"
+#include "cancellation.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -194,6 +193,7 @@ private:
         std::chrono::steady_clock::time_point creation_time;
         std::atomic<bool> completed{false};
         std::string debug_name;
+        std::function<void()> cleanup_callback; // 池化清理回调
         
         LifecycleData(advanced_coroutine_handle h, const std::string& name = "")
             : handle(std::move(h))
@@ -206,6 +206,17 @@ private:
         
         ~LifecycleData() {
             mark_completed();
+            
+            // 调用池化清理回调
+            if (cleanup_callback) {
+                try {
+                    cleanup_callback();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception in pooled coroutine cleanup: %s", e.what());
+                } catch (...) {
+                    LOG_ERROR("Unknown exception in pooled coroutine cleanup");
+                }
+            }
         }
         
         void mark_completed() noexcept {
@@ -251,6 +262,17 @@ public:
     coroutine_lifecycle_guard& operator=(coroutine_lifecycle_guard&&) = default;
     
     ~coroutine_lifecycle_guard() = default;
+    
+    // 池化支持：创建带有清理回调的守护
+    static coroutine_lifecycle_guard create_pooled(
+        advanced_coroutine_handle handle,
+        const std::string& debug_name,
+        std::function<void()> cleanup_callback) {
+        
+        coroutine_lifecycle_guard guard(std::move(handle), debug_name);
+        guard.data_->cleanup_callback = std::move(cleanup_callback);
+        return guard;
+    }
     
     // 状态访问方法
     coroutine_state get_state() const {
