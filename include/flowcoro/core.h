@@ -408,270 +408,9 @@ private:
 };
 
 // ==========================================
-// 基于async_simple最佳实践的SafeTask实现
+// 统一的Task实现 - 整合了SafeTask的RAII和异常安全特性
 // ==========================================
-
-namespace detail {
-    // 前向声明
-    template<typename T>
-    class SafeTaskPromise;
-}
-
-// 改进的RAII协程任务包装器 - 基于async_simple的最佳实践
-template<typename T = void>
-class SafeTask {
-public:
-    using promise_type = detail::SafeTaskPromise<T>;
-    using Handle = std::coroutine_handle<promise_type>;
-
-private:
-    Handle handle_;
-    
-public:
-    explicit SafeTask(Handle handle) noexcept : handle_(handle) {}
-    
-    SafeTask(SafeTask&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
-    
-    SafeTask& operator=(SafeTask&& other) noexcept {
-        if (this != &other) {
-            if (handle_) {
-                handle_.destroy();
-            }
-            handle_ = std::exchange(other.handle_, {});
-        }
-        return *this;
-    }
-    
-    SafeTask(const SafeTask&) = delete;
-    SafeTask& operator=(const SafeTask&) = delete;
-    
-    ~SafeTask() {
-        if (handle_) {
-            handle_.destroy();
-        }
-    }
-    
-    bool is_ready() const noexcept {
-        return !handle_ || handle_.done();
-    }
-    
-    // 同步获取结果
-    T get_result() requires(!std::is_void_v<T>) {
-        if (!handle_) {
-            throw std::runtime_error("Invalid SafeTask");
-        }
-        
-        // 启动协程（如果还没启动）
-        if (!handle_.done()) {
-            handle_.resume();
-        }
-        
-        // 等待完成
-        while (!handle_.done()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        
-        return std::move(handle_.promise()).result();
-    }
-    
-    void get_result() requires(std::is_void_v<T>) {
-        if (!handle_) {
-            throw std::runtime_error("Invalid SafeTask");
-        }
-        
-        if (!handle_.done()) {
-            handle_.resume();
-        }
-        
-        while (!handle_.done()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        
-        handle_.promise().result(); // 可能抛出异常
-    }
-    
-    // Awaiter简化实现
-    struct TaskAwaiter {
-        Handle handle;
-        
-        bool await_ready() const noexcept {
-            return !handle || handle.done();
-        }
-        
-        template<typename PromiseType>
-        void await_suspend(std::coroutine_handle<PromiseType> continuation) {
-            // 设置continuation用于协程完成时恢复
-            handle.promise().set_continuation(continuation);
-            // 启动协程
-            if (!handle.done()) {
-                handle.resume();
-            }
-        }
-        
-        T await_resume() requires(!std::is_void_v<T>) {
-            return std::move(handle.promise()).result();
-        }
-        
-        void await_resume() requires(std::is_void_v<T>) {
-            handle.promise().result();
-        }
-    };
-    
-    auto operator co_await() && {
-        return TaskAwaiter{std::exchange(handle_, {})};
-    }
-    
-    // 异步启动（不阻塞）
-    template<typename F>
-    void start(F&& callback) {
-        if (!handle_) {
-            return;
-        }
-        
-        // 创建detached协程来处理回调
-        auto launcher = [](SafeTask task, std::decay_t<F> cb) -> SafeTask<> {
-            try {
-                if constexpr (std::is_void_v<T>) {
-                    co_await std::move(task);
-                    cb(Result<void, std::exception_ptr>{});
-                } else {
-                    auto result = co_await std::move(task);
-                    cb(Result<T, std::exception_ptr>{std::move(result)});
-                }
-            } catch (...) {
-                cb(Result<T, std::exception_ptr>{std::current_exception()});
-            }
-        };
-        
-        auto detached_task = launcher(std::move(*this), std::forward<F>(callback));
-        // 启动detached task
-        if (detached_task.handle_) {
-            detached_task.handle_.resume();
-            detached_task.handle_ = {}; // 避免析构时销毁
-        }
-    }
-};
-
-namespace detail {
-
-// Promise基类 - 处理通用逻辑
-class SafeTaskPromiseBase {
-protected:
-    std::coroutine_handle<> continuation_;
-    std::shared_ptr<CoroutineScope> scope_;
-    
-public:
-    SafeTaskPromiseBase() {
-        scope_ = std::make_shared<CoroutineScope>();
-    }
-    
-    // 延迟启动
-    std::suspend_always initial_suspend() noexcept { return {}; }
-    
-    // Final awaiter简化实现
-    struct FinalAwaiter {
-        bool await_ready() noexcept { return false; }
-        
-        template<typename PromiseType>
-        void await_suspend(std::coroutine_handle<PromiseType> h) noexcept {
-            auto& promise = h.promise();
-            if (promise.scope_) {
-                promise.scope_->cleanup_completed();
-            }
-            // 简化：直接恢复continuation（如果存在）
-            if (promise.continuation_) {
-                promise.continuation_.resume();
-            }
-        }
-        
-        void await_resume() noexcept {}
-    };
-    
-    auto final_suspend() noexcept { return FinalAwaiter{}; }
-    
-    void set_continuation(std::coroutine_handle<> continuation) noexcept {
-        continuation_ = continuation;
-    }
-    
-    std::shared_ptr<CoroutineScope> get_scope() const noexcept {
-        return scope_;
-    }
-};
-
-// 非void类型的Promise实现
-template<typename T>
-class SafeTaskPromise : public SafeTaskPromiseBase {
-    std::variant<std::monostate, T, std::exception_ptr> value_;
-    
-public:
-    SafeTask<T> get_return_object() noexcept {
-        auto handle = std::coroutine_handle<SafeTaskPromise>::from_promise(*this);
-        if (scope_) {
-            scope_->register_coroutine(handle);
-        }
-        return SafeTask<T>(handle);
-    }
-    
-    template<typename V>
-    void return_value(V&& value) noexcept {
-        value_ = std::forward<V>(value);
-    }
-    
-    void unhandled_exception() noexcept {
-        value_ = std::current_exception();
-    }
-    
-    T& result() & {
-        if (std::holds_alternative<std::exception_ptr>(value_)) {
-            std::rethrow_exception(std::get<std::exception_ptr>(value_));
-        }
-        if (std::holds_alternative<T>(value_)) {
-            return std::get<T>(value_);
-        }
-        throw std::runtime_error("SafeTask result not set");
-    }
-    
-    T&& result() && {
-        if (std::holds_alternative<std::exception_ptr>(value_)) {
-            std::rethrow_exception(std::get<std::exception_ptr>(value_));
-        }
-        if (std::holds_alternative<T>(value_)) {
-            return std::get<T>(std::move(value_));
-        }
-        throw std::runtime_error("SafeTask result not set");
-    }
-};
-
-// void特化
-template<>
-class SafeTaskPromise<void> : public SafeTaskPromiseBase {
-    std::exception_ptr exception_;
-    
-public:
-    SafeTask<void> get_return_object() noexcept {
-        auto handle = std::coroutine_handle<SafeTaskPromise>::from_promise(*this);
-        if (scope_) {
-            scope_->register_coroutine(handle);
-        }
-        return SafeTask<void>(handle);
-    }
-    
-    void return_void() noexcept {}
-    
-    void unhandled_exception() noexcept {
-        exception_ = std::current_exception();
-    }
-    
-    void result() {
-        if (exception_) {
-            std::rethrow_exception(exception_);
-        }
-    }
-};
-
-} // namespace detail
-
-// 支持返回值的Task - 简化版集成
+// 支持返回值的Task - 整合SafeTask的RAII和异常安全特性
 
 template<typename T>
 struct Task {
@@ -905,6 +644,20 @@ struct Task {
                 std::terminate();
             }
         }
+    }
+    
+    // SafeTask兼容方法：获取结果（同步）
+    T get_result() requires(!std::is_void_v<T>) {
+        return get(); // 复用现有的get()方法
+    }
+    
+    void get_result() requires(std::is_void_v<T>) {
+        get(); // 复用现有的get()方法
+    }
+    
+    // SafeTask兼容方法：检查是否就绪
+    bool is_ready() const noexcept {
+        return await_ready();
     }
     
     // 使Task可等待 - 增强版安全检查
@@ -1411,6 +1164,16 @@ struct Task<void> {
             LOG_ERROR("Task<void> execution failed with exception");
             // void类型不抛出异常，只记录
         }
+    }
+    
+    // SafeTask兼容方法：获取结果（同步）
+    void get_result() {
+        get(); // 复用现有的get()方法
+    }
+    
+    // SafeTask兼容方法：检查是否就绪
+    bool is_ready() const noexcept {
+        return await_ready();
     }
     
     // 使Task<void>可等待 - 增强版安全检查
@@ -1931,6 +1694,13 @@ public:
         return false;
     }
 };
+
+// ==========================================
+// SafeTask别名 - 为了向后兼容，SafeTask就是Task
+// ==========================================
+
+template<typename T = void>
+using SafeTask = Task<T>;
 
 // 便捷函数：休眠
 
