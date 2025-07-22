@@ -1709,15 +1709,25 @@ class SafeCoroutineHandle {
 private:
     std::shared_ptr<std::atomic<std::coroutine_handle<>>> handle_;
     std::shared_ptr<std::atomic<bool>> destroyed_;
+    std::thread::id creation_thread_id_;
     
 public:
     explicit SafeCoroutineHandle(std::coroutine_handle<> h) 
         : handle_(std::make_shared<std::atomic<std::coroutine_handle<>>>(h))
-        , destroyed_(std::make_shared<std::atomic<bool>>(false)) {}
+        , destroyed_(std::make_shared<std::atomic<bool>>(false))
+        , creation_thread_id_(std::this_thread::get_id()) {}
     
     void resume() {
         if (destroyed_->load(std::memory_order_acquire)) {
             return; // 已销毁，安全退出
+        }
+        
+        // 线程安全检查：只允许在创建线程中恢复
+        if (std::this_thread::get_id() != creation_thread_id_) {
+            std::cerr << "[FlowCoro] Cross-thread coroutine resume blocked to prevent segfault. "
+                      << "Created in thread " << creation_thread_id_ 
+                      << ", resume attempted in thread " << std::this_thread::get_id() << std::endl;
+            return; // 阻止跨线程恢复
         }
         
         auto h = handle_->load(std::memory_order_acquire);

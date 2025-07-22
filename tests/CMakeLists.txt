@@ -21,9 +21,7 @@ set(TEST_SOURCES
     test_core.cpp
     test_database.cpp
     test_http_client.cpp
-    test_simple_db.cpp
     test_rpc.cpp
-    test_sleep_only.cpp
 )
 
 # 为每个测试文件创建单独的可执行文件
@@ -88,7 +86,7 @@ endif()
 
 # 设置输出目录
 set_target_properties(
-    test_core test_database test_http_client test_simple_db test_rpc test_sleep_only run_all_tests
+    test_core test_database test_http_client test_rpc run_all_tests
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )

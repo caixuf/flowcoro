@@ -147,7 +147,7 @@ public:
 **技术特性：**
 - ✅ RAII自动资源管理
 - ✅ 异常安全的Promise设计  
-- ✅ 跨线程协程恢复支持
+- ✅ 线程安全协程管理（防止跨线程段错误）
 - ✅ CoroutineScope生命周期管理
 - ✅ 统一的awaiter接口
 
@@ -172,10 +172,11 @@ SafeTask<std::string> fetch_user_data(int user_id) {
     co_return "user_data";
 }
 
-// ✅ 跨线程协程恢复
+// ✅ 线程安全协程管理
 SafeTask<void> background_task() {
-    co_await switch_to_background_thread();
-    // 可以在任意线程恢复
+    co_await sleep_for(std::chrono::milliseconds(100));
+    // 自动防止跨线程协程恢复导致的段错误
+    // SafeCoroutineHandle会检查线程ID并阻止不安全的恢复
 }
 ```
 
@@ -698,6 +699,59 @@ public:
     template<typename Promise>
     Promise& promise();
 };
+```
+
+### 线程安全 (SafeCoroutineHandle)
+
+FlowCoro v2.3.1 新增了专门的线程安全协程句柄管理，解决跨线程协程恢复导致的段错误问题。
+
+#### SafeCoroutineHandle - 线程安全协程句柄
+
+```cpp
+class SafeCoroutineHandle {
+private:
+    std::shared_ptr<std::atomic<std::coroutine_handle<>>> handle_;
+    std::shared_ptr<std::atomic<bool>> destroyed_;
+    std::thread::id creation_thread_id_;  // 创建线程ID
+    
+public:
+    explicit SafeCoroutineHandle(std::coroutine_handle<> h);
+    
+    // 线程安全的协程恢复
+    void resume() {
+        // 自动检测跨线程调用
+        if (std::this_thread::get_id() != creation_thread_id_) {
+            std::cerr << "[FlowCoro] Cross-thread coroutine resume blocked to prevent segfault."
+                      << std::endl;
+            return; // 阻止跨线程恢复
+        }
+        // 安全恢复协程...
+    }
+    
+    ~SafeCoroutineHandle();
+};
+```
+
+**线程安全特性：**
+- ✅ **跨线程检测**：自动检测并阻止跨线程协程恢复
+- ✅ **段错误防护**：防止经典的跨线程协程段错误
+- ✅ **调试友好**：提供详细的线程ID信息用于调试
+- ✅ **自动管理**：RAII资源管理，自动清理
+
+**使用场景：**
+```cpp
+// ✅ 线程安全睡眠
+Task<void> safe_sleep_task() {
+    co_await sleep_for(std::chrono::milliseconds(100));
+    // SafeCoroutineHandle会自动防止跨线程恢复
+}
+
+// ✅ 线程池任务
+Task<int> computation_task() {
+    // 协程可能在不同线程中执行
+    // SafeCoroutineHandle确保恢复操作的线程安全
+    co_return 42;
+}
 ```
 
 ### 10. 增强Task (flowcoro_enhanced_task.h)
