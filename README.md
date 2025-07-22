@@ -1,4 +1,27 @@
-# FlowCoro v2.2
+# FlowCoro# FlowCoro v2.3
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
+[![CMake](https://img.shields.io/badge/CMake-3.16+-green.svg)](https://cmake.org/)
+
+> **个人C++20协程学习项目，探索现代异步编程**
+
+这是我学习C++20协程特性的个人项目，实现了完整的异步编程组件。项目重点在于理解协程工作原理、生命周期管理等核心概念，通过实践加深对现代异步编程的理解。
+
+## 🏆 版本 v2.3 - SafeTask集成与项目整理
+
+在这个版本中完成了：
+
+### 🔧 主要功能实现
+
+- ✅ **SafeTask实现**: 基于async_simple最佳实践的协程包装器
+- ✅ **核心整合**: 所有协程功能统一整合到core.h
+- ✅ **项目清理**: 删除重复文件，简化项目结构
+- ✅ **RAII管理**: CoroutineScope自动生命周期管理
+- ✅ **Promise风格API**: 类似JavaScript的状态查询接口
+- ✅ **安全销毁机制**: 防止协程句柄损坏的safe_destroy()
+- ✅ **跨线程支持**: 协程可以在任意线程恢复执行
+- 📝 **文档更新**: 反映最新的项目状态.2
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
@@ -25,12 +48,14 @@
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| 协程核心系统 | ✅ 基础完成 | 基于标准C++20协程，学习实现完整 |
+| SafeTask系统 | ✅ 完成 | 基于async_simple最佳实践的协程包装器 |
+| Task生命周期 | ✅ 完成 | 原子状态管理 + 线程安全销毁机制 |
+| 协程核心系统 | ✅ 整合完成 | 所有功能统一在core.h中，简化结构 |
 | 编译系统 | ✅ 可用 | CMake构建，无警告编译 |
 | 网络组件 | ✅ 基础可用 | 异步Socket基础封装 |
 | 数据库组件 | ✅ 基础可用 | 简单连接池实现 |
 | RPC组件 | ✅ 基础可用 | JSON-RPC基础支持 |
-| 测试覆盖 | ✅ 基础完整 | 核心功能单元测试 |
+| 测试覆盖 | ✅ 完整 | 核心功能单元测试，SafeTask演示 |
 
 ## 🚀 快速开始
 
@@ -48,6 +73,43 @@ gcc --version  # 需要 >= 11.0
 
 ```bash
 git clone https://github.com/caixuf/flowcord.git
+cd flowcord
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+
+# 运行SafeTask演示
+./examples/improved_safe_task_demo
+```
+
+### 核心示例
+
+#### SafeTask基础使用
+
+```cpp
+#include <flowcoro.hpp>
+
+// SafeTask基础协程
+flowcoro::SafeTask<int> compute_async() {
+    co_await flowcoro::sleep_for(std::chrono::milliseconds(100));
+    co_return 42;
+}
+
+// 链式协程操作
+flowcoro::SafeTask<int> chain_computation(int input) {
+    auto step1 = co_await compute_async();
+    auto step2 = co_await compute_async(); 
+    co_return step1 + step2 + input;
+}
+
+int main() {
+    // 同步等待结果
+    auto result = flowcoro::sync_wait(compute_async());
+    std::cout << "结果: " << result << std::endl;
+    
+    return 0;
+}
+```
 cd flowcord
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..

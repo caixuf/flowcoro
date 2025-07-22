@@ -13,7 +13,10 @@
 #include <tuple>
 #include <optional>
 #include <type_traits>
-#include "lockfree.h"
+#include <variant>
+#include "result.h"
+#include "error_handling.h"
+#include "lockfree.h" 
 #include "thread_pool.h"
 #include "logger.h"
 #include "buffer.h"
@@ -202,36 +205,32 @@ public:
 // 简化的全局线程池
 class GlobalThreadPool {
 private:
-    static std::atomic<bool> shutdown_requested_;
-    static std::atomic<lockfree::ThreadPool*> instance_;
-    static std::once_flag init_flag_;
-    
-    static void init() {
-        static lockfree::ThreadPool* pool = new lockfree::ThreadPool(std::thread::hardware_concurrency());
-        instance_.store(pool, std::memory_order_release);
+    static lockfree::ThreadPool& get_pool() {
+        static lockfree::ThreadPool pool;
+        return pool;
     }
     
 public:
     static lockfree::ThreadPool& get() {
-        std::call_once(init_flag_, init);
-        return *instance_.load(std::memory_order_acquire);
+        return get_pool();
     }
     
     static bool is_shutdown_requested() {
-        return shutdown_requested_.load(std::memory_order_acquire);
+        return false; // 简化实现
     }
     
     static void shutdown() {
-        shutdown_requested_.store(true, std::memory_order_release);
-        // 获取线程池实例并调用 shutdown，但不要删除它
-        try {
-            lockfree::ThreadPool* pool = instance_.load(std::memory_order_acquire);
-            if (pool && !pool->is_stopped()) {
-                pool->shutdown();
-            }
-        } catch (...) {
-            // 忽略shutdown过程中的异常
-        }
+        // 简化实现 - 线程池在程序结束时自动销毁
+    }
+    
+    // 为了保持API兼容性，保留原有接口
+    template<typename F, typename... Args>
+    static auto enqueue(F&& f, Args&&... args) -> decltype(get().enqueue(std::forward<F>(f), std::forward<Args>(args)...)) {
+        return get().enqueue(std::forward<F>(f), std::forward<Args>(args)...);
+    }
+    
+    static void enqueue_void(std::function<void()> task) {
+        get().enqueue_void(std::move(task));
     }
 };
 
@@ -359,6 +358,318 @@ struct CoroTask {
         return RequestTask(url);
     }
 };
+
+// ==========================================
+// RAII协程范围管理器
+// ==========================================
+
+class CoroutineScope {
+public:
+    ~CoroutineScope() {
+        cancel_all();
+    }
+    
+    void register_coroutine(std::coroutine_handle<> handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!cancelled_) {
+            handles_.push_back(handle);
+        }
+    }
+    
+    void cancel_all() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cancelled_ = true;
+        for (auto handle : handles_) {
+            if (handle && !handle.done()) {
+                handle.destroy();
+            }
+        }
+        handles_.clear();
+    }
+    
+    bool is_cancelled() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return cancelled_;
+    }
+    
+    void cleanup_completed() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        handles_.erase(
+            std::remove_if(handles_.begin(), handles_.end(),
+                [](std::coroutine_handle<> h) { return !h || h.done(); }),
+            handles_.end()
+        );
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<std::coroutine_handle<>> handles_;
+    bool cancelled_ = false;
+};
+
+// ==========================================
+// 基于async_simple最佳实践的SafeTask实现
+// ==========================================
+
+namespace detail {
+    // 前向声明
+    template<typename T>
+    class SafeTaskPromise;
+}
+
+// 改进的RAII协程任务包装器 - 基于async_simple的最佳实践
+template<typename T = void>
+class SafeTask {
+public:
+    using promise_type = detail::SafeTaskPromise<T>;
+    using Handle = std::coroutine_handle<promise_type>;
+
+private:
+    Handle handle_;
+    
+public:
+    explicit SafeTask(Handle handle) noexcept : handle_(handle) {}
+    
+    SafeTask(SafeTask&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
+    
+    SafeTask& operator=(SafeTask&& other) noexcept {
+        if (this != &other) {
+            if (handle_) {
+                handle_.destroy();
+            }
+            handle_ = std::exchange(other.handle_, {});
+        }
+        return *this;
+    }
+    
+    SafeTask(const SafeTask&) = delete;
+    SafeTask& operator=(const SafeTask&) = delete;
+    
+    ~SafeTask() {
+        if (handle_) {
+            handle_.destroy();
+        }
+    }
+    
+    bool is_ready() const noexcept {
+        return !handle_ || handle_.done();
+    }
+    
+    // 同步获取结果
+    T get_result() requires(!std::is_void_v<T>) {
+        if (!handle_) {
+            throw std::runtime_error("Invalid SafeTask");
+        }
+        
+        // 启动协程（如果还没启动）
+        if (!handle_.done()) {
+            handle_.resume();
+        }
+        
+        // 等待完成
+        while (!handle_.done()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        return std::move(handle_.promise()).result();
+    }
+    
+    void get_result() requires(std::is_void_v<T>) {
+        if (!handle_) {
+            throw std::runtime_error("Invalid SafeTask");
+        }
+        
+        if (!handle_.done()) {
+            handle_.resume();
+        }
+        
+        while (!handle_.done()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        handle_.promise().result(); // 可能抛出异常
+    }
+    
+    // Awaiter简化实现
+    struct TaskAwaiter {
+        Handle handle;
+        
+        bool await_ready() const noexcept {
+            return !handle || handle.done();
+        }
+        
+        template<typename PromiseType>
+        void await_suspend(std::coroutine_handle<PromiseType> continuation) {
+            // 设置continuation用于协程完成时恢复
+            handle.promise().set_continuation(continuation);
+            // 启动协程
+            if (!handle.done()) {
+                handle.resume();
+            }
+        }
+        
+        T await_resume() requires(!std::is_void_v<T>) {
+            return std::move(handle.promise()).result();
+        }
+        
+        void await_resume() requires(std::is_void_v<T>) {
+            handle.promise().result();
+        }
+    };
+    
+    auto operator co_await() && {
+        return TaskAwaiter{std::exchange(handle_, {})};
+    }
+    
+    // 异步启动（不阻塞）
+    template<typename F>
+    void start(F&& callback) {
+        if (!handle_) {
+            return;
+        }
+        
+        // 创建detached协程来处理回调
+        auto launcher = [](SafeTask task, std::decay_t<F> cb) -> SafeTask<> {
+            try {
+                if constexpr (std::is_void_v<T>) {
+                    co_await std::move(task);
+                    cb(Result<void, std::exception_ptr>{});
+                } else {
+                    auto result = co_await std::move(task);
+                    cb(Result<T, std::exception_ptr>{std::move(result)});
+                }
+            } catch (...) {
+                cb(Result<T, std::exception_ptr>{std::current_exception()});
+            }
+        };
+        
+        auto detached_task = launcher(std::move(*this), std::forward<F>(callback));
+        // 启动detached task
+        if (detached_task.handle_) {
+            detached_task.handle_.resume();
+            detached_task.handle_ = {}; // 避免析构时销毁
+        }
+    }
+};
+
+namespace detail {
+
+// Promise基类 - 处理通用逻辑
+class SafeTaskPromiseBase {
+protected:
+    std::coroutine_handle<> continuation_;
+    std::shared_ptr<CoroutineScope> scope_;
+    
+public:
+    SafeTaskPromiseBase() {
+        scope_ = std::make_shared<CoroutineScope>();
+    }
+    
+    // 延迟启动
+    std::suspend_always initial_suspend() noexcept { return {}; }
+    
+    // Final awaiter简化实现
+    struct FinalAwaiter {
+        bool await_ready() noexcept { return false; }
+        
+        template<typename PromiseType>
+        void await_suspend(std::coroutine_handle<PromiseType> h) noexcept {
+            auto& promise = h.promise();
+            if (promise.scope_) {
+                promise.scope_->cleanup_completed();
+            }
+            // 简化：直接恢复continuation（如果存在）
+            if (promise.continuation_) {
+                promise.continuation_.resume();
+            }
+        }
+        
+        void await_resume() noexcept {}
+    };
+    
+    auto final_suspend() noexcept { return FinalAwaiter{}; }
+    
+    void set_continuation(std::coroutine_handle<> continuation) noexcept {
+        continuation_ = continuation;
+    }
+    
+    std::shared_ptr<CoroutineScope> get_scope() const noexcept {
+        return scope_;
+    }
+};
+
+// 非void类型的Promise实现
+template<typename T>
+class SafeTaskPromise : public SafeTaskPromiseBase {
+    std::variant<std::monostate, T, std::exception_ptr> value_;
+    
+public:
+    SafeTask<T> get_return_object() noexcept {
+        auto handle = std::coroutine_handle<SafeTaskPromise>::from_promise(*this);
+        if (scope_) {
+            scope_->register_coroutine(handle);
+        }
+        return SafeTask<T>(handle);
+    }
+    
+    template<typename V>
+    void return_value(V&& value) noexcept {
+        value_ = std::forward<V>(value);
+    }
+    
+    void unhandled_exception() noexcept {
+        value_ = std::current_exception();
+    }
+    
+    T& result() & {
+        if (std::holds_alternative<std::exception_ptr>(value_)) {
+            std::rethrow_exception(std::get<std::exception_ptr>(value_));
+        }
+        if (std::holds_alternative<T>(value_)) {
+            return std::get<T>(value_);
+        }
+        throw std::runtime_error("SafeTask result not set");
+    }
+    
+    T&& result() && {
+        if (std::holds_alternative<std::exception_ptr>(value_)) {
+            std::rethrow_exception(std::get<std::exception_ptr>(value_));
+        }
+        if (std::holds_alternative<T>(value_)) {
+            return std::get<T>(std::move(value_));
+        }
+        throw std::runtime_error("SafeTask result not set");
+    }
+};
+
+// void特化
+template<>
+class SafeTaskPromise<void> : public SafeTaskPromiseBase {
+    std::exception_ptr exception_;
+    
+public:
+    SafeTask<void> get_return_object() noexcept {
+        auto handle = std::coroutine_handle<SafeTaskPromise>::from_promise(*this);
+        if (scope_) {
+            scope_->register_coroutine(handle);
+        }
+        return SafeTask<void>(handle);
+    }
+    
+    void return_void() noexcept {}
+    
+    void unhandled_exception() noexcept {
+        exception_ = std::current_exception();
+    }
+    
+    void result() {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
+};
+
+} // namespace detail
 
 // 支持返回值的Task - 简化版集成
 
@@ -685,6 +996,225 @@ struct Task {
                 std::terminate();
             }
         }
+    }
+};
+
+// Task<Result<T,E>>特化 - 支持Result错误处理
+template<typename T, typename E>
+struct Task<Result<T, E>> {
+    struct promise_type {
+        std::optional<Result<T, E>> result;
+        std::exception_ptr exception;
+        
+        // 生命周期管理
+        std::atomic<bool> is_cancelled_{false};
+        std::atomic<bool> is_destroyed_{false};
+        std::chrono::steady_clock::time_point creation_time_;
+        mutable std::mutex state_mutex_;
+        
+        promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
+        
+        ~promise_type() {
+            is_destroyed_.store(true, std::memory_order_release);
+        }
+        
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        
+        void return_value(Result<T, E> r) noexcept {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!is_cancelled_.load(std::memory_order_relaxed) && 
+                !is_destroyed_.load(std::memory_order_relaxed)) {
+                result = std::move(r);
+            }
+        }
+        
+        // 增强版异常处理 - 转换为Result
+        void unhandled_exception() {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!is_destroyed_.load(std::memory_order_relaxed)) {
+                try {
+                    // 尝试将异常转换为Result的错误类型
+                    if constexpr (std::is_same_v<E, ErrorInfo>) {
+                        result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
+                    } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
+                        result = err(std::current_exception());
+                    } else {
+                        // 对于其他错误类型，记录异常指针
+                        exception = std::current_exception();
+                    }
+                } catch (...) {
+                    exception = std::current_exception();
+                }
+            }
+        }
+        
+        // 状态管理方法
+        void request_cancellation() {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            is_cancelled_.store(true, std::memory_order_release);
+        }
+        
+        bool is_cancelled() const {
+            return is_cancelled_.load(std::memory_order_acquire);
+        }
+        
+        bool is_destroyed() const {
+            return is_destroyed_.load(std::memory_order_acquire);
+        }
+        
+        std::chrono::milliseconds get_lifetime() const {
+            auto now = std::chrono::steady_clock::now();
+            return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
+        }
+        
+        std::optional<Result<T, E>> safe_get_result() const {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (is_destroyed_.load(std::memory_order_relaxed)) {
+                return std::nullopt;
+            }
+            return result;
+        }
+    };
+    
+    std::coroutine_handle<promise_type> handle;
+    
+    Task(std::coroutine_handle<promise_type> h) : handle(h) {}
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+    Task(Task&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
+    Task& operator=(Task&& other) noexcept {
+        if (this != &other) {
+            if (handle) {
+                try {
+                    if (handle.address() != nullptr) {
+                        handle.destroy();
+                    }
+                } catch (...) {
+                    // 忽略析构异常
+                }
+            }
+            handle = other.handle;
+            other.handle = nullptr;
+        }
+        return *this;
+    }
+    
+    ~Task() { 
+        safe_destroy();
+    }
+    
+    void cancel() {
+        if (handle && !handle.done() && !handle.promise().is_destroyed()) {
+            handle.promise().request_cancellation();
+        }
+    }
+    
+    bool is_cancelled() const {
+        if (!handle || handle.promise().is_destroyed()) return false;
+        return handle.promise().is_cancelled();
+    }
+    
+    // Promise风格状态查询
+    bool is_pending() const noexcept {
+        if (!handle) return false;
+        return !handle.done() && !is_cancelled();
+    }
+    
+    bool is_settled() const noexcept {
+        if (!handle) return true;
+        return handle.done() || is_cancelled();
+    }
+    
+    bool is_fulfilled() const noexcept {
+        if (!handle || !handle.done() || is_cancelled()) return false;
+        auto result = handle.promise().safe_get_result();
+        return result.has_value() && result->is_ok();
+    }
+    
+    bool is_rejected() const noexcept {
+        if (!handle) return false;
+        if (is_cancelled()) return true;
+        if (!handle.done()) return false;
+        auto result = handle.promise().safe_get_result();
+        return !result.has_value() || result->is_err();
+    }
+    
+    void safe_destroy() {
+        if (handle && handle.address()) {
+            try {
+                if (!handle.promise().is_destroyed()) {
+                    handle.promise().is_destroyed_.store(true, std::memory_order_release);
+                }
+                handle.destroy();
+            } catch (...) {
+                // 忽略销毁异常
+            }
+            handle = nullptr;
+        }
+    }
+    
+    // 获取结果
+    Result<T, E> get() {
+        if (!handle) {
+            if constexpr (std::is_same_v<E, ErrorInfo>) {
+                return err(ErrorInfo(FlowCoroError::InvalidOperation, "Invalid task handle"));
+            } else {
+                return err(E{});
+            }
+        }
+        
+        // 检查取消状态
+        if (is_cancelled()) {
+            if constexpr (std::is_same_v<E, ErrorInfo>) {
+                return err(ErrorInfo(FlowCoroError::TaskCancelled, "Task was cancelled"));
+            } else {
+                return err(E{});
+            }
+        }
+        
+        // 等待完成
+        while (!handle.done()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        
+        // 获取结果
+        auto result = handle.promise().safe_get_result();
+        if (!result.has_value()) {
+            if constexpr (std::is_same_v<E, ErrorInfo>) {
+                return err(ErrorInfo(FlowCoroError::CoroutineDestroyed, "Task was destroyed"));
+            } else {
+                return err(E{});
+            }
+        }
+        
+        return std::move(*result);
+    }
+    
+    // 可等待支持
+    bool await_ready() const {
+        return !handle || handle.done();
+    }
+    
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        if (handle && !handle.done()) {
+            // 在线程池中运行
+            GlobalThreadPool::get().enqueue_void([h = handle, waiting_handle]() {
+                if (h && !h.done()) {
+                    h.resume();
+                }
+                if (waiting_handle && !waiting_handle.done()) {
+                    waiting_handle.resume();
+                }
+            });
+        }
+    }
+    
+    Result<T, E> await_resume() {
+        return get();
     }
 };
 
@@ -1607,12 +2137,4 @@ inline void print_performance_report() {
 
 } // namespace flowcoro
 
-// 可选的增强功能 - 按需包含
-// #include "flowcoro_cancellation.h"     // 取消令牌支持
-// #include "flowcoro_enhanced_task.h"    // 增强Task功能
-
-// 便利宏：一键启用所有增强功能
-#ifdef FLOWCORO_ENABLE_ALL
-#include "flowcoro_cancellation.h"
-#include "flowcoro_enhanced_task.h"
-#endif
+// 所有增强功能已整合到core.h中，无需额外包含

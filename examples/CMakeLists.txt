@@ -12,4 +12,8 @@ target_link_libraries(enhanced_example PRIVATE flowcoro_net)
 add_executable(network_example network_example.cpp)
 target_link_libraries(network_example PRIVATE flowcoro_net)
 
+# 改进的SafeTask示例 - 基于async_simple最佳实践
+add_executable(improved_safe_task_demo improved_safe_task_demo.cpp)
+target_link_libraries(improved_safe_task_demo PRIVATE flowcoro_net)
+
 message(STATUS "FlowCoro examples configured successfully")
