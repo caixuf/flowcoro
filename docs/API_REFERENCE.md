@@ -1,12 +1,12 @@
-# FlowCoro v2.3.0 API 参考手册
+# FlowCoro v2.3.1 API 参考手册
 
-## 🆕 v2.3.0 更新亮点
+## 🆕 v2.3.1 更新亮点
 
-### Task接口统一
+### Task接口统一与线程安全增强
 - **统一设计**: SafeTask现在是Task的别名，消除接口混淆
+- **线程安全**: 内置SafeCoroutineHandle防止跨线程协程段错误
 - **向后兼容**: 所有现有代码无需修改
 - **零开销抽象**: 编译时别名，无运行时开销
-- **API一致性**: 两种风格的方法都可用
 
 ### 性能基准测试
 基于实际测试的性能数据：
@@ -18,14 +18,18 @@
 
 ### 统一接口示例
 ```cpp
-// SafeTask基础使用
-auto task = compute_async();           // 创建协程
-auto result = task.get_result();       // 同步获取结果
-task.start([](auto r) { /* ... */ }); // 异步启动
+// Task<T> - 统一的协程接口
+Task<int> compute_async(int value) {
+    co_await sleep_for(std::chrono::milliseconds(100));
+    co_return value * 2;
+}
+
+// SafeTask<T> 只是 Task<T> 的别名，完全等价
+SafeTask<int> compute_legacy = compute_async(42);  // 向后兼容
+Task<int> compute_modern = compute_async(42);      // 推荐写法
 
 // 协程组合
-auto combined = chain_computation(5);  // 链式协程
-auto result = co_await combined;       // 等待完成
+auto result = co_await compute_async(5);
 ```
 
 ## 📋 目录
@@ -42,9 +46,9 @@ auto result = co_await combined;       // 等待完成
 - [7. 内存管理 (memory.h)](#7-内存管理-memoryh) - 内存池、对象池
 
 ### 高级功能
-- [8. SafeTask协程包装器](#8-safetask协程包装器) - RAII设计的安全协程包装器
+- [8. 线程安全协程管理](#8-线程安全协程管理) - SafeCoroutineHandle防护机制
 - [9. 生命周期管理](#9-生命周期管理-已整合到coreh) - CoroutineScope、状态管理
-- [10. 便利功能](#10-便利功能-coreh) - 转换函数、工具函数
+- [10. 便利功能](#10-便利功能-coreh) - 协程工具函数、超时支持
 
 ### 其他
 - [错误处理](#错误处理) - 异常类型、错误代码
@@ -59,10 +63,10 @@ FlowCoro 提供了一套完整的现代C++20协程编程接口，包括协程核
 
 ### 1. 协程核心 (core.h)
 
-FlowCoro v2.3.0 提供了两种协程任务设计：**Task<T>**用于传统协程编程，**SafeTask<T>**用于现代RAII设计。
+FlowCoro v2.3.1 提供统一的协程任务接口：**Task<T>** 是唯一的协程实现，**SafeTask<T>** 现在只是其别名，确保向后兼容。
 
-#### Task<T> - 传统协程类型
-FlowCoro的传统协程任务模板类，提供完整的生命周期管理和Promise风格API。
+#### Task<T> - 统一协程接口
+FlowCoro的统一协程任务模板类，提供完整的生命周期管理、Promise风格API和线程安全保障。
 
 ```cpp
 template<typename T>
@@ -109,93 +113,52 @@ struct Task {
 ```
 
 **使用场景：**
-- ✅ 日常协程编程，兼容现有代码
-- ✅ 需要Promise风格状态查询
-- ✅ 基本的取消和生命周期管理
+- ✅ 所有协程编程场景（SafeTask只是别名）
+- ✅ Promise风格状态查询 
+- ✅ 内置线程安全防护
+- ✅ 取消和生命周期管理
 - ✅ RPC、数据库、网络等模块集成
 
-#### SafeTask<T> - 现代RAII协程包装器
-基于async_simple最佳实践的协程包装器，提供RAII资源管理和异常安全。
+#### SafeTask<T> = Task<T>
+在v2.3.1中，SafeTask完全等价于Task，只是为了向后兼容而保留的别名：
 
 ```cpp
 template<typename T = void>
-class SafeTask {
-public:
-    using promise_type = detail::SafeTaskPromise<T>;
-    
-    // RAII构造与析构
-    explicit SafeTask(Handle handle) noexcept;
-    SafeTask(SafeTask&& other) noexcept;
-    ~SafeTask();
-    
-    // 状态查询
-    bool is_ready() const noexcept;
-    
-    // 同步获取结果
-    T get_result() requires(!std::is_void_v<T>);
-    void get_result() requires(std::is_void_v<T>);
-    
-    // 异步启动
-    template<typename F>
-    void start(F&& callback);
-    
-    // Awaitable接口
-    auto operator co_await() &&;
-};
+using SafeTask = Task<T>;  // 就是这么简单！
+
+// 以下两种写法完全等价：
+Task<int> task1 = compute_async(42);      // ✅ 推荐
+SafeTask<int> task2 = compute_async(42);  // ✅ 向后兼容
 ```
 
-**技术特性：**
-- ✅ RAII自动资源管理
-- ✅ 异常安全的Promise设计  
-- ✅ 线程安全协程管理（防止跨线程段错误）
-- ✅ CoroutineScope生命周期管理
-- ✅ 统一的awaiter接口
-
-**使用建议：**
-- **推荐新代码使用SafeTask** - 更安全，符合现代C++设计
-- **现有代码可继续使用Task** - 向后兼容，功能完整
-
 #### 特化版本
-- `Task<void>` - 无返回值的Task协程
-- `SafeTask<void>` - 无返回值的SafeTask协程
-- `Task<Result<T,E>>` - 返回Result的Task协程
-- `Task<std::unique_ptr<T>>` - 返回智能指针的Task协程
+
+- `Task<void>` - 无返回值协程
+- `SafeTask<void>` - 等价于`Task<void>`，只是别名  
+- `Task<Result<T,E>>` - 返回Result的协程
+- `Task<std::unique_ptr<T>>` - 返回智能指针的协程
 
 ### 使用建议
 
-#### 🚀 推荐使用 SafeTask<T> 的场景（新代码）
+由于SafeTask就是Task的别名，选择哪个纯粹是代码风格偏好：
 
 ```cpp
-// ✅ RAII设计的协程函数
-SafeTask<std::string> fetch_user_data(int user_id) {
-    // 自动资源管理，异常安全
+// ✅ 推荐新代码使用Task（简洁）
+Task<std::string> fetch_user_data(int user_id) {
     co_return "user_data";
 }
 
-// ✅ 线程安全协程管理
-SafeTask<void> background_task() {
+// ✅ 或者使用SafeTask（向后兼容）
+SafeTask<std::string> fetch_user_data_compat(int user_id) {
+    co_return "user_data";  // 完全等价
+}
+
+// ✅ 统一的线程安全防护
+Task<void> background_task() {
     co_await sleep_for(std::chrono::milliseconds(100));
-    // 自动防止跨线程协程恢复导致的段错误
-    // SafeCoroutineHandle会检查线程ID并阻止不安全的恢复
+    // 内置SafeCoroutineHandle防止跨线程段错误
 }
 ```
-
-#### ⚡ 使用 Task<T> 的场景（兼容性需求）
-
-```cpp
-// ✅ 与现有代码兼容
-Task<int> compute_legacy() {
-    co_return 42;
-}
-
-// ✅ 需要Promise风格状态查询
-Task<std::string> http_request(const std::string& url) {
-    auto task = make_http_request(url);
-    if (task.is_pending()) {
-        // 任务进行中
-    }
-    co_return co_await task;
-}
 
 #### AsyncPromise<T>
 协程promise类型，管理协程的生命周期和结果。
@@ -233,15 +196,11 @@ T sync_wait(Task<T>&& task);
 template<typename Func>
 auto sync_wait(Func&& func) -> decltype(sync_wait(func()));
 
-// SafeTask便利函数  
-template<typename T>
-auto make_safe_task(Task<T>&& task) -> SafeTask<T>;
-
 // 协程组合器
 template<typename... Tasks>
 auto when_all(Tasks&&... tasks);
 
-// 简化版超时支持
+// 超时支持
 template<typename T>
 auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> Task<T>;
 ```
@@ -701,7 +660,7 @@ public:
 };
 ```
 
-### 线程安全 (SafeCoroutineHandle)
+### 8. 线程安全协程管理
 
 FlowCoro v2.3.1 新增了专门的线程安全协程句柄管理，解决跨线程协程恢复导致的段错误问题。
 
@@ -754,72 +713,15 @@ Task<int> computation_task() {
 }
 ```
 
-### 10. 增强Task (flowcoro_enhanced_task.h)
+## 🛠 数据结构
 
-增强版协程Task实现，完全兼容原Task接口，并扩展了生命周期管理和取消功能。
+### LockfreeQueue&lt;T&gt;
 
-```cpp
-template<typename T>
-class enhanced_task {
-public:
-    // 构造函数
-    explicit enhanced_task(safe_coroutine_handle handle);
-    
-    // 移动语义
-    enhanced_task(enhanced_task&& other) noexcept;
-    enhanced_task& operator=(enhanced_task&& other) noexcept;
-    
-    // 禁止拷贝
-    enhanced_task(const enhanced_task&) = delete;
-    enhanced_task& operator=(const enhanced_task&) = delete;
-    
-    // 从普通Task创建
-    static enhanced_task from_task(Task<T>&& task, cancellation_token token = {});
-    
-    // 获取结果（兼容原Task接口）
-    T get();
-    
-    // 可等待接口（兼容原Task接口）
-    bool await_ready() const;
-    void await_suspend(std::coroutine_handle<> waiting_handle);
-    T await_resume();
-    
-    // 新增功能：取消支持
-    void cancel();
-    bool is_cancelled() const;
-    
-    // 新增功能：完整状态查询
-    bool is_ready() const;
-    coroutine_state get_state() const;
-    std::chrono::milliseconds get_lifetime() const;
-    bool is_active() const;
-    
-    // 新增功能：设置取消令牌
-    void set_cancellation_token(cancellation_token token);
-    
-    // 调试信息
-    void* get_handle_address() const;
-    bool is_handle_valid() const;
-};
-```
-
-### 11. 便利功能 (core.h)
+### 10. 便利功能 (core.h)
 
 提供便捷的协程创建和管理功能。
 
 ```cpp
-// 将现有Task转换为增强Task
-template<typename T>
-auto make_enhanced(Task<T>&& task) -> enhanced_task<T>;
-
-// 创建可取消任务
-template<typename T>
-auto make_cancellable_task(Task<T> task) -> enhanced_task<T>;
-
-// 创建带超时的任务
-template<typename T>
-auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> enhanced_task<T>;
-
 // 异步睡眠
 auto sleep_for(std::chrono::milliseconds duration) -> SleepAwaiter;
 
@@ -830,6 +732,10 @@ auto when_all(Tasks&&... tasks) -> WhenAllAwaiter<Tasks...>;
 // 同步等待协程完成
 template<typename T>
 T sync_wait(Task<T>&& task);
+
+// 带超时的任务（返回统一的Task接口）
+template<typename T>
+auto make_timeout_task(Task<T>&& task, std::chrono::milliseconds timeout) -> Task<T>;
 
 // 性能报告
 inline void print_performance_report();
@@ -1064,9 +970,9 @@ enum class ErrorCode {
 
 ### 协程最佳实践
 
-1. **选择合适的Task类型**：
-   - 默认使用`Task<T>` - 性能最优，满足99%场景
-   - 仅在需要精确状态控制时使用`enhanced_task<T>`
+1. **统一的Task接口**：
+   - 统一使用`Task<T>` - SafeTask只是别名，性能完全一致
+   - 内置线程安全防护，无需额外开销
    
 2. **使用移动语义**：协程参数优先使用移动语义
 
