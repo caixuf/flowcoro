@@ -2,28 +2,36 @@
  * @file flowcoro.hpp
  * @brief FlowCoro - 现代C++20协程库主头文件
  * @author FlowCoro Team
- * @version 2.1.0
- * @date 2025-07-21
+ * @version 2.2.0
+ * @date 2025-07-22
  * 
  * FlowCoro是一个基于C++20协程的现代异步编程库，提供：
  * - 高性能无锁协程调度
- * - 整合的生命周期管理
+ * - 增强的Task生命周期管理
+ * - 原子状态跟踪和线程安全
+ * - JavaScript Promise风格API
  * - 异步网络请求支持
  * - 高性能日志系统
  * - 内存池和对象池
+ * 
+ * v2.2.0更新：
+ * - 完全重构的Task<T>生命周期管理
+ * - 原子状态管理 (is_cancelled_, is_destroyed_)
+ * - 互斥锁保护的状态变更
+ * - 安全的协程销毁机制
+ * - Promise风格状态查询API
  */
 
 #pragma once
 
 // 版本信息
 #define FLOWCORO_VERSION_MAJOR 2
-#define FLOWCORO_VERSION_MINOR 1
+#define FLOWCORO_VERSION_MINOR 2
 #define FLOWCORO_VERSION_PATCH 0
-#define FLOWCORO_VERSION "2.1.0"
+#define FLOWCORO_VERSION "2.2.0"
 
 // 核心组件
 #include "flowcoro/core.h"
-#include "flowcoro/future_combinators.h"  // v2.2新增: Future组合器
 #include "flowcoro/lockfree.h"
 #include "flowcoro/thread_pool.h"
 #include "flowcoro/logger.h"
@@ -85,6 +93,12 @@ struct RuntimeStats {
         size_t pool_hit_rate;
         size_t memory_usage_bytes;
     } memory;
+    struct {
+        size_t total_tasks;
+        size_t cancelled_tasks;
+        size_t destroyed_tasks;
+        double avg_lifetime_ms;
+    } task_lifecycle;  // 新增：Task生命周期统计
 };
 
 /**

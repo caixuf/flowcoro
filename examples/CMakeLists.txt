@@ -12,8 +12,4 @@ target_link_libraries(enhanced_example PRIVATE flowcoro_net)
 add_executable(network_example network_example.cpp)
 target_link_libraries(network_example PRIVATE flowcoro_net)
 
-# Future组合器测试 - v2.2新功能测试
-add_executable(test_future_combinators test_future_combinators.cpp)
-target_link_libraries(test_future_combinators PRIVATE flowcoro_net)
-
 message(STATUS "FlowCoro examples configured successfully")

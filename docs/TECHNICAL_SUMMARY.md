@@ -1,10 +1,140 @@
-# FlowCoro 技术总结
+# FlowCoro v2.2.0 技术总结
 
-## 项目概述
+## 🎯 版本亮点
 
-FlowCoro 是一个基于 C++20 协程的现代异步编程库，专注于高性能、无锁编程和缓存友好的设计。项目采用工业级的架构设计，提供了完整的协程生态系统。
+FlowCoro v2.2.0 完成了Task生命周期管理的全面升级，显著提升了协程系统的健壮性、安全性和易用性。
 
-## 技术架构
+## 🔥 核心技术成就
+
+### 1. 原子状态管理系统
+
+#### 技术实现
+- **双原子标志设计**: `is_cancelled_` 和 `is_destroyed_` 原子布尔标志
+- **内存序保证**: 使用 `std::memory_order_acquire/release` 确保跨线程可见性
+- **状态生命周期**: 完整跟踪从创建到销毁的所有状态转换
+
+```cpp
+// 核心状态管理
+std::atomic<bool> is_cancelled_{false};
+std::atomic<bool> is_destroyed_{false};  
+std::chrono::steady_clock::time_point creation_time_;
+mutable std::mutex state_mutex_;
+```
+
+#### 技术优势
+- **零竞争设计**: 原子操作避免锁竞争
+- **内存安全**: 防止野指针和double-free问题
+- **跨线程安全**: 多线程环境下的状态一致性保证
+
+### 2. JavaScript Promise风格API
+
+#### 设计理念
+借鉴JavaScript Promise的状态模型，为C++协程提供直观的状态查询接口：
+
+```cpp
+// 四种Promise状态映射
+bool is_pending() const noexcept;    // Promise.pending
+bool is_settled() const noexcept;    // Promise.settled  
+bool is_fulfilled() const noexcept;  // Promise.fulfilled
+bool is_rejected() const noexcept;   // Promise.rejected
+```
+
+#### 技术优势
+- **语义清晰**: 开发者熟悉的Promise概念
+- **类型安全**: 编译时状态检查
+- **零开销**: 内联函数，运行时无额外开销
+
+### 3. 安全销毁机制
+
+#### 问题背景
+协程句柄的生命周期管理是C++20协程的核心难点：
+- **野指针访问**: 销毁后的句柄访问导致段错误
+- **重复销毁**: 多次调用destroy()导致未定义行为
+- **竞态条件**: 多线程环境下的销毁竞争
+
+#### 解决方案
+实现了`safe_destroy()`机制：
+
+```cpp
+void safe_destroy() {
+    if (handle && handle.address()) {
+        try {
+            if (!handle.promise().is_destroyed()) {
+                handle.promise().is_destroyed_.store(true, std::memory_order_release);
+            }
+            handle.destroy();
+        } catch (...) {
+            LOG_ERROR("Exception during safe_destroy");
+        }
+        handle = nullptr;
+    }
+}
+```
+
+#### 技术特点
+- **幂等性**: 多次调用安全无害
+- **异常安全**: 销毁过程中的异常处理
+- **状态同步**: 销毁状态的原子更新
+
+### 4. 互斥锁保护的状态变更
+
+#### 设计考虑
+虽然使用原子操作管理基本状态，但复杂状态变更仍需要互斥锁保护：
+
+```cpp
+void return_value(T v) noexcept { 
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!is_cancelled_.load(std::memory_order_relaxed) && 
+        !is_destroyed_.load(std::memory_order_relaxed)) {
+        value = std::move(v);
+    }
+}
+```
+
+#### 锁策略优化
+- **最小锁范围**: 只在必要时持有锁
+- **避免死锁**: 在锁外调度协程恢复
+- **RAII管理**: 使用lock_guard确保异常安全
+
+### 5. 移动语义优化
+
+#### 问题识别
+原始移动赋值操作符存在递归销毁问题：
+
+```cpp
+// 问题版本
+Task& operator=(Task&& other) noexcept {
+    if (this != &other) {
+        safe_destroy();  // 可能导致递归调用
+        handle = other.handle;
+        other.handle = nullptr;
+    }
+    return *this;
+}
+```
+
+#### 优化方案
+采用直接销毁避免递归：
+
+```cpp
+// 优化版本
+Task& operator=(Task&& other) noexcept {
+    if (this != &other) {
+        if (handle) {
+            try {
+                if (handle.address() != nullptr) {
+                    handle.destroy();
+                }
+            } catch (...) {
+                // 忽略析构异常
+            }
+        }
+        handle = other.handle;
+        other.handle = nullptr;
+    }
+    return *this;
+}
+```
 
 ### 核心技术栈
 
