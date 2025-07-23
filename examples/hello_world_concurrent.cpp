@@ -81,22 +81,64 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
     
     std::cout << "📝 已创建 " << request_count << " 个协程任务，开始并发执行..." << std::endl;
     
-    // 并发执行所有任务
-    std::vector<std::future<std::string>> futures;
-    for (auto& task : tasks) {
-        futures.emplace_back(std::async(std::launch::async, [&task]() {
-            return task.get();
-        }));
+    // 使用我们的协程池进行真正的协程调度
+    std::cout << "📝 使用FlowCoro协程池进行单线程事件循环调度..." << std::endl;
+    
+    std::atomic<int> completed{0};
+    
+    // 创建一个回调来处理协程完成
+    auto completion_callback = [&completed, request_count]() {
+        int current = completed.fetch_add(1) + 1;
+        if (current % (request_count / 10) == 0 || current == request_count) {
+            std::cout << "✅ 已完成 " << current << "/" << request_count 
+                      << " 个协程 (" << (current * 100 / request_count) << "%)" << std::endl;
+        }
+    };
+    
+    // 将所有协程提交给协程池
+    for (int i = 0; i < request_count; ++i) {
+        if (tasks[i].handle) {
+            // 直接提交协程句柄到协程池
+            schedule_coroutine_enhanced(tasks[i].handle);
+        }
     }
     
-    // 等待所有任务完成并显示进度
-    int completed = 0;
-    for (auto& future : futures) {
-        auto result = future.get();
-        completed++;
-        if (completed % (request_count / 10) == 0 || completed == request_count) {
-            std::cout << "✅ 已完成 " << completed << "/" << request_count 
-                      << " 个请求 (" << (completed * 100 / request_count) << "%)" << std::endl;
+    std::cout << "🔄 所有协程已提交到协程池，开始事件循环..." << std::endl;
+    
+    // 在主线程中运行事件循环
+    auto start_check = std::chrono::steady_clock::now();
+    while (true) {
+        drive_coroutine_pool();  // 驱动协程池
+        
+        // 检查所有协程是否完成
+        int current_completed = 0;
+        for (int i = 0; i < request_count; ++i) {
+            if (tasks[i].handle && tasks[i].handle.done()) {
+                current_completed++;
+            }
+        }
+        
+        // 更新进度显示
+        static int last_reported = 0;
+        if (current_completed >= last_reported + request_count / 10 || current_completed == request_count) {
+            std::cout << "✅ 已完成 " << current_completed << "/" << request_count 
+                      << " 个协程 (" << (current_completed * 100 / request_count) << "%)" << std::endl;
+            last_reported = current_completed;
+        }
+        
+        // 如果全部完成，退出循环
+        if (current_completed >= request_count) {
+            break;
+        }
+        
+        // 避免忙等待
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        
+        // 超时保护
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - start_check).count() > 30) {
+            std::cout << "⚠️ 超时保护：30秒后强制退出" << std::endl;
+            break;
         }
     }
     
@@ -115,6 +157,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
               << " → " << SystemInfo::format_memory_bytes(final_memory) 
               << " (增加 " << SystemInfo::format_memory_bytes(memory_delta) << ")" << std::endl;
     std::cout << "   📊 单请求内存: " << (memory_delta / request_count) << " bytes/请求" << std::endl;
+    std::cout << "   🧵 协程池: 单线程事件循环调度" << std::endl;
     
     co_return;
 }
@@ -130,38 +173,29 @@ void handle_concurrent_requests_threads(int request_count) {
     std::cout << "⏰ 开始时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
     std::cout << std::string(50, '-') << std::endl;
     
-    // 使用受限的线程池
-    const int max_concurrent_threads = std::min(16, request_count);
-    std::cout << "📝 使用 " << max_concurrent_threads << " 个工作线程处理 " 
-              << request_count << " 个请求..." << std::endl;
+    std::cout << "📝 同时启动 " << request_count << " 个线程..." << std::endl;
     
     std::atomic<int> completed{0};
-    std::vector<std::future<void>> futures;
-    std::atomic<int> request_counter{0};
+    std::vector<std::thread> threads;
     
-    // 创建工作线程
-    for (int t = 0; t < max_concurrent_threads; ++t) {
-        futures.push_back(std::async(std::launch::async, [&]() {
-            while (true) {
-                int current_request = request_counter.fetch_add(1);
-                if (current_request >= request_count) break;
-                
-                // 模拟IO操作
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                std::string result = "用户" + std::to_string(1000 + current_request) + " (已处理)";
-                
-                int current_completed = completed.fetch_add(1) + 1;
-                if (current_completed % (request_count / 10) == 0 || current_completed == request_count) {
-                    std::cout << "✅ 已完成 " << current_completed << "/" << request_count 
-                              << " 个请求 (" << (current_completed * 100 / request_count) << "%)" << std::endl;
-                }
+    // 创建与协程数量相同的线程
+    for (int i = 0; i < request_count; ++i) {
+        threads.emplace_back([i, &completed, request_count]() {
+            // 模拟IO操作
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::string result = "用户" + std::to_string(1000 + i) + " (已处理)";
+            
+            int current_completed = completed.fetch_add(1) + 1;
+            if (current_completed % (request_count / 10) == 0 || current_completed == request_count) {
+                std::cout << "✅ 已完成 " << current_completed << "/" << request_count 
+                          << " 个线程 (" << (current_completed * 100 / request_count) << "%)" << std::endl;
             }
-        }));
+        });
     }
     
-    // 等待所有工作线程完成
-    for (auto& future : futures) {
-        future.get();
+    // 等待所有线程完成
+    for (auto& thread : threads) {
+        thread.join();
     }
     
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -179,7 +213,7 @@ void handle_concurrent_requests_threads(int request_count) {
               << " → " << SystemInfo::format_memory_bytes(final_memory) 
               << " (增加 " << SystemInfo::format_memory_bytes(memory_delta) << ")" << std::endl;
     std::cout << "   📊 单请求内存: " << (memory_delta / request_count) << " bytes/请求" << std::endl;
-    std::cout << "   🧵 工作线程数: " << max_concurrent_threads << " 个" << std::endl;
+    std::cout << "   🧵 线程总数: " << request_count << " 个" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
