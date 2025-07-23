@@ -83,10 +83,22 @@ public:
     
     // 调度协程恢复
     void schedule_resume(std::coroutine_handle<> handle) {
-        if (!handle || handle.done()) return;
+        if (!handle) return;
         
-        std::lock_guard<std::mutex> lock(ready_mutex_);
-        ready_queue_.push(handle);
+        // 检查句柄地址有效性
+        try {
+            void* addr = handle.address();
+            if (!addr) return;
+            
+            // 检查协程是否已完成
+            if (handle.done()) return;
+            
+            std::lock_guard<std::mutex> lock(ready_mutex_);
+            ready_queue_.push(handle);
+        } catch (...) {
+            // 如果检查句柄时出现异常，忽略这个句柄
+            LOG_ERROR("Invalid handle in schedule_resume");
+        }
     }
     
     // 调度协程销毁（延迟销毁）
@@ -132,12 +144,25 @@ private:
             auto handle = local_queue.front();
             local_queue.pop();
             
-            if (handle && !handle.done()) {
-                try {
-                    handle.resume();
-                } catch (...) {
-                    // 静默处理异常
-                }
+            // 增强的安全检查
+            if (!handle) continue;
+            
+            // 检查句柄地址有效性
+            try {
+                void* addr = handle.address();
+                if (!addr) continue;
+                
+                // 检查协程是否已完成
+                if (handle.done()) continue;
+                
+                // 安全地恢复协程
+                handle.resume();
+            } catch (const std::exception& e) {
+                // 记录错误但继续处理其他协程
+                LOG_ERROR("Error processing coroutine: %s", e.what());
+            } catch (...) {
+                // 处理任何其他异常
+                LOG_ERROR("Unknown error processing coroutine");
             }
         }
     }
@@ -154,12 +179,18 @@ private:
             auto handle = local_destroy_queue.front();
             local_destroy_queue.pop();
             
-            if (handle) {
-                try {
+            if (!handle) continue;
+            
+            try {
+                // 检查句柄地址有效性
+                void* addr = handle.address();
+                if (addr) {
                     handle.destroy();
-                } catch (...) {
-                    // 静默处理异常
                 }
+            } catch (const std::exception& e) {
+                LOG_ERROR("Error destroying coroutine: %s", e.what());
+            } catch (...) {
+                LOG_ERROR("Unknown error destroying coroutine");
             }
         }
     }
@@ -874,38 +905,26 @@ struct Task {
         }
     }
     
-    void await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 使用新的协程管理器进行调度
-        auto& manager = CoroutineManager::get_instance();
-        
-        // 增强版：全面安全检查
+    bool await_suspend(std::coroutine_handle<> waiting_handle) {
+        // 简化的实现 - Task<T>版本
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效或已销毁，直接恢复等待协程
-            manager.schedule_resume(waiting_handle);
-            return;
+            // 句柄无效，不挂起等待协程
+            return false;
         }
         
-        if (!handle.done() && !handle.promise().is_cancelled()) {
-            // 在协程管理器中调度当前任务和等待协程
-            manager.schedule_resume(handle);
-            
-            // 设置一个简单的完成回调（捕获manager的引用）
-            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
-                auto& local_manager = CoroutineManager::get_instance();
-                
-                // 等待任务完成
-                while (task_handle && !task_handle.done() && !task_handle.promise().is_destroyed()) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(10));
-                }
-                // 任务完成后恢复等待协程
-                local_manager.schedule_resume(waiting_handle);
-            });
-        } else {
-            // 任务已完成，直接恢复等待的协程
-            manager.schedule_resume(waiting_handle);
+        if (handle.done()) {
+            // 任务已完成，不挂起等待协程
+            return false;
         }
+        
+        // 任务未完成，启动任务执行
+        auto& manager = CoroutineManager::get_instance();
+        manager.schedule_resume(handle);
+        
+        // 挂起等待协程
+        return true;
     }
-    
+
     T await_resume() {
         // 增强版：使用安全getter
         if (!handle) {
@@ -1385,41 +1404,26 @@ struct Task<void> {
         return handle.done();
     }
     
-    void await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 增强版：全面安全检查
+    bool await_suspend(std::coroutine_handle<> waiting_handle) {
+        // 简化的实现 - Task<void>版本
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效或已销毁，直接恢复等待协程
-            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
-            return;
+            // 句柄无效，不挂起等待协程
+            return false;
         }
         
-        if (!handle.done() && !handle.promise().is_cancelled()) {
-            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
-                // 双重安全检查
-                if (task_handle && !task_handle.done() && !task_handle.promise().is_destroyed()) {
-                    try {
-                        task_handle.resume();
-                    } catch (...) {
-                        LOG_ERROR("Exception during Task<void> resume in await_suspend");
-                    }
-                }
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
-        } else {
-            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
+        if (handle.done()) {
+            // 任务已完成，不挂起等待协程
+            return false;
         }
+        
+        // 任务未完成，启动任务执行
+        auto& manager = CoroutineManager::get_instance();
+        manager.schedule_resume(handle);
+        
+        // 挂起等待协程
+        return true;
     }
-    
+
     void await_resume() {
         // 增强版：使用安全getter
         if (!handle) {

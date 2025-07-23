@@ -191,29 +191,36 @@ void shutdown_coroutine_pool() {
     SimpleCoroutinePool::shutdown();
 }
 
-// 运行协程直到完成的简化实现
+// 运行协程直到完成的安全实现
 void run_until_complete(Task<void>& task) {
-    bool completed = false;
+    std::atomic<bool> completed{false};
     std::exception_ptr exception_holder = nullptr;
+    
+    // 获取协程管理器
+    auto& manager = CoroutineManager::get_instance();
     
     // 创建完成回调
     auto completion_task = [&]() -> Task<void> {
         try {
             co_await task;
-            completed = true;
+            completed.store(true);
         } catch (...) {
             exception_holder = std::current_exception();
-            completed = true;
+            completed.store(true);
         }
     }();
     
     // 启动任务
-    completion_task.handle.resume();
+    manager.schedule_resume(completion_task.handle);
     
-    // 等待完成
-    while (!completed) {
+    // 等待完成并持续驱动协程管理器
+    while (!completed.load()) {
+        manager.drive();  // 驱动协程调度
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    
+    // 最终清理
+    manager.drive();
     
     // 重新抛出异常
     if (exception_holder) {
@@ -223,27 +230,34 @@ void run_until_complete(Task<void>& task) {
 
 template<typename T>
 void run_until_complete(Task<T>& task) {
-    bool completed = false;
+    std::atomic<bool> completed{false};
     std::exception_ptr exception_holder = nullptr;
+    
+    // 获取协程管理器
+    auto& manager = CoroutineManager::get_instance();
     
     // 创建完成回调
     auto completion_task = [&]() -> Task<void> {
         try {
             co_await task;
-            completed = true;
+            completed.store(true);
         } catch (...) {
             exception_holder = std::current_exception();
-            completed = true;
+            completed.store(true);
         }
     }();
     
     // 启动任务
-    completion_task.handle.resume();
+    manager.schedule_resume(completion_task.handle);
     
-    // 等待完成
-    while (!completed) {
+    // 等待完成并持续驱动协程管理器
+    while (!completed.load()) {
+        manager.drive();  // 驱动协程调度
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    
+    // 最终清理
+    manager.drive();
     
     // 重新抛出异常
     if (exception_holder) {
