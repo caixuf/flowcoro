@@ -58,7 +58,7 @@ bool is_rejected() const noexcept;   // Promise.rejected
 #### 技术优势
 - **语义清晰**: 开发者熟悉的Promise概念
 - **类型安全**: 编译时状态检查
-- **零开销**: 内联函数，运行时无额外开销
+- **高效实现**: 内联函数，运行时无额外开销
 
 ### 3. 安全销毁机制
 
@@ -196,7 +196,7 @@ template<typename T>
 class Task {
     std::coroutine_handle<AsyncPromise<T>> handle_;
 public:
-    auto operator co_await() { /* 零开销的协程切换 */ }
+    auto operator co_await() { /* 高效的协程切换 */ }
     T get() { /* 阻塞等待结果 */ }
 };
 ```
@@ -305,7 +305,7 @@ Task<std::unique_ptr<Socket>> Socket::accept();
 
 ### 1. 高频交易系统
 - **延迟要求**: 微秒级响应
-- **FlowCoro优势**: 协程零开销切换，无锁数据结构避免延迟抖动
+- **FlowCoro优势**: 协程高效切换，无锁数据结构避免延迟抖动
 - **适用场景**: 订单处理、市场数据分发、风控系统
 
 ### 2. 游戏服务器
