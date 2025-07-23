@@ -35,6 +35,22 @@ class HttpRequest;
 namespace flowcoro {
 
 // ==========================================
+// 增强协程池接口
+// ==========================================
+
+// 协程调度接口 - 使用高性能协程池
+void schedule_coroutine_enhanced(std::coroutine_handle<> handle);
+
+// 任务调度接口 - 通用任务调度
+void schedule_task_enhanced(std::function<void()> task);
+
+// 统计信息接口 - 查看协程池状态
+void print_pool_stats();
+
+// 关闭协程池
+void shutdown_coroutine_pool();
+
+// ==========================================
 // FlowCoro 2.0 - 基于ioManager设计的协程管理器架构
 // ==========================================
 
@@ -2092,6 +2108,13 @@ inline void print_performance_report() {
     LOG_INFO("✅ Basic lifecycle management: ACTIVE");
     LOG_INFO("✅ Cancel/timeout support: AVAILABLE");
 }
+
+// 运行协程直到完成的函数声明
+template<typename T>
+void run_until_complete(Task<T>& task);
+
+// 运行协程直到完成 - void 特化版本
+void run_until_complete(Task<void>& task);
 
 } // namespace flowcoro
 

@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # 项目信息
 project(FlowCoro 
-    VERSION 2.0.0
-    DESCRIPTION "Modern C++20 Coroutine Library with Lockfree Programming"
+    VERSION 3.0.0
+    DESCRIPTION "Modern C++20 Coroutine Library with Advanced Memory Management and Work-Stealing Scheduler"
     LANGUAGES CXX
 )
 
@@ -28,6 +28,7 @@ option(FLOWCORO_BUILD_EXAMPLES "Build examples" ON)
 option(FLOWCORO_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(FLOWCORO_BUILD_DOCS "Build documentation" OFF)
 option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers" OFF)
+option(FLOWCORO_BUILD_V3 "Build FlowCoro 3.0 architecture" ON)
 option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
 
 # 查找依赖
@@ -135,6 +136,7 @@ target_include_directories(flowcoro INTERFACE
 add_library(flowcoro_net STATIC
     src/net_impl.cpp
     src/globals.cpp
+    src/coroutine_pool.cpp
 )
 
 target_include_directories(flowcoro_net PUBLIC
@@ -222,6 +224,12 @@ endif()
 if(FLOWCORO_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif()
+
+# =============================================================================
+# FlowCoro 3.0 架构
+# =============================================================================
+
+# V3 架构已经集成到核心中，不再需要单独的文件
 
 # =============================================================================
 # 文档
@@ -317,6 +325,7 @@ message(STATUS "  Build tests: ${FLOWCORO_BUILD_TESTS}")
 message(STATUS "  Build examples: ${FLOWCORO_BUILD_EXAMPLES}")
 message(STATUS "  Build benchmarks: ${FLOWCORO_BUILD_BENCHMARKS}")
 message(STATUS "  Build docs: ${FLOWCORO_BUILD_DOCS}")
+message(STATUS "  Build V3 architecture: ${FLOWCORO_BUILD_V3}")
 message(STATUS "  Enable sanitizers: ${FLOWCORO_ENABLE_SANITIZERS}")
 message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")

@@ -24,4 +24,8 @@ target_link_libraries(unified_task_demo PRIVATE flowcoro_net)
 add_executable(simple_unified_demo simple_unified_demo.cpp)
 target_link_libraries(simple_unified_demo PRIVATE flowcoro_net)
 
+# 协程池演示程序
+add_executable(coroutine_pool_demo coroutine_pool_demo.cpp)
+target_link_libraries(coroutine_pool_demo PRIVATE flowcoro_net)
+
 message(STATUS "FlowCoro examples configured successfully")

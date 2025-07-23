@@ -25,10 +25,11 @@
 #pragma once
 
 // 版本信息
-#define FLOWCORO_VERSION_MAJOR 2
-#define FLOWCORO_VERSION_MINOR 2
+#define FLOWCORO_VERSION_MAJOR 3
+#define FLOWCORO_VERSION_MINOR 0
 #define FLOWCORO_VERSION_PATCH 0
-#define FLOWCORO_VERSION "2.2.0"
+#define FLOWCORO_VERSION "3.0.0"
+#define FLOWCORO_VERSION_STRING "3.0.0"
 
 // 核心组件
 #include "flowcoro/core.h"
