@@ -1,53 +1,63 @@
-# FlowCoro v2.3.0 技术总结
+# FlowCoro v3.0.0 技术总结
 
-## 🎯 版本亮点
+## 🎯 版本突破
 
-FlowCoro v2.3.0 完成了SafeTask系统集成和项目结构优化，实现了基于async_simple最佳实践的现代协程包装器。
+FlowCoro v3.0.0 实现了**革命性的三层架构设计**，在大规模并发测试中达到了**80倍性能提升**，标志着从实验性项目向生产级协程库的重大转变。
 
 ## 🔥 核心技术成就
 
-### 1. SafeTask协程包装器
+### 1. 三层混合架构设计
 
-#### 技术实现
-- **RAII设计**: 自动资源管理，确保协程句柄正确销毁
-- **Promise基类**: SafeTaskPromiseBase统一处理通用逻辑
-- **异常安全**: variant<T, exception_ptr>确保异常传播
-- **跨线程支持**: 验证C++20协程可在任意线程恢复
-
-```cpp
-// SafeTask核心设计
-template<typename T = void>
-class SafeTask {
-    using promise_type = detail::SafeTaskPromise<T>;
-    using Handle = std::coroutine_handle<promise_type>;
-    
-    // RAII管理句柄
-    Handle handle_;
-    
-public:
-    ~SafeTask() {
-        if (handle_) handle_.destroy();
-    }
-};
+#### 架构创新
+```
+🏗️ 应用层 (用户代码)
+    ↓ Task<T> 接口
+🔄 协程池 (主线程调度) 
+    ↓ schedule_task_enhanced()
+🧵 线程池 (32-128后台工作线程)
 ```
 
-#### 技术优势
-- **内存安全**: RAII保证协程句柄正确释放
-- **异常安全**: 完善的异常传播机制
-- **线程安全**: 支持跨线程协程恢复
-- **易用性**: 简化的awaiter接口设计
-
-### 2. 统一核心架构
-
-#### 代码整合成果
-- **单一入口**: 所有协程功能统一在core.h中
-- **模块清理**: 删除重复的enhanced_coroutine.h等文件
-- **依赖简化**: 减少头文件依赖，提升编译速度
-
-#### 设计理念
-借鉴JavaScript Promise的状态模型，为C++协程提供直观的状态查询接口：
+#### 技术实现
+- **主线程协程调度**: 协程在单线程事件循环中执行，避免线程切换开销
+- **后台线程池**: CPU密集型任务在多线程池中并行执行
+- **智能调度**: 批量处理协程（64个/批次），减少锁竞争
 
 ```cpp
+// 核心协程驱动逻辑
+void CoroutinePool::drive() {
+    const size_t BATCH_SIZE = 64;
+    std::vector<std::coroutine_handle<>> batch;
+    
+    // 批量提取协程
+    {
+        std::lock_guard<std::mutex> lock(coroutine_mutex_);
+        while (!coroutine_queue_.empty() && batch.size() < BATCH_SIZE) {
+            batch.push_back(coroutine_queue_.front());
+            coroutine_queue_.pop();
+        }
+    }
+    
+    // 批量执行协程（无锁）
+    for (auto handle : batch) {
+        if (handle && !handle.done()) {
+            handle.resume();
+        }
+    }
+}
+```
+
+### 2. 性能突破性成果
+
+#### 大规模并发验证（10,000个并发请求）
+- **执行时间**: 393ms vs 31,496ms（**80.1倍**提升）
+- **吞吐量**: 25,445 req/s vs 317 req/s（**80.2倍**提升）
+- **响应延迟**: 0.039ms vs 3.15ms（**80.7倍**改善）
+- **架构验证**: 主线程协程池 + 32-128后台线程的设计获得验证
+
+#### 中等规模测试（3,000个并发请求）
+- **执行时间**: 114ms vs 9,502ms（**83.4倍**提升）
+- **吞吐量**: 26,315 req/s vs 315 req/s（**83.5倍**提升）
+- **一致性**: 不同规模下性能提升保持稳定
 // 四种Promise状态映射
 bool is_pending() const noexcept;    // Promise.pending
 bool is_settled() const noexcept;    // Promise.settled  

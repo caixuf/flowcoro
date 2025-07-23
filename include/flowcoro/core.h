@@ -44,6 +44,9 @@ void schedule_coroutine_enhanced(std::coroutine_handle<> handle);
 // 任务调度接口 - 通用任务调度
 void schedule_task_enhanced(std::function<void()> task);
 
+// 驱动协程池 - 需要在主线程中定期调用
+void drive_coroutine_pool();
+
 // 统计信息接口 - 查看协程池状态
 void print_pool_stats();
 
@@ -70,6 +73,10 @@ public:
     
     // 驱动协程调度（类似ioManager的drive方法）
     void drive() {
+        // 驱动新的协程池系统
+        drive_coroutine_pool();
+        
+        // 保留原有的定时器和任务处理
         process_timer_queue();
         process_ready_queue();
         process_pending_tasks();
@@ -81,7 +88,7 @@ public:
         timer_queue_.emplace(when, handle);
     }
     
-    // 调度协程恢复
+    // 调度协程恢复 - 集成协程池
     void schedule_resume(std::coroutine_handle<> handle) {
         if (!handle) return;
         
@@ -93,8 +100,9 @@ public:
             // 检查协程是否已完成
             if (handle.done()) return;
             
-            std::lock_guard<std::mutex> lock(ready_mutex_);
-            ready_queue_.push(handle);
+            // 使用增强的协程池进行调度
+            schedule_coroutine_enhanced(handle);
+            
         } catch (...) {
             // 如果检查句柄时出现异常，忽略这个句柄
             LOG_ERROR("Invalid handle in schedule_resume");
