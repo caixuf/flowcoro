@@ -4,6 +4,10 @@
 add_executable(hello_world hello_world.cpp)
 target_link_libraries(hello_world PRIVATE flowcoro_net)
 
+# Hello World 并发测试程序 - 独立进程版本
+add_executable(hello_world_concurrent hello_world_concurrent.cpp)
+target_link_libraries(hello_world_concurrent PRIVATE flowcoro_net)
+
 # 增强示例 - 并发演示
 add_executable(enhanced_demo enhanced_demo.cpp)
 target_link_libraries(enhanced_demo PRIVATE flowcoro_net)
