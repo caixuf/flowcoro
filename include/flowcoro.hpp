@@ -1,6 +1,11 @@
 /**
  * @file flowcoro.hpp
- * @brief FlowCoro - 现代C++20协程库主头文件
+# 版本信息
+#define FLOWCORO_VERSION_MAJOR 4
+#define FLOWCORO_VERSION_MINOR 0
+#define FLOWCORO_VERSION_PATCH 0
+#define FLOWCORO_VERSION "4.0.0"
+#define FLOWCORO_VERSION_STRING "4.0.0"ief FlowCoro - 现代C++20协程库主头文件
  * @author FlowCoro Team
  * @version 2.2.0
  * @date 2025-07-22

@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # 项目信息
 project(FlowCoro 
-    VERSION 3.0.0
-    DESCRIPTION "Modern C++20 Coroutine Library with Advanced Memory Management and Work-Stealing Scheduler"
+    VERSION 4.0.0
+    DESCRIPTION "Modern C++20 Coroutine Library - Streamlined Core Implementation"
     LANGUAGES CXX
 )
 

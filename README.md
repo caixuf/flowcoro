@@ -1,153 +1,74 @@
-# FlowCoro v2.3.1
-### 📊 真实性能对比（基于独立进程测试）
-```bash
-# 🔥 1000个并发请求终极测试结果（完全进程隔离）：
+# FlowCoro v4.0.0
 
-【协程方式 - FlowCoro v2.3.1】
-⚡ 子进程耗时: 85ms (纯协程性能)
-⚡ 完整进程耗时: 91ms (包含启动开销)
-🎯 吞吐量: 10,989 请求/秒 
-� 平均延迟: 0.09ms/请求
-💾 内存增长: 1.00MB (1048 bytes/请求)
+**现代C++20协程库 - 精简核心实现版**
 
-【多线程方式 - 传统线程池】  
-⏰ 子进程耗时: 3,282ms (纯线程性能)
-⏰ 完整进程耗时: 3,286ms (包含启动开销)
-🎯 吞吐量: 304 请求/秒
-📈 平均延迟: 3.29ms/请求
-💾 内存增长: 640KB (655 bytes/请求)
+> 🎯 **专注核心功能** | **简洁高效** | **易于学习和使用**
 
-🏆 性能差距：协程比多线程快36.1倍！延迟降低36倍！
-```se: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
-[![CMake](https://img.shields.io/badge/CMake-3.16+-green.svg)](https://cmake.org/)
+## � v4.0.0 - 精简核心版
 
-**现代C++20协程库 - 让异步编程变得简单高效！**
+在这个版本中，我们对项目进行了全面精简，专注于协程库的核心功能：
 
-> 🎯 **业务程序员友好** | **5分钟上手** | **性能提升100倍+**
+### ✨ 主要改进
 
-## 🤔 为什么选择FlowCoro？
+- ✅ **精简架构**: 移除了复杂的组件，专注于协程核心功能
+- ✅ **统一测试**: 简化为单一核心测试，验证基本功能
+- ✅ **清理项目**: 删除冗余文件和过度设计的组件
+- ✅ **优化构建**: 简化CMake配置，加速编译过程
+- ✅ **文档更新**: 重新整理文档，突出核心特性
 
-### 📊 真实性能对比（基于独立进程测试）
-
-#### 🔥 大规模并发测试结果（10,000个并发请求）
-
-```bash
-测试环境：16核CPU，完全进程隔离测试
-每个请求：50ms IO延迟模拟（模拟数据库/网络请求）
-
-【协程方式 - FlowCoro v3.0.0】
-⚡ 总耗时: 41ms
-🎯 吞吐量: 243,902 请求/秒  
-📈 平均延迟: 0.004ms/请求
-💾 内存增长: 3.00MB (314 bytes/请求)
-🏗️ 架构：主线程协程调度 + 32个工作线程
-
-【多线程方式 - 传统线程池】  
-⏰ 总耗时: 368ms
-🎯 吞吐量: 27,173 请求/秒
-📈 平均延迟: 0.037ms/请求
-💾 内存增长: 2.87MB (301 bytes/请求)
-🧵 线程数：10,000个独立线程
-
-🏆 性能对比：协程比多线程快 9.0倍！吞吐量提升 9倍！
-```
-
-#### 📊 中等规模测试（3,000个并发请求）
-
-```bash
-【协程方式】
-⚡ 总耗时: 125ms → 🎯 24,000 请求/秒
-💾 内存增长: 942KB (314 bytes/请求)
-
-【多线程方式】
-⏰ 总耗时: 1,125ms → 🎯 2,667 请求/秒  
-💾 内存增长: 903KB (301 bytes/请求)
-
-🏆 性能对比：协程快 9.0倍！
-```
-
-### 🎯 核心架构优势
-
-```cpp
-// 🤔 传统多线程的问题
-Web服务器处理1000个用户请求：
-
-// 😫 多线程方式：线程池模式
-线程池：10,000个独立线程处理10,000个请求
-实际测试：2.87MB内存增长 (301 bytes/请求)
-总耗时：368ms (平均0.037ms/请求)
-上下文切换：频繁且昂贵
-同步机制：锁竞争、死锁风险
-
-// 🚀 FlowCoro协程：轻如羽毛！
-10000个协程实际内存增长：3.00MB (314 bytes/请求)
-总耗时：41ms (平均0.004ms/请求)
-上下文切换：用户态，极快
-无锁设计：单线程事件循环
-```
-
-**FlowCoro = 性能提升9倍 + 内存使用高效 + 代码简洁如同步**
-
-## 🎯 立即开始
-
-### 选择你的路径：
-
-| 🏃‍♂️ **我想快速上手** | 🧑‍💼 **我关注业务场景** | 🤓 **我想深入了解** |
-|-------------------|-------------------|-------------------|
-| [5分钟快速教程](docs/QUICK_START.md) | [业务场景演示](docs/BUSINESS_GUIDE.md) | [完整API文档](docs/API_REFERENCE.md) |
-| 基础概念 + 简单示例 | 电商、Web API、微服务 | 技术细节 + 性能调优 |
-
-### 💡 一分钟体验
-
-## 🏆 版本 v2.3.1 - 线程安全增强
-
-在这个版本中完成了重要的接口统一和线程安全修复：
-
-### 🔧 主要更新
-
-- ✅ **Task接口统一**: 将SafeTask统一为Task的别名，消除接口混淆
-- ✅ **线程安全修复**: 修复跨线程协程恢复导致的段错误问题
-- ✅ **SafeCoroutineHandle**: 新增线程安全的协程句柄管理
-- ✅ **向后兼容**: 保持所有现有代码正常工作
-- ✅ **API简化**: 用户不再需要在Task/SafeTask间选择
-- ✅ **项目清理**: 删除冗余文件，整理项目结构
-- ✅ **文档更新**: 反映最新的统一接口设计
-- ✅ **演示示例**: 新增统一接口演示程序
-
-### 📊 核心功能
+### 📊 核心功能保留
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| 🔄 **Task&lt;T&gt;** | ✅ 完成 | 统一的协程任务接口 |
-| 📦 **SafeTask&lt;T&gt;** | ✅ 完成 | Task&lt;T&gt;的别名，向后兼容 |
-| 🧵 **ThreadPool** | ✅ 完成 | 高性能协程调度器 |
-| �️ **SafeCoroutineHandle** | ✅ 完成 | 线程安全协程句柄管理 |
-| �💾 **Memory Pool** | ✅ 完成 | 协程内存管理 |
-| 🌐 **Async I/O** | ✅ 完成 | 网络和文件异步操作 |
-| 🔗 **RPC系统** | ✅ 完成 | 简单的异步RPC实现 |
+| 🔄 **Task<T>** | ✅ 核心 | 基础协程任务接口 |
+| 🧵 **ThreadPool** | ✅ 核心 | 高性能线程池 |
+| 💾 **Memory Pool** | ✅ 核心 | 内存池管理 |
+| � **Object Pool** | ✅ 核心 | 对象池复用 |
+| 🚀 **Coroutine Pool** | ✅ 核心 | 协程池调度 |
+| � **Lock-free Queue** | ✅ 核心 | 无锁数据结构 |
 
 ## 🚀 快速开始
 
-### 基本用法
+### 1. 环境要求
+
+- **C++20 编译器**: GCC 10+ / Clang 10+ / MSVC 19.29+
+- **CMake**: 版本 3.16+
+- **Linux/macOS/Windows**: 跨平台支持
+
+### 2. 编译和安装
+
+```bash
+# 克隆仓库
+git clone <repository-url>
+cd flowcoro
+
+# 构建项目
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+
+# 运行测试（可选）
+./test_core
+```
+
+### 3. 基础使用示例
 
 ```cpp
-#include <flowcoro.hpp>
-using namespace flowcoro;
+#include "flowcoro.hpp"
 
-// 现在Task和SafeTask完全等价！
-Task<int> compute_async(int value) {
-    co_await sleep_for(std::chrono::milliseconds(100));
-    co_return value * 2;
+// 创建协程任务
+flowcoro::Task<int> calculate(int x) {
+    // 模拟异步计算
+    co_return x * x;
 }
 
-// 两种写法都可以，推荐使用Task<T>
-Task<int> task1 = compute_async(42);     // ✅ 推荐
-SafeTask<int> task2 = compute_async(42); // ✅ 兼容
-
-// API也完全兼容
-auto result1 = task1.get();         // Task原有API
-auto result2 = task2.get_result();  // SafeTask风格API
+int main() {
+    // 同步等待协程完成
+    auto result = flowcoro::sync_wait(calculate(5));
+    std::cout << "结果: " << result << std::endl; // 输出: 25
+    
+    return 0;
+}
 ```
 
 ### 环境要求
@@ -206,80 +127,55 @@ cmake .. -DBUILD_BENCHMARKS=ON
 
 ## 📖 核心特性
 
-### 1. 统一Task接口
+### 1. 基础协程功能
 
 ```cpp
-// 编译时类型检查 - 完全相同！
-static_assert(std::is_same_v<Task<int>, SafeTask<int>>);
+// 协程任务创建和执行
+Task<int> simple_task(int value) {
+    co_return value * 2;
+}
 
-// 零开销别名
-template<typename T = void>
-using SafeTask = Task<T>;
+// 同步等待协程完成
+auto result = sync_wait(simple_task(21)); // 返回 42
 ```
 
-### 2. 生命周期管理
+### 2. 协程池调度
 
 ```cpp
-Task<void> demo() {
-    auto task = compute_async(42);
-    
-    // 状态查询
-    bool ready = task.is_ready();
-    bool done = task.done();
-    
-    // 安全获取结果
-    auto result = task.get();  // 或 get_result()
-    
-    co_return;
+// 使用协程池调度任务
+auto& manager = CoroutineManager::get_instance();
+schedule_coroutine_enhanced(task.handle);
+
+// 驱动协程执行
+while (!task.handle.done()) {
+    manager.drive();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 ```
 
-### 3. 异步I/O支持
+### 3. 内存管理
 
 ```cpp
-// 网络操作
-Task<std::string> fetch_data(const std::string& url) {
-    auto client = http::Client::create();
-    auto response = co_await client->get(url);
-    co_return response.body();
-}
+// 内存池 - 支持动态扩容
+MemoryPool pool(64, 16); // 64字节块，16个初始块
+void* ptr = pool.allocate(); // 永远不会失败，会自动扩容
 
-// 数据库操作
-Task<QueryResult> query_db(const std::string& sql) {
-    auto db = Database::connect("sqlite::memory:");
-    co_return co_await db->query(sql);
-}
+// 对象池 - 对象复用
+ObjectPool<MyClass> obj_pool(8);
+auto obj = obj_pool.acquire();
+obj_pool.release(std::move(obj));
 ```
 
-### 4. 异常处理
+### 4. 无锁数据结构
 
 ```cpp
-Task<int> safe_operation() {
-    try {
-        auto task = may_throw_async(true);
-        co_return co_await task;
-    } catch (const std::exception& e) {
-        LOG_ERROR("Operation failed: %s", e.what());
-        co_return -1;  // 错误码
-    }
-}
-```
+// 无锁队列
+lockfree::Queue<int> queue;
+queue.enqueue(42);
 
-### 5. 并发和组合
-
-```cpp
-Task<void> concurrent_demo() {
-    // 并发执行多个任务
-    auto task1 = compute_async(10);
-    auto task2 = compute_async(20);
-    auto task3 = compute_async(30);
-    
-    // 等待所有任务完成
-    auto [result1, result2, result3] = co_await when_all(
-        std::move(task1), std::move(task2), std::move(task3)
-    );
-    
-    LOG_INFO("Results: %d, %d, %d", result1, result2, result3);
+int value;
+if (queue.dequeue(value)) {
+    std::cout << "获取到值: " << value << std::endl;
 }
 ```
 
@@ -287,43 +183,24 @@ Task<void> concurrent_demo() {
 
 ```text
 flowcoro/
-├── include/flowcoro/              # 头文件目录
-│   ├── flowcoro.hpp              # 主头文件
-│   ├── core.h                    # 🔥 统一Task接口
-│   ├── net.h                     # 网络组件
-│   ├── database.h                # 数据库组件
-│   ├── rpc.h                     # RPC组件
-│   ├── thread_pool.h             # 线程池实现
-│   ├── memory_pool.h             # 内存池管理
-│   └── result.h                  # 结果类型
-├── src/                          # 源文件
-│   ├── globals.cpp               # 全局配置
-│   └── net_impl.cpp              # 网络实现
-├── examples/                     # 示例代码
-│   ├── simple_unified_demo.cpp   # 统一接口演示
-│   ├── unified_task_demo.cpp     # 完整Task演示
-│   ├── hello_world.cpp           # 基础示例
-│   ├── network_example.cpp       # 网络示例
-│   └── enhanced_demo.cpp         # 增强功能演示
-├── tests/                        # 测试代码
-│   ├── test_core.cpp             # 核心功能测试
-│   ├── test_database.cpp         # 数据库测试
-│   ├── test_http_client.cpp      # HTTP客户端测试
-│   └── test_rpc.cpp              # RPC测试
-├── benchmarks/                   # 基准测试
-│   └── simple_bench.cpp          # 性能基准
-├── docs/                         # 文档目录
-│   ├── API_REFERENCE.md          # API参考
-│   ├── CORE_INTEGRATION_GUIDE.md # 核心集成指南
-│   ├── NETWORK_GUIDE.md          # 网络编程指南
-│   ├── DATABASE_GUIDE.md         # 数据库指南
-│   ├── RPC_GUIDE.md              # RPC使用指南
-│   ├── PERFORMANCE_GUIDE.md      # 性能优化指南
-│   ├── TECHNICAL_SUMMARY.md      # 技术总结
-│   └── ROADMAP_NEW.md            # 开发路线图
-├── cmake/                        # CMake配置
-└── scripts/                      # 构建脚本
-    └── build.sh                  # 快速构建脚本
+├── include/flowcoro/         # 头文件目录
+│   ├── flowcoro.hpp         # 主头文件
+│   ├── core.h               # 协程核心功能
+│   ├── thread_pool.h        # 线程池实现
+│   ├── memory.h             # 内存池管理
+│   └── lockfree.h           # 无锁数据结构
+├── src/                     # 源文件
+│   ├── globals.cpp          # 全局配置
+│   ├── net_impl.cpp         # 网络实现
+│   └── coroutine_pool.cpp   # 协程池实现
+├── tests/                   # 测试代码
+│   ├── test_core.cpp        # 核心功能测试
+│   ├── test_framework.h     # 测试框架
+│   └── README.md            # 测试说明
+├── scripts/                 # 构建脚本
+│   └── run_core_test.sh     # 核心测试脚本
+└── cmake/                   # CMake配置
+    └── FlowCoroConfig.cmake.in
 ```
 
 ## �️ 协程库核心架构
@@ -732,69 +609,50 @@ Task<Result<T, std::string>> safe_execute(Task<T> task) {
 ## 📚 文档
 
 ### 核心文档
-- [API参考](docs/API_REFERENCE.md) - 完整的API文档
-- [核心集成指南](docs/CORE_INTEGRATION_GUIDE.md) - 统一接口说明
-- [技术总结](docs/TECHNICAL_SUMMARY.md) - 技术实现细节
 
-### 组件指南  
-- [网络指南](docs/NETWORK_GUIDE.md) - 异步网络编程
-- [数据库指南](docs/DATABASE_GUIDE.md) - 异步数据库操作
-- [RPC指南](docs/RPC_GUIDE.md) - 远程过程调用
+- [API参考](docs/API_REFERENCE.md) - v4.0.0 精简版API文档
+- [快速开始](#-快速开始) - 基础使用指南
+- [核心特性](#-核心特性) - 功能说明
 
-### 性能和优化
-- [性能指南](docs/PERFORMANCE_GUIDE.md) - 性能优化建议
-- [项目总结](docs/PROJECT_SUMMARY.md) - 项目架构总结
+### 项目信息
+
+- [许可证](LICENSE) - MIT许可证
+- [更新日志](#-v40-精简核心版) - 版本更新记录
 
 ## 🛣️ 开发路线
 
 查看 [ROADMAP_NEW.md](docs/ROADMAP_NEW.md) 了解项目发展计划。
 
-### 当前版本功能
-- ✅ Task/SafeTask统一接口
-- ✅ 线程安全协程管理（防止跨线程段错误）
-- ✅ 高性能线程池调度
-- ✅ 内存池管理
-- ✅ 异步网络I/O
-- ✅ 数据库连接池
-- ✅ JSON-RPC支持
+### 当前版本功能 (v4.0.0)
+- ✅ 协程任务管理和调度
+- ✅ 线程池实现
+- ✅ 内存池管理系统
+- ✅ 无锁数据结构
+- ✅ 基础并发原语
+- ✅ 跨平台支持
 
-### 下个版本计划 (v2.4)
-- [ ] 协程取消机制
-- [ ] 更高级的并发原语
-- [ ] 性能监控和指标
-- [ ] WebSocket支持
-- [ ] 分布式追踪
+### 下个版本计划 (v4.1.0)
+- [ ] 网络I/O扩展
+- [ ] 更多内存池优化
+- [ ] 协程生命周期管理增强
+- [ ] 性能监控工具
 
 ## ❓ 常见问题
 
-### Q: Task和SafeTask有什么区别？
-A: 在v2.3中，SafeTask只是Task的别名。两者完全相同，可以互换使用。推荐使用Task<T>。
+### Q: FlowCoro v4.0.0有什么特点？
+A: v4.0.0专注于协程库的核心功能，去除了复杂特性，提供简洁高效的协程API。
 
-### Q: 为什么协程比多线程快这么多？
-A: 根据我们的真实测试，1000个并发请求：协程91ms vs 多线程3,286ms。主要原因：
-- **无线程创建开销**：协程在现有线程中运行
-- **用户态切换**：避免内核态上下文切换
-- **单线程调度**：无锁竞争，无同步开销
-- **并发执行**：1000个协程真正并发 vs 16个线程池排队
-
-### Q: FlowCoro的架构优势在哪里？
-A: 采用事件循环 + 单线程调度模式：
-- **线程安全**：所有协程在单一调度线程中恢复，避免跨线程段错误
-- **高并发**：可轻松处理10万+并发连接，相比线程池优势明显
-- **零锁设计**：无锁数据结构，避免死锁和竞争条件
-- **资源高效**：协程1048 bytes/请求 vs 理论线程8MB/个的内存优势
+### Q: 为什么选择精简架构？
+A: 
+- **易于维护**：专注核心功能，减少复杂度
+- **性能优化**：去除不必要的抽象层
+- **学习成本低**：简化的API更容易上手
+- **稳定可靠**：减少功能意味着减少bug
 
 ### Q: 什么场景适合使用协程？
 A: 
-✅ **适合场景**：IO密集型、高并发服务器、Web API、数据库操作
-❌ **不适合**：CPU密集型计算、图像处理、科学计算
-
-### Q: 如何避免协程相关的段错误？
-A: FlowCoro v2.3.1内置了完整的线程安全保护：
-- **SafeCoroutineHandle**：自动检测跨线程协程恢复
-- **事件循环调度**：统一在单线程中处理所有协程恢复
-- **生命周期管理**：RAII模式自动管理协程资源
-- **调试友好**：详细的错误信息和线程ID追踪
+✅ **适合场景**：异步任务处理、并发计算、事件驱动应用
+❌ **不适合**：简单的同步计算、单线程顺序处理
 
 ## 🤝 贡献
 
