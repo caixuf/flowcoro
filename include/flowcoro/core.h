@@ -22,12 +22,7 @@
 #include "lockfree.h" 
 #include "thread_pool.h"
 #include "buffer.h"
-
-// 简化的日志宏（避免logger链接问题）
-#define LOG_INFO(fmt, ...) do { } while(0)
-#define LOG_ERROR(fmt, ...) do { } while(0)
-#define LOG_DEBUG(fmt, ...) do { } while(0)
-#define LOG_TRACE(fmt, ...) do { } while(0)
+#include "logger.h"
 
 // 前向声明HttpRequest类
 class HttpRequest;
@@ -90,23 +85,26 @@ public:
     
     // 调度协程恢复 - 集成协程池
     void schedule_resume(std::coroutine_handle<> handle) {
-        if (!handle) return;
+        if (!handle) {
+            LOG_ERROR("Null handle in schedule_resume");
+            return;
+        }
         
         // 检查句柄地址有效性
-        try {
-            void* addr = handle.address();
-            if (!addr) return;
-            
-            // 检查协程是否已完成
-            if (handle.done()) return;
-            
-            // 使用增强的协程池进行调度
-            schedule_coroutine_enhanced(handle);
-            
-        } catch (...) {
-            // 如果检查句柄时出现异常，忽略这个句柄
-            LOG_ERROR("Invalid handle in schedule_resume");
+        void* addr = handle.address();
+        if (!addr) {
+            LOG_ERROR("Invalid handle address in schedule_resume");
+            return;
         }
+        
+        // 检查协程是否已完成
+        if (handle.done()) {
+            LOG_DEBUG("Handle already done in schedule_resume");
+            return;
+        }
+        
+        // 使用增强的协程池进行调度
+        schedule_coroutine_enhanced(handle);
     }
     
     // 调度协程销毁（延迟销毁）
@@ -153,25 +151,26 @@ private:
             local_queue.pop();
             
             // 增强的安全检查
-            if (!handle) continue;
+            if (!handle) {
+                LOG_DEBUG("Null handle in process_ready_queue");
+                continue;
+            }
             
             // 检查句柄地址有效性
-            try {
-                void* addr = handle.address();
-                if (!addr) continue;
-                
-                // 检查协程是否已完成
-                if (handle.done()) continue;
-                
-                // 安全地恢复协程
-                handle.resume();
-            } catch (const std::exception& e) {
-                // 记录错误但继续处理其他协程
-                LOG_ERROR("Error processing coroutine: %s", e.what());
-            } catch (...) {
-                // 处理任何其他异常
-                LOG_ERROR("Unknown error processing coroutine");
+            void* addr = handle.address();
+            if (!addr) {
+                LOG_ERROR("Invalid handle address in process_ready_queue");
+                continue;
             }
+            
+            // 检查协程是否已完成
+            if (handle.done()) {
+                LOG_DEBUG("Handle already done in process_ready_queue");
+                continue;
+            }
+            
+            // 安全地恢复协程
+            handle.resume();
         }
     }
     
@@ -187,19 +186,19 @@ private:
             auto handle = local_destroy_queue.front();
             local_destroy_queue.pop();
             
-            if (!handle) continue;
-            
-            try {
-                // 检查句柄地址有效性
-                void* addr = handle.address();
-                if (addr) {
-                    handle.destroy();
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("Error destroying coroutine: %s", e.what());
-            } catch (...) {
-                LOG_ERROR("Unknown error destroying coroutine");
+            if (!handle) {
+                LOG_DEBUG("Null handle in process_pending_tasks");
+                continue;
             }
+            
+            // 检查句柄地址有效性
+            void* addr = handle.address();
+            if (!addr) {
+                LOG_ERROR("Invalid handle address in process_pending_tasks");
+                continue;
+            }
+            
+            handle.destroy();
         }
     }
     
@@ -311,11 +310,7 @@ public:
             // 第一次取消，触发回调
             std::lock_guard<std::mutex> lock(callbacks_mutex_);
             for (auto& callback : callbacks_) {
-                try {
-                    callback();
-                } catch (...) {
-                    // 忽略回调异常
-                }
+                callback(); // 直接调用，不捕获异常
             }
         }
     }
@@ -333,11 +328,7 @@ public:
         
         // 如果已经取消，立即调用回调
         if (is_cancelled()) {
-            try {
-                cb();
-            } catch (...) {
-                // 忽略回调异常
-            }
+            cb(); // 直接调用，不捕获异常
         }
     }
     
@@ -385,10 +376,8 @@ public:
     
     ~safe_coroutine_handle() {
         if (valid() && handle_) {
-            try {
-                handle_.destroy();
-            } catch (...) {
-                // 忽略析构异常
+            if (handle_) {
+                handle_.destroy(); // 直接销毁，不捕获异常
             }
         }
     }
@@ -414,7 +403,9 @@ public:
     template<typename Promise>
     Promise& promise() {
         if (!valid()) {
-            throw std::runtime_error("Invalid coroutine handle");
+            LOG_ERROR("Invalid coroutine handle in promise()");
+            static Promise default_promise{};
+            return default_promise;
         }
         return std::coroutine_handle<Promise>::from_address(handle_.address()).promise();
     }
@@ -481,7 +472,9 @@ struct CoroTask {
         std::suspend_always initial_suspend() noexcept { return {}; }
         std::suspend_always final_suspend() noexcept { return {}; }
         void return_void() noexcept {}
-        void unhandled_exception() { std::terminate(); }
+        void unhandled_exception() { 
+            LOG_ERROR("Unhandled exception in CoroTask");
+        }
     };
     std::coroutine_handle<promise_type> handle;
     CoroTask(std::coroutine_handle<promise_type> h) : handle(h) {}
@@ -644,7 +637,7 @@ template<typename T>
 struct Task {
     struct promise_type {
         std::optional<T> value;
-        std::exception_ptr exception;
+        bool has_error = false; // 替换exception_ptr
         
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
         std::atomic<bool> is_cancelled_{false};
@@ -675,7 +668,8 @@ struct Task {
         void unhandled_exception() { 
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                exception = std::current_exception();
+                has_error = true;
+                LOG_ERROR("Task<T> unhandled exception occurred");
             }
         }
         
@@ -707,13 +701,13 @@ struct Task {
             return value;
         }
         
-        // 安全获取异常
-        std::exception_ptr safe_get_exception() const {
+        // 安全获取错误状态
+        bool safe_has_error() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return nullptr;
+                return false;
             }
-            return exception;
+            return has_error;
         }
     };
     std::coroutine_handle<promise_type> handle;
@@ -725,12 +719,13 @@ struct Task {
         if (this != &other) {
             // 直接销毁当前句柄，避免递归调用safe_destroy
             if (handle) {
-                try {
-                    if (handle.address() != nullptr) {
-                        handle.destroy();
-                    }
-                } catch (...) {
-                    // 忽略析构异常
+                if( handle.address() != nullptr && !handle.done() ) {
+                    handle.promise().request_cancellation(); // 请求取消
+                    safe_destroy(); // 安全销毁当前句柄
+                }
+                else
+                {
+                    LOG_ERROR("Task::operator=: Attempting to destroy an already done or null handle");
                 }
             }
             handle = other.handle;
@@ -804,22 +799,17 @@ struct Task {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
             
-            try {
-                // 检查promise是否仍然有效
-                if (!handle.promise().is_destroyed()) {
-                    // 标记为销毁状态
-                    handle.promise().is_destroyed_.store(true, std::memory_order_release);
-                }
-                
-                // 延迟销毁 - 避免在协程执行栈中销毁
-                if (handle.done()) {
-                    handle.destroy();
-                } else {
-                    // 安排在下一个调度周期销毁
-                    manager.schedule_destroy(handle);
-                }
-            } catch (...) {
-                LOG_ERROR("Exception during safe_destroy");
+            if (!handle.promise().is_destroyed()) {
+                // 标记为销毁状态
+                handle.promise().is_destroyed_.store(true, std::memory_order_release);
+            }
+            
+            // 延迟销毁 - 避免在协程执行栈中销毁
+            if (handle.done()) {
+                handle.destroy();
+            } else {
+                // 安排在下一个调度周期销毁
+                manager.schedule_destroy(handle);
             }
             handle = nullptr;
         }
@@ -832,6 +822,7 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -842,6 +833,7 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -851,11 +843,10 @@ struct Task {
             handle.resume();
         }
         
-        // 使用安全getter获取结果
-        auto exception = handle.promise().safe_get_exception();
-        if (exception) {
+        // 检查是否有错误
+        if (handle.promise().safe_has_error()) {
             // 不使用异常，记录错误日志并返回默认值
-            LOG_ERROR("Task execution failed with exception");
+            LOG_ERROR("Task execution failed");
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
@@ -865,7 +856,7 @@ struct Task {
                     return std::move(safe_value.value());
                 }
                 LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate(); // 这种情况下只能终止程序
+                std::terminate();
             }
         }
         
@@ -877,6 +868,7 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -901,16 +893,11 @@ struct Task {
         if (!handle) return true; // 无效句柄视为ready
         
         // 安全检查：验证句柄地址有效性
-        try {
-            if (!handle.address()) return true; // 无效地址视为ready
-            if (handle.done()) return true; // 已完成视为ready
-            
-            // 只有在句柄有效时才检查promise状态
-            return handle.promise().is_destroyed();
-        } catch (...) {
-            // 任何异常都视为ready，避免段错误
-            return true;
-        }
+        if (!handle.address()) return true; // 无效地址视为ready
+        if (handle.done()) return true; // 已完成视为ready
+
+        // 只有在句柄有效时才检查promise状态
+        return handle.promise().is_destroyed();
     }
     
     bool await_suspend(std::coroutine_handle<> waiting_handle) {
@@ -940,6 +927,7 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -949,13 +937,13 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
         
-        auto exception = handle.promise().safe_get_exception();
-        if (exception) {
-            LOG_ERROR("Task await_resume: exception occurred");
+        if (handle.promise().safe_has_error()) {
+            LOG_ERROR("Task await_resume: error occurred");
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
@@ -963,6 +951,7 @@ struct Task {
                 if (safe_value.has_value()) {
                     return std::move(safe_value.value());
                 }
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -975,6 +964,7 @@ struct Task {
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
+                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }
@@ -1018,18 +1008,14 @@ struct Task<Result<T, E>> {
         void unhandled_exception() {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                try {
-                    // 尝试将异常转换为Result的错误类型
-                    if constexpr (std::is_same_v<E, ErrorInfo>) {
-                        result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
-                    } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
-                        result = err(std::current_exception());
-                    } else {
-                        // 对于其他错误类型，记录异常指针
-                        exception = std::current_exception();
-                    }
-                } catch (...) {
-                    exception = std::current_exception();
+                // 不使用异常，只设置错误状态
+                if constexpr (std::is_same_v<E, ErrorInfo>) {
+                    result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
+                } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
+                    result = err(std::exception_ptr{}); // 不能捕获异常，只返回空指针
+                } else {
+                    // 对于其他错误类型，只能设置为默认错误
+                    result = err(E{});
                 }
             }
         }
@@ -1071,12 +1057,8 @@ struct Task<Result<T, E>> {
     Task& operator=(Task&& other) noexcept {
         if (this != &other) {
             if (handle) {
-                try {
-                    if (handle.address() != nullptr) {
-                        handle.destroy();
-                    }
-                } catch (...) {
-                    // 忽略析构异常
+                if (handle.address() != nullptr) {
+                    handle.destroy();
                 }
             }
             handle = other.handle;
@@ -1127,14 +1109,10 @@ struct Task<Result<T, E>> {
     
     void safe_destroy() {
         if (handle && handle.address()) {
-            try {
-                if (!handle.promise().is_destroyed()) {
-                    handle.promise().is_destroyed_.store(true, std::memory_order_release);
-                }
-                handle.destroy();
-            } catch (...) {
-                // 忽略销毁异常
+            if (!handle.promise().is_destroyed()) {
+                handle.promise().is_destroyed_.store(true, std::memory_order_release);
             }
+            handle.destroy();
             handle = nullptr;
         }
     }
@@ -1204,7 +1182,7 @@ struct Task<Result<T, E>> {
 template<>
 struct Task<void> {
     struct promise_type {
-        std::exception_ptr exception;
+        bool has_error = false; // 替换exception_ptr
         
         // 增强版生命周期管理 - 与Task<T>保持一致
         std::atomic<bool> is_cancelled_{false};
@@ -1236,7 +1214,8 @@ struct Task<void> {
         void unhandled_exception() { 
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                exception = std::current_exception();
+                has_error = true;
+                LOG_ERROR("Task<void> unhandled exception occurred");
             }
         }
         
@@ -1259,13 +1238,13 @@ struct Task<void> {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
         }
         
-        // 安全获取异常
-        std::exception_ptr safe_get_exception() const {
+        // 安全获取错误状态
+        bool safe_has_error() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return nullptr;
+                return false;
             }
-            return exception;
+            return has_error;
         }
     };
     std::coroutine_handle<promise_type> handle;
@@ -1277,12 +1256,8 @@ struct Task<void> {
         if (this != &other) {
             // 直接销毁当前句柄，避免递归调用safe_destroy
             if (handle) {
-                try {
-                    if (handle.address() != nullptr) {
-                        handle.destroy();
-                    }
-                } catch (...) {
-                    // 忽略析构异常
+                if (handle.address() != nullptr) {
+                    handle.destroy();
                 }
             }
             handle = other.handle;
@@ -1298,16 +1273,16 @@ struct Task<void> {
     // 安全销毁方法 - 与Task<T>保持一致
     void safe_destroy() {
         if (handle && handle.address()) {
-            try {
-                // 检查promise是否仍然有效
-                if (!handle.promise().is_destroyed()) {
-                    // 标记为销毁状态
-                    handle.promise().is_destroyed_.store(true, std::memory_order_release);
-                }
-                // 直接销毁，不检查done状态
+            // 检查promise是否仍然有效
+            if (!handle.promise().is_destroyed()) {
+                // 标记为销毁状态
+                handle.promise().is_destroyed_.store(true, std::memory_order_release);
+            }
+            // 直接销毁，不检查done状态
+            if (handle.address() != nullptr) {
                 handle.destroy();
-            } catch (...) {
-                LOG_ERROR("Exception during Task<void>::safe_destroy");
+            } else {
+                LOG_ERROR("Task<void>::safe_destroy: handle address is null");
             }
             handle = nullptr;
         }
@@ -1359,14 +1334,14 @@ struct Task<void> {
     /// @return true if task completed successfully
     bool is_fulfilled() const noexcept {
         if (!handle) return false;
-        return handle.done() && !is_cancelled() && !handle.promise().exception;
+        return handle.done() && !is_cancelled() && !handle.promise().has_error;
     }
     
     /// @brief 检查任务是否被拒绝/失败 (JavaScript Promise.rejected 风格)
     /// @return true if task was cancelled or has exception
     bool is_rejected() const noexcept {
         if (!handle) return false;
-        return is_cancelled() || (handle.promise().exception != nullptr);
+        return is_cancelled() || handle.promise().has_error;
     }
     
     void get() {
@@ -1387,10 +1362,9 @@ struct Task<void> {
             handle.resume();
         }
         
-        // 使用安全getter获取异常
-        auto exception = handle.promise().safe_get_exception();
-        if (exception) {
-            LOG_ERROR("Task<void> execution failed with exception");
+        // 检查是否有错误
+        if (handle.promise().safe_has_error()) {
+            LOG_ERROR("Task<void> execution failed");
             // void类型不抛出异常，只记录
         }
     }
@@ -1444,9 +1418,8 @@ struct Task<void> {
             return;
         }
         
-        auto exception = handle.promise().safe_get_exception();
-        if (exception) {
-            LOG_ERROR("Task<void> await_resume: exception occurred");
+        if (handle.promise().safe_has_error()) {
+            LOG_ERROR("Task<void> await_resume: error occurred");
             // void类型不抛出异常，只记录
         }
     }
@@ -1779,13 +1752,9 @@ struct Task<std::unique_ptr<T>> {
     }
     ~Task() { 
         if (handle) {
-            try {
-                // 检查协程句柄是否有效
-                if (handle.address() != nullptr) {
-                    handle.destroy();
-                }
-            } catch (...) {
-                // 忽略析构时的异常
+            // 检查协程句柄是否有效
+            if (handle.address() != nullptr) {
+                handle.destroy();
             }
         }
     }
@@ -1946,11 +1915,7 @@ public:
         
         auto h = handle_->load(std::memory_order_acquire);
         if (h && !h.done()) {
-            try {
-                h.resume();
-            } catch (...) {
-                // 安全处理所有异常
-            }
+            h.resume();
         }
     }
     
@@ -2026,25 +1991,13 @@ auto when_all(Tasks&&... tasks) {
 template<typename T>
 T sync_wait(Task<T>&& task) {
     // 直接使用Task的get()方法，它会阻塞直到完成
-    try {
-        return task.get();
-    } catch (...) {
-        // 不使用异常，记录错误并返回默认值
-        if constexpr (std::is_void_v<T>) {
-            return;
-        } else {
-            return T{};
-        }
-    }
+    // 不使用异常，直接返回get()的结果（get()内部已处理错误并返回默认值）
+    return task.get();
 }
 
 // sync_wait需要特殊处理，避免LOG调用
 inline void sync_wait(Task<void>&& task) {
-    try {
-        task.get();
-    } catch (...) {
-        // 静默处理异常
-    }
+    task.get(); // 不使用异常，get()内部已处理错误并记录日志
 }
 
 // 重载版本 - 接受lambda并返回Task
@@ -2064,14 +2017,15 @@ auto sync_wait(Func&& func) {
 inline void enable_v2_features() {
     // 启动协程管理器
     start_coroutine_manager();
-    
-    std::cout << "🚀 FlowCoro v2.0 Enhanced Features Enabled (ioManager-inspired)" << std::endl;
+
+    std::cout << "🚀 FlowCoro v4.0 Enhanced Features Enabled (ioManager-inspired)" << std::endl;
     std::cout << "   ✅ Centralized coroutine manager with drive-based scheduling" << std::endl;
     std::cout << "   ✅ Safe timer-based sleep implementation" << std::endl;
     std::cout << "   ✅ Delayed destruction for coroutine safety" << std::endl;
     std::cout << "   ✅ Enhanced lifecycle management integrated" << std::endl;
     std::cout << "   ✅ Cancel/timeout support with proper state tracking" << std::endl;
     std::cout << "   ✅ Architecture inspired by ioManager's FSM design" << std::endl;
+    std::cout << "   ✅ All v2/v3 features are now unified in FlowCoro v4.0" << std::endl;
 }
 
 /**
