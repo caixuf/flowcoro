@@ -1,7 +1,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include "../include/flowcoro.hpp"
+#include "flowcoro.hpp"
 #include "test_framework.h"
 
 using namespace flowcoro;

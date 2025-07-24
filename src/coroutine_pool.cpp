@@ -1,5 +1,5 @@
-#include "../include/flowcoro/core.h"
-#include "../include/flowcoro/thread_pool.h"
+#include "flowcoro/core.h"
+#include "flowcoro/thread_pool.h"
 #include <iostream>
 #include <iomanip>
 #include <mutex>

@@ -14,8 +14,8 @@
 #include <unordered_set>
 #include <optional>
 
-#include "../core.h"
-#include "../lockfree.h"
+#include <flowcoro/core.h>
+#include <flowcoro/lockfree.h>
 
 namespace flowcoro::db {
 

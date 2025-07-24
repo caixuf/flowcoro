@@ -6,7 +6,7 @@
 #include <vector>
 #include <memory>
 
-#include "../include/flowcoro.hpp"
+#include "flowcoro.hpp"
 #include "test_framework.h"
 
 using namespace flowcoro;
