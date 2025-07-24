@@ -19,22 +19,68 @@ find_package(Threads REQUIRED)
 # 核心测试 - 只保留基础功能测试
 add_executable(test_core test_core.cpp)
 
+# 网络模块测试
+add_executable(test_network test_network.cpp)
+
+# 数据库模块测试
+add_executable(test_database test_database.cpp)
+
+# RPC模块测试
+add_executable(test_rpc test_rpc.cpp)
+
 # 链接库
 target_link_libraries(test_core 
     flowcoro_net
     Threads::Threads
 )
 
+# 网络模块测试链接库
+target_link_libraries(test_network 
+    flowcoro_net
+    Threads::Threads
+)
+
+# 数据库模块测试链接库
+target_link_libraries(test_database 
+    flowcoro_net
+    Threads::Threads
+)
+
+# RPC模块测试链接库
+target_link_libraries(test_rpc 
+    flowcoro_net
+    Threads::Threads
+)
+
 # 添加测试
 add_test(NAME test_core COMMAND test_core)
+add_test(NAME test_network COMMAND test_network)
+add_test(NAME test_database COMMAND test_database)
+add_test(NAME test_rpc COMMAND test_rpc)
 
 # 设置测试属性
 set_tests_properties(test_core PROPERTIES
     TIMEOUT 60
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+set_tests_properties(test_network PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+set_tests_properties(test_database PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+set_tests_properties(test_rpc PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置输出目录
-set_target_properties(test_core PROPERTIES
+set_target_properties(test_core test_network test_database test_rpc PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 

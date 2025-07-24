@@ -36,7 +36,7 @@ print_error() {
 
 # 显示帮助信息
 show_help() {
-    echo "FlowCoro 核心测试运行脚本"
+    echo "FlowCoro 完整测试套件运行脚本"
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
@@ -44,10 +44,16 @@ show_help() {
     echo "  --clean, -c        清理构建目录"
     echo "  --help, -h         显示此帮助信息"
     echo ""
+    echo "测试模块:"
+    echo "  1. 核心功能测试    - 协程、线程池、内存管理"
+    echo "  2. 网络模块测试    - HTTP客户端、Socket、网络初始化"
+    echo "  3. 数据库模块测试  - 连接池、MySQL占位实现"
+    echo "  4. RPC模块测试     - JSON-RPC消息、客户端、服务器"
+    echo ""
     echo "示例:"
-    echo "  $0                 # 运行核心测试"
-    echo "  $0 --build         # 重新构建并运行核心测试"
-    echo "  $0 --clean --build # 清理重建并运行核心测试"
+    echo "  $0                 # 运行完整测试套件"
+    echo "  $0 --build         # 重新构建并运行完整测试套件"
+    echo "  $0 --clean --build # 清理重建并运行完整测试套件"
 }
 
 # 默认参数
@@ -82,7 +88,7 @@ if [[ "$CLEAN" == true ]]; then
     BUILD=true
 fi
 
-print_info "开始 FlowCoro 核心测试..."
+print_info "开始 FlowCoro 完整测试套件..."
 print_info "项目根目录: $PROJECT_ROOT"
 print_info "构建目录: $BUILD_DIR"
 
@@ -133,30 +139,103 @@ if [[ "$BUILD" == true ]]; then
 fi
 
 # 确保测试可执行文件存在
-TEST_EXECUTABLE="$BUILD_DIR/tests/test_core"
-if [[ ! -f "$TEST_EXECUTABLE" ]]; then
-    print_error "测试可执行文件不存在: $TEST_EXECUTABLE"
+TEST_CORE="$BUILD_DIR/tests/test_core"
+TEST_NETWORK="$BUILD_DIR/tests/test_network"
+TEST_DATABASE="$BUILD_DIR/tests/test_database"
+TEST_RPC="$BUILD_DIR/tests/test_rpc"
+
+if [[ ! -f "$TEST_CORE" ]]; then
+    print_error "核心测试可执行文件不存在: $TEST_CORE"
     print_info "请先运行: $0 --build"
     exit 1
 fi
 
-# 运行核心测试
-print_info "运行核心功能测试..."
+if [[ ! -f "$TEST_NETWORK" ]]; then
+    print_warning "网络测试可执行文件不存在: $TEST_NETWORK"
+fi
+
+if [[ ! -f "$TEST_DATABASE" ]]; then
+    print_warning "数据库测试可执行文件不存在: $TEST_DATABASE"
+fi
+
+if [[ ! -f "$TEST_RPC" ]]; then
+    print_warning "RPC测试可执行文件不存在: $TEST_RPC"
+fi
+
+# 运行所有测试
+print_info "运行 FlowCoro 完整测试套件..."
 echo ""
 echo "========================================"
-echo "🧪 FlowCoro 核心功能测试开始"
+echo "🧪 FlowCoro 完整测试套件开始"
 echo "========================================"
 
 # 记录开始时间
 START_TIME=$(date +%s)
 
-# 运行测试并捕获退出状态
-if "$TEST_EXECUTABLE"; then
-    TEST_RESULT=0
-    print_success "核心测试通过!"
+# 测试计数器
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
+
+# 运行核心测试
+print_info "1. 运行核心功能测试..."
+TOTAL_TESTS=$((TOTAL_TESTS + 1))
+if "$TEST_CORE"; then
+    PASSED_TESTS=$((PASSED_TESTS + 1))
+    print_success "✅ 核心测试通过!"
 else
-    TEST_RESULT=$?
-    print_error "核心测试失败! (退出码: $TEST_RESULT)"
+    FAILED_TESTS=$((FAILED_TESTS + 1))
+    print_error "❌ 核心测试失败!"
+fi
+echo ""
+
+# 运行网络测试
+if [[ -f "$TEST_NETWORK" ]]; then
+    print_info "2. 运行网络模块测试..."
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    if "$TEST_NETWORK"; then
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        print_success "✅ 网络测试通过!"
+    else
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        print_error "❌ 网络测试失败!"
+    fi
+    echo ""
+fi
+
+# 运行数据库测试
+if [[ -f "$TEST_DATABASE" ]]; then
+    print_info "3. 运行数据库模块测试..."
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    if "$TEST_DATABASE"; then
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        print_success "✅ 数据库测试通过!"
+    else
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        print_error "❌ 数据库测试失败!"
+    fi
+    echo ""
+fi
+
+# 运行RPC测试
+if [[ -f "$TEST_RPC" ]]; then
+    print_info "4. 运行RPC模块测试..."
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    if "$TEST_RPC"; then
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        print_success "✅ RPC测试通过!"
+    else
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        print_error "❌ RPC测试失败!"
+    fi
+    echo ""
+fi
+
+# 设置最终结果
+if [[ $FAILED_TESTS -eq 0 ]]; then
+    TEST_RESULT=0
+else
+    TEST_RESULT=1
 fi
 
 # 记录结束时间并计算耗时
@@ -166,9 +245,9 @@ DURATION=$((END_TIME - START_TIME))
 echo ""
 echo "========================================"
 if [[ $TEST_RESULT -eq 0 ]]; then
-    echo -e "🎉 ${GREEN}所有核心测试通过!${NC}"
+    echo -e "🎉 ${GREEN}所有测试通过! ($PASSED_TESTS/$TOTAL_TESTS)${NC}"
 else
-    echo -e "💥 ${RED}测试失败!${NC}"
+    echo -e "💥 ${RED}测试失败! ($PASSED_TESTS/$TOTAL_TESTS 通过, $FAILED_TESTS 失败)${NC}"
 fi
 echo "测试耗时: ${DURATION}秒"
 echo "========================================"
@@ -177,6 +256,7 @@ echo "========================================"
 print_info "项目状态:"
 echo "  - 版本: $(grep 'FLOWCORO_VERSION' include/flowcoro.hpp | head -1 | cut -d'"' -f2 2>/dev/null || echo '未知')"
 echo "  - 构建目录: $BUILD_DIR"
-echo "  - 测试可执行文件: $TEST_EXECUTABLE"
+echo "  - 测试模块数: $TOTAL_TESTS"
+echo "  - 通过/失败: $PASSED_TESTS/$FAILED_TESTS"
 
 exit $TEST_RESULT
