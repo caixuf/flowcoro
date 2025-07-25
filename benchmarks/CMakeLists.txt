@@ -9,9 +9,11 @@ endif()
 if(NOT BENCHMARK_FOUND)
     message(STATUS "Google Benchmark not found, building simple benchmarks")
     
-    # 简单基准测试
-    add_executable(simple_benchmarks simple_bench.cpp)
-    target_link_libraries(simple_benchmarks PRIVATE flowcoro_net)
+    
+    # 添加精确基准测试
+    add_executable(accurate_benchmarks accurate_bench.cpp)
+    target_link_libraries(accurate_benchmarks flowcoro_net pthread)
+    target_include_directories(accurate_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/include)
     
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
