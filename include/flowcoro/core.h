@@ -1981,7 +1981,7 @@ public:
             
             // 使用fold expression和index_sequence来正确处理每个任务
             [&]<size_t... Is>(std::index_sequence<Is...>) {
-                ((process_task<Is>(std::get<Is>(tasks_), complete_one)), ...);
+                ((process_task<Is>(std::get<Is>(this->tasks_), complete_one)), ...);
             }(std::index_sequence_for<Tasks...>{});
             
         }, tasks_);
@@ -1997,7 +1997,9 @@ public:
 private:
     template<size_t I, typename TaskType>
     void process_task(TaskType& task, auto complete_callback) {
-        GlobalThreadPool::get().enqueue([&task, complete_callback]() mutable {
+        // ✅ 简化实现：直接使用Task的协程特性
+        // Task本身就会使用协程池，我们只需要启动它
+        GlobalThreadPool::get().enqueue_void([&task, complete_callback]() {
             try {
                 // 等待任务完成，但不获取结果（避免handle无效问题）
                 while (!task.await_ready()) {
