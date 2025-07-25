@@ -1948,37 +1948,71 @@ inline void start_coroutine_manager() {
 template<typename... Tasks>
 class WhenAllAwaiter {
 public:
+    // 从Task<T>中提取T类型
+    template<typename TaskType>
+    struct extract_task_value {
+        using type = void;
+    };
+    
+    template<typename T>
+    struct extract_task_value<Task<T>> {
+        using type = T;
+    };
+    
+    using ResultType = std::tuple<typename extract_task_value<std::decay_t<Tasks>>::type...>;
+    
     explicit WhenAllAwaiter(Tasks&&... tasks) : tasks_(std::forward<Tasks>(tasks)...) {}
     
     bool await_ready() const noexcept { return false; }
     
     void await_suspend(std::coroutine_handle<> h) {
-        std::apply([h, this](auto&... tasks) {
+        caller_ = h;
+        
+        std::apply([this](auto&... tasks) {
             constexpr size_t task_count = sizeof...(tasks);
             auto counter = std::make_shared<std::atomic<size_t>>(task_count);
             
-            auto complete_one = [h, counter]() {
+            auto complete_one = [this, counter]() {
                 if (counter->fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                    GlobalThreadPool::get().enqueue_void([h]() {
-                        if (h && !h.done()) {
-                            h.resume();
-                        }
-                    });
+                    // 所有任务完成，恢复等待的协程
+                    CoroutineManager::get_instance().schedule_resume(caller_);
                 }
             };
             
-            // 为每个任务启动异步执行
-            ((GlobalThreadPool::get().enqueue([&tasks, complete_one]() {
-                tasks.get(); // 等待任务完成
-                complete_one();
-            })), ...);
+            // 使用fold expression和index_sequence来正确处理每个任务
+            [&]<size_t... Is>(std::index_sequence<Is...>) {
+                ((process_task<Is>(std::get<Is>(tasks_), complete_one)), ...);
+            }(std::index_sequence_for<Tasks...>{});
+            
         }, tasks_);
     }
     
-    void await_resume() const noexcept {}
+    ResultType await_resume() {
+        // 直接从tasks_中获取结果，避免复杂的存储逻辑
+        return std::apply([](auto&... tasks) {
+            return std::make_tuple(tasks.get()...);
+        }, tasks_);
+    }
     
 private:
+    template<size_t I, typename TaskType>
+    void process_task(TaskType& task, auto complete_callback) {
+        GlobalThreadPool::get().enqueue([&task, complete_callback]() mutable {
+            try {
+                // 等待任务完成，但不获取结果（避免handle无效问题）
+                while (!task.await_ready()) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+                // 任务完成，直接调用完成回调
+            } catch (...) {
+                // 忽略异常，继续完成计数
+            }
+            complete_callback();
+        });
+    }
+    
     std::tuple<Tasks...> tasks_;
+    std::coroutine_handle<> caller_;
 };
 
 // 便捷函数：等待所有任务完成

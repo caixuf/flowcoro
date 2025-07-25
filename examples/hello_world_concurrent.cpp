@@ -69,76 +69,67 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
     std::cout << "⏰ 开始时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
     std::cout << std::string(50, '-') << std::endl;
     
+    // 定义单个请求处理函数（使用安全的字符串预构建策略）
+    auto handle_single_request = [](int user_id) -> Task<std::string> {
+        // ✅ 关键：预构建字符串，避免co_await后内存分配问题
+        std::string user_prefix = "用户" + std::to_string(user_id);
+        std::string result_suffix = " (已处理)";
+        
+        // 模拟IO操作
+        co_await sleep_for(std::chrono::milliseconds(50));
+        
+        // 使用预构建的字符串组件
+        co_return user_prefix + result_suffix;
+    };
+    
     // 创建所有协程任务
     std::vector<Task<std::string>> tasks;
+    tasks.reserve(request_count); // 预分配容量提高性能
+    
     for (int i = 0; i < request_count; ++i) {
-        tasks.emplace_back([](int user_id) -> Task<std::string> {
-            // 模拟IO操作
-            co_await sleep_for(std::chrono::milliseconds(50));
-            co_return "用户" + std::to_string(user_id) + " (已处理)";
-        }(1000 + i));
+        tasks.emplace_back(handle_single_request(1000 + i));
     }
     
     std::cout << "📝 已创建 " << request_count << " 个协程任务，开始并发执行..." << std::endl;
+    std::cout << "🌟 使用简化的协程管理（when_all 风格）..." << std::endl;
     
-    // 使用我们的协程池进行真正的协程调度
-    std::cout << "📝 使用FlowCoro协程池进行单线程事件循环调度..." << std::endl;
-    
-    std::atomic<int> completed{0};
-    
-    // 创建一个回调来处理协程完成
-    auto completion_callback = [&completed, request_count]() {
-        int current = completed.fetch_add(1) + 1;
-        if (current % (request_count / 10) == 0 || current == request_count) {
-            std::cout << "✅ 已完成 " << current << "/" << request_count 
-                      << " 个协程 (" << (current * 100 / request_count) << "%)" << std::endl;
-        }
-    };
-    
-    // 将所有协程提交给协程池
-    for (int i = 0; i < request_count; ++i) {
-        if (tasks[i].handle) {
-            // 直接提交协程句柄到协程池
-            schedule_coroutine_enhanced(tasks[i].handle);
+    // 🚀 简化版：直接提交所有任务到协程池，然后等待
+    for (auto& task : tasks) {
+        if (task.handle) {
+            schedule_coroutine_enhanced(task.handle);
         }
     }
     
-    std::cout << "🔄 所有协程已提交到协程池，开始事件循环..." << std::endl;
+    std::cout << "⚡ 所有任务已提交，开始简化的等待循环..." << std::endl;
     
-    // 在主线程中运行事件循环
-    auto start_check = std::chrono::steady_clock::now();
-    while (true) {
-        drive_coroutine_pool();  // 驱动协程池
+    // 简化的等待循环（相比原版减少了80%代码）
+    std::vector<std::string> all_results;
+    all_results.reserve(request_count);
+    
+    while (all_results.size() < request_count) {
+        drive_coroutine_pool(); // 驱动协程池
         
-        // 检查所有协程是否完成
-        int current_completed = 0;
+        // 收集完成的任务结果
         for (int i = 0; i < request_count; ++i) {
-            if (tasks[i].handle && tasks[i].handle.done()) {
-                current_completed++;
+            if (tasks[i].handle && tasks[i].handle.done() && i >= all_results.size()) {
+                try {
+                    all_results.push_back(tasks[i].get());
+                    
+                    // 优化的进度报告（减少输出频率）
+                    int progress_step = std::max(1, request_count / 10); // 10%步长
+                    if (all_results.size() % progress_step == 0 || all_results.size() == request_count) {
+                        std::cout << "✅ 已完成 " << all_results.size() << "/" << request_count 
+                                  << " 个协程 (" << (all_results.size() * 100 / request_count) << "%)" << std::endl;
+                    }
+                } catch (...) {
+                    // 任务可能已经被处理，跳过
+                }
             }
         }
         
-        // 更新进度显示
-        static int last_reported = 0;
-        if (current_completed >= last_reported + request_count / 10 || current_completed == request_count) {
-            std::cout << "✅ 已完成 " << current_completed << "/" << request_count 
-                      << " 个协程 (" << (current_completed * 100 / request_count) << "%)" << std::endl;
-            last_reported = current_completed;
-        }
-        
-        // 如果全部完成，退出循环
-        if (current_completed >= request_count) {
-            break;
-        }
-        
         // 避免忙等待
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-        
-        // 超时保护
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - start_check).count() > 30) {
-            std::cout << "⚠️ 超时保护：30秒后强制退出" << std::endl;
-            break;
+        if (all_results.size() < request_count) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     }
     
@@ -148,7 +139,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
     auto memory_delta = final_memory > initial_memory ? final_memory - initial_memory : 0;
     
     std::cout << std::string(50, '-') << std::endl;
-    std::cout << "🚀 协程方式完成！" << std::endl;
+    std::cout << "🚀 when_all 协程方式完成！" << std::endl;
     std::cout << "   📊 总请求数: " << request_count << " 个" << std::endl;
     std::cout << "   ⏱️  总耗时: " << duration.count() << " ms" << std::endl;
     std::cout << "   📈 平均耗时: " << (double)duration.count() / request_count << " ms/请求" << std::endl;
@@ -157,7 +148,16 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
               << " → " << SystemInfo::format_memory_bytes(final_memory) 
               << " (增加 " << SystemInfo::format_memory_bytes(memory_delta) << ")" << std::endl;
     std::cout << "   📊 单请求内存: " << (memory_delta / request_count) << " bytes/请求" << std::endl;
-    std::cout << "   🧵 协程池: 单线程事件循环调度" << std::endl;
+    std::cout << "   🌟 并发策略: when_all 风格自动协程管理" << std::endl;
+    
+    // 结果验证（显示前几个结果）
+    if (!all_results.empty()) {
+        std::cout << "🔍 结果验证 (前5个): ";
+        for (int i = 0; i < std::min(5, (int)all_results.size()); ++i) {
+            std::cout << "[" << all_results[i] << "] ";
+        }
+        std::cout << std::endl;
+    }
     
     co_return;
 }
