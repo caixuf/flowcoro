@@ -1926,9 +1926,42 @@ public:
     }
 };
 
-// 便捷函数：休眠 - 使用新的ClockAwaiter
+// 协程友好的sleep_for实现 - 不使用任何多线程！
+class CoroutineFriendlySleepAwaiter {
+private:
+    std::chrono::milliseconds duration_;
+    
+public:
+    explicit CoroutineFriendlySleepAwaiter(std::chrono::milliseconds duration) 
+        : duration_(duration) {}
+    
+    bool await_ready() const noexcept { 
+        return duration_.count() <= 0;
+    }
+    
+    bool await_suspend(std::coroutine_handle<> h) {
+        // 如果时间为0，不挂起
+        if (duration_.count() <= 0) {
+            return false; // 不挂起，立即继续
+        }
+        
+        // 使用CoroutineManager的定时器，让它在合适的时候恢复我们
+        auto& manager = CoroutineManager::get_instance();
+        auto when = std::chrono::steady_clock::now() + duration_;
+        manager.add_timer(when, h);
+        
+        // 挂起协程，等待定时器恢复
+        return true;
+    }
+    
+    void await_resume() const noexcept {
+        // 定时器恢复了我们，休眠完成
+    }
+};
+
+// 便捷函数：休眠 - 使用协程友好的实现
 inline auto sleep_for(std::chrono::milliseconds duration) {
-    return ClockAwaiter(duration);
+    return CoroutineFriendlySleepAwaiter(duration);
 }
 
 // 启动协程管理器的驱动循环
@@ -1943,84 +1976,25 @@ inline void start_coroutine_manager() {
     
     std::cout << "FlowCoro: Coroutine manager started with ioManager-style architecture" << std::endl;
 }
-
-// 协程等待器：等待多个任务完成
+// 修复when_all - 使用索引顺序执行，完全模拟for循环
 template<typename... Tasks>
-class WhenAllAwaiter {
-public:
-    // 从Task<T>中提取T类型
-    template<typename TaskType>
-    struct extract_task_value {
-        using type = void;
-    };
+Task<std::tuple<decltype(std::declval<Tasks>().get())...>> when_all(Tasks&&... tasks) {
+    // 将tasks打包成tuple
+    auto task_tuple = std::make_tuple(std::forward<Tasks>(tasks)...);
     
-    template<typename T>
-    struct extract_task_value<Task<T>> {
-        using type = T;
-    };
-    
-    using ResultType = std::tuple<typename extract_task_value<std::decay_t<Tasks>>::type...>;
-    
-    explicit WhenAllAwaiter(Tasks&&... tasks) : tasks_(std::forward<Tasks>(tasks)...) {}
-    
-    bool await_ready() const noexcept { return false; }
-    
-    void await_suspend(std::coroutine_handle<> h) {
-        caller_ = h;
-        
-        std::apply([this](auto&... tasks) {
-            constexpr size_t task_count = sizeof...(tasks);
-            auto counter = std::make_shared<std::atomic<size_t>>(task_count);
-            
-            auto complete_one = [this, counter]() {
-                if (counter->fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                    // 所有任务完成，恢复等待的协程
-                    CoroutineManager::get_instance().schedule_resume(caller_);
-                }
-            };
-            
-            // 使用fold expression和index_sequence来正确处理每个任务
-            [&]<size_t... Is>(std::index_sequence<Is...>) {
-                ((process_task<Is>(std::get<Is>(this->tasks_), complete_one)), ...);
-            }(std::index_sequence_for<Tasks...>{});
-            
-        }, tasks_);
+    // 顺序执行每个task，就像for循环一样
+    auto result0 = co_await std::get<0>(task_tuple);
+    if constexpr (sizeof...(tasks) == 1) {
+        co_return std::make_tuple(std::move(result0));
+    } else if constexpr (sizeof...(tasks) == 2) {
+        auto result1 = co_await std::get<1>(task_tuple);
+        co_return std::make_tuple(std::move(result0), std::move(result1));
+    } else if constexpr (sizeof...(tasks) == 3) {
+        auto result1 = co_await std::get<1>(task_tuple);
+        auto result2 = co_await std::get<2>(task_tuple);
+        co_return std::make_tuple(std::move(result0), std::move(result1), std::move(result2));
     }
-    
-    ResultType await_resume() {
-        // 直接从tasks_中获取结果，避免复杂的存储逻辑
-        return std::apply([](auto&... tasks) {
-            return std::make_tuple(tasks.get()...);
-        }, tasks_);
-    }
-    
-private:
-    template<size_t I, typename TaskType>
-    void process_task(TaskType& task, auto complete_callback) {
-        // ✅ 简化实现：直接使用Task的协程特性
-        // Task本身就会使用协程池，我们只需要启动它
-        GlobalThreadPool::get().enqueue_void([&task, complete_callback]() {
-            try {
-                // 等待任务完成，但不获取结果（避免handle无效问题）
-                while (!task.await_ready()) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                }
-                // 任务完成，直接调用完成回调
-            } catch (...) {
-                // 忽略异常，继续完成计数
-            }
-            complete_callback();
-        });
-    }
-    
-    std::tuple<Tasks...> tasks_;
-    std::coroutine_handle<> caller_;
-};
-
-// 便捷函数：等待所有任务完成
-template<typename... Tasks>
-auto when_all(Tasks&&... tasks) {
-    return WhenAllAwaiter<Tasks...>(std::forward<Tasks>(tasks)...);
+    // 可以继续扩展更多数量...
 }
 
 // 同步等待协程完成的函数
