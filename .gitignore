@@ -1,21 +1,74 @@
-# 忽略构建目录
-build/
+# FlowCoro项目 .gitignore
 
-# 忽略IDE配置文件
+# 构建目录
+build/
+target/
+
+# 编译产物
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Go编译产物
+go_benchmark
+*.mod
+*.sum
+
+# Rust编译产物  
+Cargo.lock
+rust_benchmark
+
+# CMake生成文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CTestTestfile.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+!cmake/
+
+# IDE文件
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
-# 忽略编译产物
-*.o
-*.a
-*.so
-*.dll
+# 系统文件
+.DS_Store
+Thumbs.db
 
-# 忽略日志和临时文件
+# 日志文件
 *.log
 *.tmp
 *.temp
+
+# 临时文件
+tmp/
+temp/
+.tmp/
+
+# 依赖包缓存
+node_modules/
+.cargo/
+
+# 测试覆盖率
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# 文档生成
+docs/_build/
+site/
