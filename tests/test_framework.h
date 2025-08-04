@@ -12,63 +12,63 @@ class TestRunner {
 private:
     static std::atomic<int> passed_;
     static std::atomic<int> failed_;
-    
+
 public:
-    static void expect_true(bool condition, const std::string& message, 
+    static void expect_true(bool condition, const std::string& message,
                            const char* file, int line) {
         if (condition) {
             passed_++;
-            std::cout << "✅ PASS: " << message << std::endl;
+            std::cout << " PASS: " << message << std::endl;
         } else {
             failed_++;
-            std::cerr << "❌ FAIL: " << message 
+            std::cerr << " FAIL: " << message
                      << " (" << file << ":" << line << ")" << std::endl;
         }
     }
-    
+
     static void expect_eq(const auto& a, const auto& b, const std::string& message,
                          const char* file, int line) {
         // 使用static_cast避免符号比较警告
-        if constexpr (std::is_integral_v<std::decay_t<decltype(a)>> && 
+        if constexpr (std::is_integral_v<std::decay_t<decltype(a)>> &&
                       std::is_integral_v<std::decay_t<decltype(b)>>) {
-            if (static_cast<std::common_type_t<decltype(a), decltype(b)>>(a) == 
+            if (static_cast<std::common_type_t<decltype(a), decltype(b)>>(a) ==
                 static_cast<std::common_type_t<decltype(a), decltype(b)>>(b)) {
                 passed_++;
-                std::cout << "✅ PASS: " << message << std::endl;
+                std::cout << " PASS: " << message << std::endl;
             } else {
                 failed_++;
-                std::cerr << "❌ FAIL: " << message << " - Expected: " << b 
+                std::cerr << " FAIL: " << message << " - Expected: " << b
                          << ", Got: " << a << " (" << file << ":" << line << ")" << std::endl;
             }
         } else {
             if (a == b) {
                 passed_++;
-                std::cout << "✅ PASS: " << message << std::endl;
+                std::cout << " PASS: " << message << std::endl;
             } else {
                 failed_++;
-                std::cerr << "❌ FAIL: " << message << " - Expected: " << b 
+                std::cerr << " FAIL: " << message << " - Expected: " << b
                          << ", Got: " << a << " (" << file << ":" << line << ")" << std::endl;
             }
         }
     }
-    
+
     static void print_summary() {
         std::cout << "\n=== Test Summary ===" << std::endl;
         std::cout << "Passed: " << passed_.load() << std::endl;
         std::cout << "Failed: " << failed_.load() << std::endl;
-        std::cout << "Total:  " << (passed_.load() + failed_.load()) << std::endl;
-        
+        std::cout << "Total: " << (passed_.load() + failed_.load()) << std::endl;
+
         if (failed_.load() == 0) {
-            std::cout << "🎉 All tests passed!" << std::endl;
+            std::cout << " All tests passed!" << std::endl;
         } else {
-            std::cout << "💥 " << failed_.load() << " test(s) failed!" << std::endl;
+            std::cout << " " << failed_.load() << " test(s) failed!" << std::endl;
         }
     }
-    
+
     static bool all_passed() {
         return failed_.load() == 0;
     }
-    
+
     static void reset() {
         passed_ = 0;
         failed_ = 0;
@@ -110,21 +110,21 @@ std::atomic<int> TestRunner::failed_{0};
 class TestSuite {
 public:
     TestSuite(const std::string& suite_name) : name_(suite_name) {
-        std::cout << "\n🧪 Test Suite: " << name_ << std::endl;
+        std::cout << "\n Test Suite: " << name_ << std::endl;
         std::cout << std::string(40, '=') << std::endl;
         start_time_ = std::chrono::high_resolution_clock::now();
     }
-    
+
     ~TestSuite() {
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             end_time - start_time_);
-        
+
         std::cout << std::string(40, '=') << std::endl;
-        std::cout << "Suite '" << name_ << "' completed in " 
+        std::cout << "Suite '" << name_ << "' completed in "
                  << duration.count() << "ms" << std::endl;
     }
-    
+
 private:
     std::string name_;
     std::chrono::high_resolution_clock::time_point start_time_;

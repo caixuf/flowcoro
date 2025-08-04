@@ -1,6 +1,6 @@
 # FlowCoro v4.0.0 API 参考手册
 
-## 🎯 v4.0.0 高性能优化版
+## v4.0.0 高性能优化版
 
 ### 重大性能突破
 
@@ -15,8 +15,8 @@
 
 | 并发任务数 | 总耗时 | 吞吐量 | 内存使用 | 单任务内存 |
 |-----------|--------|--------|----------|------------|
-| 5000      | 8ms    | 625K/s | 636KB    | 130 bytes  |
-| 10000     | 14ms   | 714K/s | 920KB    | 94 bytes   |
+| 5000 | 8ms | 625K/s | 636KB | 130 bytes |
+| 10000 | 14ms | 714K/s | 920KB | 94 bytes |
 
 - **协程创建**: 微秒级轻量级协程任务创建
 - **内存管理**: 高效的顺序执行内存优化
@@ -43,7 +43,7 @@ int main() {
 }
 ```
 
-## 📋 目录
+## 目录
 
 ### 核心模块
 - [1. 协程核心 (core.h)](#1-协程核心-coreh) - Task接口、when_all并发、协程管理、同步等待
@@ -51,11 +51,11 @@ int main() {
 - [3. 内存管理 (memory.h)](#3-内存管理-memoryh) - 内存池、对象池
 - [4. 无锁数据结构 (lockfree.h)](#4-无锁数据结构-lockfreeh) - 无锁队列、栈
 
-### 系统模块  
+### 系统模块
 - [5. 协程池](#5-协程池) - 协程调度和管理
 - [6. 全局配置](#6-全局配置) - 系统配置和初始化
 
-## 🚀 概述
+## 概述
 
 FlowCoro v4.0.0 是一个精简的现代C++20协程库，专注于提供高效的协程核心功能。本版本移除了网络、数据库、RPC等复杂组件，专注于协程任务管理、内存管理、线程池和无锁数据结构等核心特性。
 
@@ -74,20 +74,20 @@ template<typename T = void>
 class Task {
 public:
     // 基础操作
-    bool done() const noexcept;           // 协程是否完成
-    T get_result();                       // 获取结果（阻塞）
-    
+    bool done() const noexcept; // 协程是否完成
+    T get_result(); // 获取结果（阻塞）
+
     // 协程接口
-    auto operator co_await();             // 使协程可等待
-    
+    auto operator co_await(); // 使协程可等待
+
     // 移动语义
     Task(Task&& other) noexcept;
     Task& operator=(Task&& other) noexcept;
-    
+
     // 禁止拷贝
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
-    
+
 private:
     std::coroutine_handle<> handle_;
 };
@@ -160,13 +160,13 @@ Task<bool> compute_bool() {
 
 // 并发执行多个不同类型的任务
 Task<void> example_mixed_types() {
-    auto [int_result, str_result, bool_result] = 
+    auto [int_result, str_result, bool_result] =
         co_await when_all(
-            compute_int(5),           // 返回 25
-            compute_string("hello"),   // 返回 "hello_processed"
-            compute_bool()            // 返回 true
+            compute_int(5), // 返回 25
+            compute_string("hello"), // 返回 "hello_processed"
+            compute_bool() // 返回 true
         );
-    
+
     std::cout << "整数结果: " << int_result << std::endl;
     std::cout << "字符串结果: " << str_result << std::endl;
     std::cout << "布尔结果: " << bool_result << std::endl;
@@ -185,12 +185,12 @@ Task<int> heavy_compute(int x) {
 Task<void> example_same_types() {
     // 并发执行多个相同类型的任务
     auto [r1, r2, r3, r4] = co_await when_all(
-        heavy_compute(10),  // 返回 110
-        heavy_compute(20),  // 返回 420
-        heavy_compute(30),  // 返回 930
-        heavy_compute(40)   // 返回 1640
+        heavy_compute(10), // 返回 110
+        heavy_compute(20), // 返回 420
+        heavy_compute(30), // 返回 930
+        heavy_compute(40) // 返回 1640
     );
-    
+
     std::cout << "结果: " << r1 << ", " << r2 << ", " << r3 << ", " << r4 << std::endl;
 }
 ```
@@ -216,7 +216,7 @@ Task<void> example_same_types() {
 - **内存高效**: 栈上分配，无动态内存分配
 - **适度并发**: 最优性能区间 2-10 个任务
 
-#### ⚠️ 重要限制：when_all 没有协程池
+#### ️ 重要限制：when_all 没有协程池
 
 **when_all 使用的是线程池，不是协程池！**
 
@@ -235,22 +235,22 @@ class WhenAllAwaiter {
 **对于大规模并发（如5000个任务），必须使用协程池：**
 
 ```cpp
-// ❌ 错误：when_all 无法处理大量任务
+// 错误：when_all 无法处理大量任务
 // auto result = co_await when_all(task1, task2, ..., task5000); // 编译失败！
 
-// ✅ 正确：使用协程池处理大量任务
+// 正确：使用协程池处理大量任务
 flowcoro::Task<void> handle_many_tasks() {
     const int TASK_COUNT = 5000;
     const int MAX_CONCURRENT = 50;
-    
+
     std::queue<int> task_queue;
     std::atomic<int> active_tasks{0};
-    
+
     // 填充任务队列
     for (int i = 0; i < TASK_COUNT; ++i) {
         task_queue.push(i);
     }
-    
+
     // 协程池管理
     while (!task_queue.empty() || active_tasks.load() > 0) {
         // 控制并发数
@@ -258,7 +258,7 @@ flowcoro::Task<void> handle_many_tasks() {
             int task_id = task_queue.front();
             task_queue.pop();
             active_tasks.fetch_add(1);
-            
+
             // 调度到协程池
             flowcoro::get_coroutine_manager().schedule_resume(
                 [task_id, &active_tasks]() -> flowcoro::Task<void> {
@@ -268,10 +268,10 @@ flowcoro::Task<void> handle_many_tasks() {
                 }().get_handle()
             );
         }
-        
+
         // 驱动协程执行
         flowcoro::drive_coroutines();
-        co_await flowcoro::Task<void>([](){ 
+        co_await flowcoro::Task<void>([](){
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         });
     }
@@ -291,8 +291,8 @@ Task<int> may_fail(int x) {
 Task<void> error_handling_example() {
     try {
         auto [r1, r2] = co_await when_all(
-            may_fail(10),   // 成功: 20
-            may_fail(-5)    // 抛出异常
+            may_fail(10), // 成功: 20
+            may_fail(-5) // 抛出异常
         );
         // 不会执行到这里
     } catch (const std::exception& e) {
@@ -327,17 +327,17 @@ class ThreadPool {
 public:
     explicit ThreadPool(size_t thread_count = std::thread::hardware_concurrency());
     ~ThreadPool();
-    
+
     // 提交任务
     template<typename F, typename... Args>
     auto submit(F&& f, Args&&... args) -> std::future<decltype(f(args...))>;
-    
+
     // 获取线程数
     size_t size() const noexcept;
-    
+
     // 关闭线程池
     void shutdown();
-    
+
 private:
     std::vector<std::thread> workers_;
     std::queue<std::function<void()>> tasks_;
@@ -375,17 +375,17 @@ class MemoryPool {
 public:
     MemoryPool(size_t block_size, size_t initial_blocks = 16);
     ~MemoryPool();
-    
+
     // 分配内存
     void* allocate();
-    
+
     // 释放内存
     void deallocate(void* ptr);
-    
+
     // 获取统计信息
     size_t allocated_blocks() const;
     size_t total_blocks() const;
-    
+
 private:
     size_t block_size_;
     std::vector<void*> free_blocks_;
@@ -401,16 +401,16 @@ template<typename T>
 class ObjectPool {
 public:
     explicit ObjectPool(size_t initial_size = 8);
-    
+
     // 获取对象
     std::unique_ptr<T> acquire();
-    
+
     // 释放对象
     void release(std::unique_ptr<T> obj);
-    
+
     // 预分配对象
     void reserve(size_t count);
-    
+
 private:
     std::stack<std::unique_ptr<T>> available_;
     std::mutex mutex_;
@@ -446,18 +446,18 @@ template<typename T>
 class LockfreeQueue {
 public:
     LockfreeQueue(size_t capacity = 1024);
-    
+
     // 入队操作
     bool enqueue(const T& item);
     bool enqueue(T&& item);
-    
+
     // 出队操作
     bool dequeue(T& item);
-    
+
     // 状态查询
     bool empty() const;
     size_t size() const;
-    
+
 private:
     std::atomic<Node*> head_;
     std::atomic<Node*> tail_;
@@ -472,17 +472,17 @@ template<typename T>
 class LockfreeStack {
 public:
     LockfreeStack();
-    
+
     // 入栈操作
     void push(const T& item);
     void push(T&& item);
-    
+
     // 出栈操作
     bool pop(T& item);
-    
+
     // 状态查询
     bool empty() const;
-    
+
 private:
     std::atomic<Node*> head_;
 };
@@ -523,17 +523,17 @@ while (stack.pop(item)) {
 class CoroutineManager {
 public:
     static CoroutineManager& get_instance();
-    
+
     // 调度协程
     void schedule(std::coroutine_handle<> handle);
-    
+
     // 驱动协程执行
     void drive();
-    
+
     // 获取统计信息
     size_t active_coroutines() const;
     size_t pending_coroutines() const;
-    
+
 private:
     std::queue<std::coroutine_handle<>> ready_queue_;
     std::mutex queue_mutex_;
@@ -576,7 +576,7 @@ void cleanup_coroutine_system();
 
 ---
 
-## 🎯 完整使用示例
+## 完整使用示例
 
 ### 基础协程应用
 
@@ -599,11 +599,11 @@ flowcoro::Task<int> complex_calculation() {
 int main() {
     // 初始化协程系统
     flowcoro::init_coroutine_system();
-    
+
     // 执行协程
     auto result = flowcoro::sync_wait(complex_calculation());
     std::cout << "计算结果: " << result << std::endl;
-    
+
     // 清理资源
     flowcoro::cleanup_coroutine_system();
     return 0;
@@ -618,17 +618,17 @@ int main() {
 int main() {
     // 创建内存池
     flowcoro::MemoryPool pool(1024, 16); // 1KB块，16个初始块
-    
+
     // 分配内存
     void* buffer1 = pool.allocate();
     void* buffer2 = pool.allocate();
-    
+
     // 使用内存...
-    
+
     // 释放内存
     pool.deallocate(buffer1);
     pool.deallocate(buffer2);
-    
+
     return 0;
 }
 ```
@@ -641,14 +641,14 @@ int main() {
 
 int main() {
     flowcoro::lockfree::Queue<int> queue;
-    
+
     // 生产者线程
     std::thread producer([&queue]() {
         for (int i = 0; i < 100; ++i) {
             queue.enqueue(i);
         }
     });
-    
+
     // 消费者线程
     std::thread consumer([&queue]() {
         int value;
@@ -660,7 +660,7 @@ int main() {
             }
         }
     });
-    
+
     producer.join();
     consumer.join();
     return 0;

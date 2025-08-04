@@ -40,20 +40,20 @@ show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  --build, -b        重新构建项目"
-    echo "  --clean, -c        清理构建目录"
-    echo "  --help, -h         显示此帮助信息"
+    echo " --build, -b 重新构建项目"
+    echo " --clean, -c 清理构建目录"
+    echo " --help, -h 显示此帮助信息"
     echo ""
     echo "测试模块:"
-    echo "  1. 核心功能测试    - 协程、线程池、内存管理"
-    echo "  2. 网络模块测试    - HTTP客户端、Socket、网络初始化"
-    echo "  3. 数据库模块测试  - 连接池、MySQL占位实现"
-    echo "  4. RPC模块测试     - JSON-RPC消息、客户端、服务器"
+    echo " 1. 核心功能测试 - 协程、线程池、内存管理"
+    echo " 2. 网络模块测试 - HTTP客户端、Socket、网络初始化"
+    echo " 3. 数据库模块测试 - 连接池、MySQL占位实现"
+    echo " 4. RPC模块测试 - JSON-RPC消息、客户端、服务器"
     echo ""
     echo "示例:"
-    echo "  $0                 # 运行完整测试套件"
-    echo "  $0 --build         # 重新构建并运行完整测试套件"
-    echo "  $0 --clean --build # 清理重建并运行完整测试套件"
+    echo " $0 # 运行完整测试套件"
+    echo " $0 --build # 重新构建并运行完整测试套件"
+    echo " $0 --clean --build # 清理重建并运行完整测试套件"
 }
 
 # 默认参数
@@ -122,18 +122,18 @@ if [[ "$BUILD" == true ]]; then
         print_error "无法切换到构建目录"
         exit 1
     }
-    
+
     cmake .. || {
         print_error "CMake 配置失败"
         exit 1
     }
-    
+
     print_info "构建项目..."
     make -j"$(nproc)" || {
         print_error "构建失败"
         exit 1
     }
-    
+
     print_success "项目构建完成"
     cd "$PROJECT_ROOT"
 fi
@@ -166,7 +166,7 @@ fi
 print_info "运行 FlowCoro 完整测试套件..."
 echo ""
 echo "========================================"
-echo "🧪 FlowCoro 完整测试套件开始"
+echo " FlowCoro 完整测试套件开始"
 echo "========================================"
 
 # 记录开始时间
@@ -182,10 +182,10 @@ print_info "1. 运行核心功能测试..."
 TOTAL_TESTS=$((TOTAL_TESTS + 1))
 if "$TEST_CORE"; then
     PASSED_TESTS=$((PASSED_TESTS + 1))
-    print_success "✅ 核心测试通过!"
+    print_success " 核心测试通过!"
 else
     FAILED_TESTS=$((FAILED_TESTS + 1))
-    print_error "❌ 核心测试失败!"
+    print_error " 核心测试失败!"
 fi
 echo ""
 
@@ -195,10 +195,10 @@ if [[ -f "$TEST_NETWORK" ]]; then
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     if "$TEST_NETWORK"; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
-        print_success "✅ 网络测试通过!"
+        print_success " 网络测试通过!"
     else
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        print_error "❌ 网络测试失败!"
+        print_error " 网络测试失败!"
     fi
     echo ""
 fi
@@ -209,10 +209,10 @@ if [[ -f "$TEST_DATABASE" ]]; then
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     if "$TEST_DATABASE"; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
-        print_success "✅ 数据库测试通过!"
+        print_success " 数据库测试通过!"
     else
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        print_error "❌ 数据库测试失败!"
+        print_error " 数据库测试失败!"
     fi
     echo ""
 fi
@@ -223,10 +223,10 @@ if [[ -f "$TEST_RPC" ]]; then
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     if "$TEST_RPC"; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
-        print_success "✅ RPC测试通过!"
+        print_success " RPC测试通过!"
     else
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        print_error "❌ RPC测试失败!"
+        print_error " RPC测试失败!"
     fi
     echo ""
 fi
@@ -245,18 +245,18 @@ DURATION=$((END_TIME - START_TIME))
 echo ""
 echo "========================================"
 if [[ $TEST_RESULT -eq 0 ]]; then
-    echo -e "🎉 ${GREEN}所有测试通过! ($PASSED_TESTS/$TOTAL_TESTS)${NC}"
+    echo -e " ${GREEN}所有测试通过! ($PASSED_TESTS/$TOTAL_TESTS)${NC}"
 else
-    echo -e "💥 ${RED}测试失败! ($PASSED_TESTS/$TOTAL_TESTS 通过, $FAILED_TESTS 失败)${NC}"
+    echo -e " ${RED}测试失败! ($PASSED_TESTS/$TOTAL_TESTS 通过, $FAILED_TESTS 失败)${NC}"
 fi
 echo "测试耗时: ${DURATION}秒"
 echo "========================================"
 
 # 显示项目状态
 print_info "项目状态:"
-echo "  - 版本: $(grep 'FLOWCORO_VERSION' include/flowcoro.hpp | head -1 | cut -d'"' -f2 2>/dev/null || echo '未知')"
-echo "  - 构建目录: $BUILD_DIR"
-echo "  - 测试模块数: $TOTAL_TESTS"
-echo "  - 通过/失败: $PASSED_TESTS/$FAILED_TESTS"
+echo " - 版本: $(grep 'FLOWCORO_VERSION' include/flowcoro.hpp | head -1 | cut -d'"' -f2 2>/dev/null || echo '未知')"
+echo " - 构建目录: $BUILD_DIR"
+echo " - 测试模块数: $TOTAL_TESTS"
+echo " - 通过/失败: $PASSED_TESTS/$FAILED_TESTS"
 
 exit $TEST_RESULT

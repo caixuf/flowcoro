@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # 项目信息
-project(FlowCoro 
+project(FlowCoro
     VERSION 4.0.0
     DESCRIPTION "Modern C++20 Coroutine Library - Streamlined Core Implementation"
     LANGUAGES CXX
@@ -44,7 +44,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /opt/homebrew/include
         PATH_SUFFIXES mysql
     )
-    
+
     find_library(MYSQL_LIBRARY
         NAMES mysqlclient mysql libmysql
         PATHS
@@ -53,7 +53,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /opt/homebrew/lib
         PATH_SUFFIXES mysql
     )
-    
+
     if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
         set(MYSQL_FOUND TRUE)
         message(STATUS "Found MySQL: ${MYSQL_LIBRARY}")
@@ -61,7 +61,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         set(MYSQL_FOUND FALSE)
         message(WARNING "MySQL not found, database examples will be disabled")
     endif()
-    
+
     # 查找Redis客户端库 (hiredis)
     find_path(HIREDIS_INCLUDE_DIR hiredis/hiredis.h
         PATHS
@@ -69,7 +69,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /usr/local/include
         /opt/homebrew/include
     )
-    
+
     find_library(HIREDIS_LIBRARY
         NAMES hiredis
         PATHS
@@ -77,7 +77,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /usr/local/lib
         /opt/homebrew/lib
     )
-    
+
     if(HIREDIS_INCLUDE_DIR AND HIREDIS_LIBRARY)
         set(HIREDIS_FOUND TRUE)
         message(STATUS "Found hiredis: ${HIREDIS_LIBRARY}")
@@ -85,7 +85,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         set(HIREDIS_FOUND FALSE)
         message(WARNING "hiredis not found, Redis examples will be disabled")
     endif()
-    
+
     # 查找JSON库 (jsoncpp)
     find_path(JSONCPP_INCLUDE_DIR json/json.h
         PATHS
@@ -94,7 +94,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /opt/homebrew/include
         PATH_SUFFIXES jsoncpp
     )
-    
+
     find_library(JSONCPP_LIBRARY
         NAMES jsoncpp
         PATHS
@@ -102,7 +102,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         /usr/local/lib
         /opt/homebrew/lib
     )
-    
+
     if(JSONCPP_INCLUDE_DIR AND JSONCPP_LIBRARY)
         set(JSONCPP_FOUND TRUE)
         message(STATUS "Found jsoncpp: ${JSONCPP_LIBRARY}")
@@ -148,12 +148,12 @@ target_compile_features(flowcoro INTERFACE cxx_std_20)
 target_compile_features(flowcoro_net PUBLIC cxx_std_20)
 
 # 链接系统库
-target_link_libraries(flowcoro INTERFACE 
+target_link_libraries(flowcoro INTERFACE
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
 )
 
-target_link_libraries(flowcoro_net PUBLIC 
+target_link_libraries(flowcoro_net PUBLIC
     flowcoro
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
@@ -318,14 +318,14 @@ include(CPack)
 
 message(STATUS "")
 message(STATUS "FlowCoro ${PROJECT_VERSION} Configuration Summary:")
-message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "  C++ standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "  Build tests: ${FLOWCORO_BUILD_TESTS}")
-message(STATUS "  Build examples: ${FLOWCORO_BUILD_EXAMPLES}")
-message(STATUS "  Build benchmarks: ${FLOWCORO_BUILD_BENCHMARKS}")
-message(STATUS "  Build docs: ${FLOWCORO_BUILD_DOCS}")
-message(STATUS "  Build V3 architecture: ${FLOWCORO_BUILD_V3}")
-message(STATUS "  Enable sanitizers: ${FLOWCORO_ENABLE_SANITIZERS}")
-message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS " Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS " C++ standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS " Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS " Build tests: ${FLOWCORO_BUILD_TESTS}")
+message(STATUS " Build examples: ${FLOWCORO_BUILD_EXAMPLES}")
+message(STATUS " Build benchmarks: ${FLOWCORO_BUILD_BENCHMARKS}")
+message(STATUS " Build docs: ${FLOWCORO_BUILD_DOCS}")
+message(STATUS " Build V3 architecture: ${FLOWCORO_BUILD_V3}")
+message(STATUS " Enable sanitizers: ${FLOWCORO_ENABLE_SANITIZERS}")
+message(STATUS " Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")

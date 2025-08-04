@@ -5,7 +5,7 @@
 ## 快速开始
 
 ### 环境要求
-- Go 1.20+ 
+- Go 1.20+
 - Rust 1.70+ (with Cargo)
 - FlowCoro已编译完成
 
@@ -13,15 +13,15 @@
 
 ```bash
 # 1. 编译所有测试程序
-make -C ../build -j$(nproc)              # 编译FlowCoro
+make -C ../build -j$(nproc) # 编译FlowCoro
 go build -o go_benchmark go_benchmark.go # 编译Go版本
-cargo build --release                    # 编译Rust版本
+cargo build --release # 编译Rust版本
 
 # 2. 运行10,000并发任务对比测试
 echo "=== FlowCoro测试 ==="
 ../build/examples/hello_world_concurrent coroutine 10000
 
-echo "=== Go测试 ==="  
+echo "=== Go测试 ==="
 ./go_benchmark 10000
 
 echo "=== Rust测试 ==="
@@ -38,7 +38,7 @@ echo "=== Rust测试 ==="
 
 ### 预期结果 (16核Linux)
 - **FlowCoro**: 2ms, 5,000,000 req/sec
-- **Go**: 4ms, 2,500,000 req/sec  
+- **Go**: 4ms, 2,500,000 req/sec
 - **Rust**: 6ms, 1,666,666 req/sec
 
 ## 测试设计

@@ -17,7 +17,7 @@ public:
         // 初始化libcurl
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
-    
+
     ~HttpRequest() override {
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -30,7 +30,7 @@ public:
         // 清理libcurl
         curl_global_cleanup();
     }
-    
+
     void request(const std::string& url, const std::function<void(const std::string&)>& callback) override {
         // 创建新的CURL句柄
         CURL* curl = curl_easy_init();
@@ -38,7 +38,7 @@ public:
             // 错误处理
             return;
         }
-        
+
         // 添加到请求队列
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -46,20 +46,20 @@ public:
         }
         queue_condition_.notify_one();
     }
-    
+
 private:
     struct RequestInfo {
         std::string url;
         CURL* curl;
         std::function<void(const std::string&)> callback;
     };
-    
+
     std::thread worker_thread_;
     std::mutex queue_mutex_;
     std::queue<RequestInfo> requests_queue_;
     std::condition_variable queue_condition_;
     bool stop_worker_thread_ = false;
-    
+
     // 工作线程函数
     void worker_thread_func() {
         while (true) {
@@ -69,11 +69,11 @@ private:
                 queue_condition_.wait(lock, [this] {
                     return stop_worker_thread_ || !requests_queue_.empty();
                 });
-                
+
                 if (stop_worker_thread_ && requests_queue_.empty()) {
                     break;
                 }
-                
+
                 if (!requests_queue_.empty()) {
                     request = requests_queue_.front();
                     requests_queue_.pop();
@@ -81,30 +81,30 @@ private:
                     continue;
                 }
             }
-            
+
             // 执行网络请求
             ResponseData response_data;
             curl_easy_setopt(request.curl, CURLOPT_URL, request.url.c_str());
             curl_easy_setopt(request.curl, CURLOPT_WRITEFUNCTION, write_callback);
             curl_easy_setopt(request.curl, CURLOPT_WRITEDATA, &response_data);
-            
+
             CURLcode res = curl_easy_perform(request.curl);
-            
+
             // 处理响应
             if (res == CURLE_OK && request.callback) {
                 request.callback(response_data.data);
             }
-            
+
             // 清理
             curl_easy_cleanup(request.curl);
         }
     }
-    
+
     struct ResponseData {
         std::string data;
         size_t total_size = 0;
     };
-    
+
     // libcurl写回调函数
     static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
         size_t realsize = size * nmemb;

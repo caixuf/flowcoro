@@ -15,7 +15,7 @@ struct SimpleRpcMessage {
     std::string params;
     std::string result;
     std::string error;
-    
+
     std::string to_json() const {
         std::ostringstream oss;
         oss << "{\"id\":\"" << id << "\",\"method\":\"" << method << "\"";
@@ -34,25 +34,25 @@ using SimpleRpcHandler = std::function<std::string(const std::string&)>;
 class LightRpcServer {
 private:
     std::unordered_map<std::string, SimpleRpcHandler> handlers_;
-    
+
 public:
     void register_method(const std::string& name, SimpleRpcHandler handler) {
         handlers_[name] = handler;
     }
-    
+
     std::string handle_request(const std::string& method, const std::string& params) {
         auto it = handlers_.find(method);
         if (it == handlers_.end()) {
             return "{\"error\":\"Method not found\"}";
         }
-        
+
         try {
             return it->second(params);
         } catch (const std::exception& e) {
             return "{\"error\":\"" + std::string(e.what()) + "\"}";
         }
     }
-    
+
     std::vector<std::string> list_methods() const {
         std::vector<std::string> methods;
         for (const auto& [method, _] : handlers_) {

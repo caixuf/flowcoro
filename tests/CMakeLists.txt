@@ -29,25 +29,25 @@ add_executable(test_database test_database.cpp)
 add_executable(test_rpc test_rpc.cpp)
 
 # 链接库
-target_link_libraries(test_core 
+target_link_libraries(test_core
     flowcoro_net
     Threads::Threads
 )
 
 # 网络模块测试链接库
-target_link_libraries(test_network 
+target_link_libraries(test_network
     flowcoro_net
     Threads::Threads
 )
 
 # 数据库模块测试链接库
-target_link_libraries(test_database 
+target_link_libraries(test_database
     flowcoro_net
     Threads::Threads
 )
 
 # RPC模块测试链接库
-target_link_libraries(test_rpc 
+target_link_libraries(test_rpc
     flowcoro_net
     Threads::Threads
 )

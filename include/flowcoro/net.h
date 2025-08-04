@@ -4,7 +4,7 @@
  * @author FlowCoro Team
  * @version 2.1.0
  * @date 2025-07-10
- * 
+ *
  * 提供基于epoll/kqueue的高性能异步网络IO能力:
  * - 事件驱动的异步IO
  * - TCP客户端和服务器
@@ -70,7 +70,7 @@ private:
     std::atomic<bool> running_{false};
     std::unordered_map<int, std::unique_ptr<IoEventHandler>> handlers_;
     lockfree::Queue<std::function<void()>> pending_tasks_;
-    
+
     // 定时器支持
     struct TimerEvent {
         std::chrono::steady_clock::time_point when;
@@ -85,22 +85,22 @@ private:
 public:
     EventLoop();
     ~EventLoop();
-    
+
     // 禁止拷贝
     EventLoop(const EventLoop&) = delete;
     EventLoop& operator=(const EventLoop&) = delete;
-    
+
     /**
      * @brief 启动事件循环
      * @return 协程任务
      */
     Task<void> run();
-    
+
     /**
      * @brief 停止事件循环
      */
     void stop();
-    
+
     /**
      * @brief 添加文件描述符到事件循环
      * @param fd 文件描述符
@@ -108,33 +108,33 @@ public:
      * @param handler 事件处理器
      */
     void add_fd(int fd, uint32_t events, std::unique_ptr<IoEventHandler> handler);
-    
+
     /**
      * @brief 修改文件描述符的事件
      * @param fd 文件描述符
      * @param events 新的事件类型
      */
     void modify_fd(int fd, uint32_t events);
-    
+
     /**
      * @brief 从事件循环中移除文件描述符
      * @param fd 文件描述符
      */
     void remove_fd(int fd);
-    
+
     /**
      * @brief 在事件循环中执行任务
      * @param task 要执行的任务
      */
     void post_task(std::function<void()> task);
-    
+
     /**
      * @brief 定时执行任务
      * @param delay 延迟时间
      * @param callback 回调函数
      */
     void schedule_timer(std::chrono::milliseconds delay, std::function<void()> callback);
-    
+
     /**
      * @brief 检查是否在运行
      * @return 是否运行中
@@ -156,18 +156,18 @@ private:
     int fd_{-1};
     EventLoop* loop_{nullptr};
     bool connected_{false};
-    
+
 public:
     explicit Socket(EventLoop* loop);
     Socket(int fd, EventLoop* loop);
     ~Socket();
-    
+
     // 禁止拷贝，允许移动
     Socket(const Socket&) = delete;
     Socket& operator=(const Socket&) = delete;
     Socket(Socket&& other) noexcept;
     Socket& operator=(Socket&& other) noexcept;
-    
+
     /**
      * @brief 连接到远程地址
      * @param host 主机地址
@@ -175,7 +175,7 @@ public:
      * @return 协程任务
      */
     Task<void> connect(const std::string& host, uint16_t port);
-    
+
     /**
      * @brief 绑定到本地地址
      * @param host 本地地址
@@ -183,20 +183,20 @@ public:
      * @return 是否成功
      */
     bool bind(const std::string& host, uint16_t port);
-    
+
     /**
      * @brief 开始监听连接
      * @param backlog 连接队列大小
      * @return 是否成功
      */
     bool listen(int backlog = 128);
-    
+
     /**
      * @brief 接受新连接
      * @return 新连接的Socket
      */
     Task<std::unique_ptr<Socket>> accept();
-    
+
     /**
      * @brief 异步读取数据
      * @param buffer 缓冲区
@@ -204,7 +204,7 @@ public:
      * @return 实际读取的字节数
      */
     Task<ssize_t> read(char* buffer, size_t size);
-    
+
     /**
      * @brief 异步写入数据
      * @param data 要写入的数据
@@ -212,44 +212,44 @@ public:
      * @return 实际写入的字节数
      */
     Task<ssize_t> write(const char* data, size_t size);
-    
+
     /**
      * @brief 读取一行数据（以\n结尾）
      * @return 读取的字符串
      */
     Task<std::string> read_line();
-    
+
     /**
      * @brief 读取指定长度的数据
      * @param size 要读取的字节数
      * @return 读取的数据
      */
     Task<std::string> read_exactly(size_t size);
-    
+
     /**
      * @brief 写入字符串
      * @param data 要写入的字符串
      * @return 写入的字节数
      */
     Task<size_t> write_string(const std::string& data);
-    
+
     /**
      * @brief 关闭Socket
      */
     void close();
-    
+
     /**
      * @brief 获取文件描述符
      * @return 文件描述符
      */
     int fd() const { return fd_; }
-    
+
     /**
      * @brief 检查是否已连接
      * @return 是否已连接
      */
     bool is_connected() const { return connected_; }
-    
+
     /**
      * @brief 设置Socket选项
      * @param option 选项名
@@ -272,11 +272,11 @@ private:
     std::unique_ptr<Socket> listen_socket_;
     std::function<Task<void>(std::unique_ptr<Socket>)> connection_handler_;
     std::atomic<bool> running_{false};
-    
+
 public:
     explicit TcpServer(EventLoop* loop);
     ~TcpServer();
-    
+
     /**
      * @brief 设置连接处理器
      * @param handler 连接处理函数
@@ -285,7 +285,7 @@ public:
     void set_connection_handler(Handler&& handler) {
         connection_handler_ = std::forward<Handler>(handler);
     }
-    
+
     /**
      * @brief 开始监听
      * @param host 监听地址
@@ -293,12 +293,12 @@ public:
      * @return 协程任务
      */
     Task<void> listen(const std::string& host, uint16_t port);
-    
+
     /**
      * @brief 停止服务器
      */
     void stop();
-    
+
     /**
      * @brief 检查是否在运行
      * @return 是否运行中
@@ -319,48 +319,48 @@ private:
     std::string read_buffer_;
     std::string write_buffer_;
     bool closed_{false};
-    
+
 public:
     explicit TcpConnection(std::unique_ptr<Socket> socket);
     ~TcpConnection();
-    
+
     /**
      * @brief 读取一行
      * @return 读取的字符串
      */
     Task<std::string> read_line();
-    
+
     /**
      * @brief 读取指定长度数据
      * @param size 要读取的字节数
      * @return 读取的数据
      */
     Task<std::string> read(size_t size);
-    
+
     /**
      * @brief 写入数据
      * @param data 要写入的数据
      * @return 协程任务
      */
     Task<void> write(const std::string& data);
-    
+
     /**
      * @brief 刷新写缓冲区
      * @return 协程任务
      */
     Task<void> flush();
-    
+
     /**
      * @brief 关闭连接
      */
     void close();
-    
+
     /**
      * @brief 检查连接是否关闭
      * @return 是否已关闭
      */
     bool is_closed() const { return closed_; }
-    
+
     /**
      * @brief 获取底层Socket
      * @return Socket指针
@@ -373,19 +373,19 @@ class GlobalEventLoop {
 private:
     static std::unique_ptr<EventLoop> instance_;
     static std::once_flag init_flag_;
-    
+
 public:
     static void initialize() {
         std::call_once(init_flag_, []() {
             instance_ = std::make_unique<EventLoop>();
         });
     }
-    
+
     static EventLoop& get() {
         initialize();
         return *instance_;
     }
-    
+
     static void shutdown() {
         if (instance_) {
             instance_->stop();

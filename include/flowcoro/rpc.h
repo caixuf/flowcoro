@@ -13,13 +13,13 @@ namespace flowcoro::rpc {
 
 // RPC消息结构
 struct RpcMessage {
-    std::string id;           // 请求ID
-    std::string method;       // 方法名
-    std::string params;       // 参数（JSON格式）
-    std::string result;       // 结果（JSON格式）
-    std::string error;        // 错误信息
-    bool is_request = true;   // 是否为请求
-    
+    std::string id; // 请求ID
+    std::string method; // 方法名
+    std::string params; // 参数（JSON格式）
+    std::string result; // 结果（JSON格式）
+    std::string error; // 错误信息
+    bool is_request = true; // 是否为请求
+
     // 序列化为JSON
     std::string to_json() const {
         std::ostringstream oss;
@@ -39,11 +39,11 @@ struct RpcMessage {
         oss << "}";
         return oss.str();
     }
-    
+
     // 从JSON反序列化（简化版本）
     static RpcMessage from_json(const std::string& json) {
         RpcMessage msg;
-        
+
         // 简单JSON解析（实际项目中应使用专业JSON库）
         auto extract_field = [&json](const std::string& field) -> std::string {
             std::string pattern = "\"" + field + "\":\"";
@@ -54,11 +54,11 @@ struct RpcMessage {
             if (end == std::string::npos) return "";
             return json.substr(start, end - start);
         };
-        
+
         msg.id = extract_field("id");
         msg.method = extract_field("method");
         msg.error = extract_field("error");
-        
+
         // 提取params和result（可能不是字符串）
         size_t params_pos = json.find("\"params\":");
         if (params_pos != std::string::npos) {
@@ -69,9 +69,9 @@ struct RpcMessage {
                 msg.params = json.substr(params_pos, comma_pos - params_pos);
             }
         }
-        
+
         msg.is_request = json.find("\"is_request\":true") != std::string::npos;
-        
+
         return msg;
     }
 };
@@ -88,7 +88,7 @@ private:
 
 public:
     RpcClient(const std::string& server_url) : server_url_(server_url) {}
-    
+
     // 远程方法调用 - 修复编译器内部错误
     Task<std::string> call(const std::string& method, const std::string& params = "{}") {
         RpcMessage request;
@@ -96,47 +96,47 @@ public:
         request.method = method;
         request.params = params;
         request.is_request = true;
-        
+
         std::string json_data = request.to_json();
-        
+
         // 分步构建请求，避免复杂的临时对象
         std::string url = server_url_ + "/rpc";
         std::unordered_map<std::string, std::string> headers;
         headers["Content-Type"] = "application/json";
-        
+
         auto response = co_await http_client_.post(url, json_data, headers);
-        
+
         if (!response.success) {
             std::string error_msg = "{\"error\":\"Network error: " + response.error_message + "\"}";
             co_return error_msg;
         }
-        
+
         auto rpc_response = RpcMessage::from_json(response.body);
         if (!rpc_response.error.empty()) {
             std::string error_msg = "{\"error\":\"" + rpc_response.error + "\"}";
             co_return error_msg;
         }
-        
+
         co_return rpc_response.result;
     }
-    
+
     // 异步批量调用
     Task<std::vector<std::string>> batch_call(
         const std::vector<std::pair<std::string, std::string>>& calls
     ) {
         std::vector<Task<std::string>> tasks;
-        
+
         for (const auto& [method, params] : calls) {
             tasks.push_back(call(method, params));
         }
-        
+
         std::vector<std::string> results;
         results.reserve(tasks.size());
-        
+
         for (auto& task : tasks) {
             results.push_back(co_await task);
         }
-        
+
         co_return results;
     }
 };
@@ -150,40 +150,40 @@ private:
 
 public:
     RpcServer(int port) : port_(port) {}
-    
+
     // 注册RPC方法
     void register_method(const std::string& method_name, RpcHandler handler) {
         handlers_[method_name] = std::move(handler);
     }
-    
+
     // 处理RPC请求
     Task<std::string> handle_request(const std::string& json_data) {
         auto request = RpcMessage::from_json(json_data);
-        
+
         RpcMessage response;
         response.id = request.id;
         response.is_request = false;
-        
+
         auto handler_it = handlers_.find(request.method);
         if (handler_it == handlers_.end()) {
             response.error = "Method not found: " + request.method;
             co_return response.to_json();
         }
-        
+
         try {
             response.result = co_await handler_it->second(request.params);
         } catch (const std::exception& e) {
             response.error = std::string("Handler error: ") + e.what();
         }
-        
+
         co_return response.to_json();
     }
-    
+
     // 启动服务器（简化版本，实际需要TCP服务器）
     Task<void> start() {
         running_ = true;
-        std::cout << "🚀 RPC Server started on port " << port_ << std::endl;
-        
+        std::cout << " RPC Server started on port " << port_ << std::endl;
+
         // 这里需要实现TCP服务器监听
         // 为了演示，我们只是标记为运行状态
         while (running_) {
@@ -193,21 +193,21 @@ public:
         }
         co_return;
     }
-    
+
     void stop() {
         running_ = false;
-        std::cout << "🛑 RPC Server stopped" << std::endl;
+        std::cout << " RPC Server stopped" << std::endl;
     }
-    
+
     // 获取已注册方法列表
     std::vector<std::string> list_methods() const {
         std::vector<std::string> methods;
         methods.reserve(handlers_.size());
-        
+
         for (const auto& [method, _] : handlers_) {
             methods.push_back(method);
         }
-        
+
         return methods;
     }
 };
@@ -226,7 +226,7 @@ private:
 
 public:
     explicit RpcProxy(RpcClient& client) : client_(client) {}
-    
+
     // 通过模板和概念可以实现类型安全的远程调用
     // 这里简化为基本版本
     Task<std::string> invoke(const std::string& method, const std::string& params = "{}") {

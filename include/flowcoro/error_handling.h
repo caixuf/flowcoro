@@ -25,10 +25,10 @@ struct ErrorInfo {
     std::string message;
     std::string file;
     int line;
-    
+
     ErrorInfo(FlowCoroError c, std::string msg, std::string f = "", int l = 0)
         : code(c), message(std::move(msg)), file(std::move(f)), line(l) {}
-        
+
     std::string to_string() const {
         std::string result = "FlowCoroError::" + error_code_to_string(code) + ": " + message;
         if (!file.empty()) {
@@ -36,7 +36,7 @@ struct ErrorInfo {
         }
         return result;
     }
-    
+
 private:
     std::string error_code_to_string(FlowCoroError code) const {
         switch (code) {

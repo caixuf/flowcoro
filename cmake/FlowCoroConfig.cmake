@@ -18,7 +18,7 @@ set(FLOWCORO_ENABLE_MEMORY_POOLS_DEFAULT ON)
 ## 性能配置
 
 # 默认线程池大小
-set(FLOWCORO_DEFAULT_THREAD_COUNT 0)  # 0 = hardware_concurrency
+set(FLOWCORO_DEFAULT_THREAD_COUNT 0) # 0 = hardware_concurrency
 
 # 缓冲区大小配置
 set(FLOWCORO_DEFAULT_LOG_BUFFER_SIZE 4096)

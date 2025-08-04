@@ -9,7 +9,7 @@
  * @author FlowCoro Team
  * @version 2.2.0
  * @date 2025-07-22
- * 
+ *
  * FlowCoro是一个基于C++20协程的现代异步编程库，提供：
  * - 高性能无锁协程调度
  * - 增强的Task生命周期管理
@@ -18,7 +18,7 @@
  * - 异步网络请求支持
  * - 高性能日志系统
  * - 内存池和对象池
- * 
+ *
  * v2.2.0更新：
  * - 完全重构的Task<T>生命周期管理
  * - 原子状态管理 (is_cancelled_, is_destroyed_)
@@ -49,7 +49,7 @@
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 
-// #include "flowcoro/rpc.h"  // 暂时注释掉复杂的RPC实现
+// #include "flowcoro/rpc.h" // 暂时注释掉复杂的RPC实现
 
 /**
  * @namespace flowcoro
@@ -106,7 +106,7 @@ struct RuntimeStats {
         size_t cancelled_tasks;
         size_t destroyed_tasks;
         double avg_lifetime_ms;
-    } task_lifecycle;  // 新增：Task生命周期统计
+    } task_lifecycle; // 新增：Task生命周期统计
 };
 
 /**

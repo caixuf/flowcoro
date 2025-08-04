@@ -9,7 +9,7 @@
 
 namespace flowcoro {
 
-// GlobalLogger 静态成员定义  
+// GlobalLogger 静态成员定义
 std::unique_ptr<Logger> GlobalLogger::instance_;
 std::once_flag GlobalLogger::init_flag_;
 
