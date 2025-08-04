@@ -1976,25 +1976,31 @@ inline void start_coroutine_manager() {
     
     std::cout << "FlowCoro: Coroutine manager started with ioManager-style architecture" << std::endl;
 }
-// 修复when_all - 使用索引顺序执行，完全模拟for循环
+
+// 修复when_all - 使用参数展开支持任意数量的task
 template<typename... Tasks>
 Task<std::tuple<decltype(std::declval<Tasks>().get())...>> when_all(Tasks&&... tasks) {
-    // 将tasks打包成tuple
-    auto task_tuple = std::make_tuple(std::forward<Tasks>(tasks)...);
+    // 使用fold expression和参数展开
+    auto execute_all = []<typename... Ts>(Ts&&... ts) -> Task<std::tuple<decltype(ts.get())...>> {
+        // 创建一个tuple来存储所有结果
+        std::tuple<decltype(ts.get())...> results;
+        
+        // 使用索引展开来逐个等待每个task
+        auto await_task = [&]<std::size_t... Is>(std::index_sequence<Is...>) -> Task<void> {
+            // 使用fold expression按顺序等待所有task
+            ((std::get<Is>(results) = co_await std::forward<Ts>(ts)), ...);
+            co_return;
+        };
+        
+        // 等待所有task完成
+        co_await await_task(std::index_sequence_for<Ts...>{});
+        
+        // 返回所有结果
+        co_return std::move(results);
+    };
     
-    // 顺序执行每个task，就像for循环一样
-    auto result0 = co_await std::get<0>(task_tuple);
-    if constexpr (sizeof...(tasks) == 1) {
-        co_return std::make_tuple(std::move(result0));
-    } else if constexpr (sizeof...(tasks) == 2) {
-        auto result1 = co_await std::get<1>(task_tuple);
-        co_return std::make_tuple(std::move(result0), std::move(result1));
-    } else if constexpr (sizeof...(tasks) == 3) {
-        auto result1 = co_await std::get<1>(task_tuple);
-        auto result2 = co_await std::get<2>(task_tuple);
-        co_return std::make_tuple(std::move(result0), std::move(result1), std::move(result2));
-    }
-    // 可以继续扩展更多数量...
+    // 调用执行函数
+    co_return co_await execute_all(std::forward<Tasks>(tasks)...);
 }
 
 // 同步等待协程完成的函数
