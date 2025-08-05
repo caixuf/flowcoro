@@ -27,13 +27,13 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
     let start_time = Instant::now();
     let initial_memory = get_memory_usage_kb();
     
-    println!("🦀 Rust Tokio方式：处理 {} 个并发请求", request_count);
-    println!("💾 初始内存: {} KB (估算)", initial_memory);
-    println!("🧵 CPU核心数: {}", num_cpus::get());
+    println!("Rust Tokio方式：处理 {} 个并发请求", request_count);
+    println!("初始内存: {} KB (估算)", initial_memory);
+    println!("CPU核心数: {}", num_cpus::get());
     println!("⏰ 开始时间: [{}]", get_current_time());
     println!("{}", "-".repeat(50));
     
-    println!("📝 同时启动 {} 个async任务...", request_count);
+    println!("同时启动 {} 个async任务...", request_count);
     
     let completed = Arc::new(AtomicUsize::new(0));
     let mut join_set = JoinSet::new();
@@ -46,7 +46,7 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
             
             let current_completed = completed_clone.fetch_add(1, Ordering::Relaxed) + 1;
             if current_completed % (request_count / 10).max(1) == 0 || current_completed == request_count {
-                println!("✅ 已完成 {}/{} 个任务 ({}%)", 
+                println!("已完成 {}/{} 个任务 ({}%)", 
                     current_completed, request_count, (current_completed * 100) / request_count);
             }
             
@@ -69,29 +69,29 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
     let memory_delta = final_memory.saturating_sub(initial_memory);
     
     println!("{}", "-".repeat(50));
-    println!("🦀 Rust Tokio方式完成！");
-    println!("   📊 总请求数: {} 个", request_count);
+    println!("Rust Tokio方式完成！");
+    println!("   总请求数: {} 个", request_count);
     println!("   ⏱️  总耗时: {} ms", duration.as_millis());
     
     if request_count > 0 {
-        println!("   📈 平均耗时: {:.4} ms/请求", 
+        println!("   平均耗时: {:.4} ms/请求", 
             duration.as_nanos() as f64 / request_count as f64 / 1_000_000.0);
     }
     
     if duration.as_millis() > 0 {
-        println!("   🎯 吞吐量: {} 请求/秒", 
+        println!("   吞吐量: {} 请求/秒", 
             (request_count as u128 * 1000) / duration.as_millis());
     }
     
-    println!("   💾 内存变化: {} KB → {} KB (增加 {} KB)", 
+    println!("   内存变化: {} KB → {} KB (增加 {} KB)", 
         initial_memory, final_memory, memory_delta);
     
     if request_count > 0 {
-        println!("   📊 单请求内存: {} bytes/请求", (memory_delta * 1024) / request_count);
+        println!("   单请求内存: {} bytes/请求", (memory_delta * 1024) / request_count);
     }
     
-    println!("   🦀 Task总数: {} 个", request_count);
-    println!("   🌟 并发策略: Tokio异步运行时");
+    println!("   Task总数: {} 个", request_count);
+    println!("   并发策略: Tokio异步运行时");
     println!("   ⏰ 程序结束: [{}]", get_current_time());
 }
 
@@ -106,7 +106,7 @@ async fn main() {
     let request_count: usize = args[1].parse().unwrap_or(0);
     
     println!("========================================");
-    println!("🎯 Rust Tokio 高并发性能测试");
+    println!("Rust Tokio 高并发性能测试");
     println!("========================================");
     println!("请求数量: {} 个", request_count);
     println!("每个请求模拟0ms处理时间 (纯调度测试)");

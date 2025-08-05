@@ -23,13 +23,13 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 	startTime := time.Now()
 	initialMemory := getMemoryUsageKB()
 	
-	fmt.Printf("🧵 Go Goroutine方式：处理 %d 个并发请求\n", requestCount)
-	fmt.Printf("💾 初始内存: %d KB\n", initialMemory)
-	fmt.Printf("🧵 CPU核心数: %d\n", runtime.NumCPU())
+	fmt.Printf("Go Goroutine方式：处理 %d 个并发请求\n", requestCount)
+	fmt.Printf("初始内存: %d KB\n", initialMemory)
+	fmt.Printf("CPU核心数: %d\n", runtime.NumCPU())
 	fmt.Printf("⏰ 开始时间: [%s]\n", getCurrentTime())
 	fmt.Println(string(make([]byte, 50, 50)[0:50]) + "")
 	
-	fmt.Printf("📝 同时启动 %d 个goroutine...\n", requestCount)
+	fmt.Printf("同时启动 %d 个goroutine...\n", requestCount)
 	
 	var wg sync.WaitGroup
 	completed := make(chan int, requestCount)
@@ -56,7 +56,7 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 		for range completed {
 			completedCount++
 			if completedCount%(requestCount/10) == 0 || completedCount == requestCount {
-				fmt.Printf("✅ 已完成 %d/%d 个goroutine (%d%%)\n", 
+				fmt.Printf("已完成 %d/%d 个goroutine (%d%%)\n", 
 					completedCount, requestCount, (completedCount*100)/requestCount)
 			}
 		}
@@ -75,27 +75,27 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 	}
 	
 	fmt.Println(string(make([]byte, 50, 50)[0:50]) + "")
-	fmt.Printf("🧵 Go Goroutine方式完成！\n")
-	fmt.Printf("   📊 总请求数: %d 个\n", requestCount)
+	fmt.Printf("Go Goroutine方式完成！\n")
+	fmt.Printf("   总请求数: %d 个\n", requestCount)
 	fmt.Printf("   ⏱️  总耗时: %d ms\n", duration.Milliseconds())
 	
 	if requestCount > 0 {
-		fmt.Printf("   📈 平均耗时: %.4f ms/请求\n", float64(duration.Nanoseconds())/float64(requestCount)/1000000.0)
+		fmt.Printf("   平均耗时: %.4f ms/请求\n", float64(duration.Nanoseconds())/float64(requestCount)/1000000.0)
 	}
 	
 	if duration.Milliseconds() > 0 {
-		fmt.Printf("   🎯 吞吐量: %d 请求/秒\n", (requestCount*1000)/int(duration.Milliseconds()))
+		fmt.Printf("   吞吐量: %d 请求/秒\n", (requestCount*1000)/int(duration.Milliseconds()))
 	}
 	
-	fmt.Printf("   💾 内存变化: %d KB → %d KB (增加 %d KB)\n", 
+	fmt.Printf("   内存变化: %d KB → %d KB (增加 %d KB)\n", 
 		initialMemory, finalMemory, memoryDelta)
 	
 	if requestCount > 0 {
-		fmt.Printf("   📊 单请求内存: %d bytes/请求\n", (memoryDelta*1024)/requestCount)
+		fmt.Printf("   单请求内存: %d bytes/请求\n", (memoryDelta*1024)/requestCount)
 	}
 	
-	fmt.Printf("   🧵 Goroutine总数: %d 个\n", requestCount)
-	fmt.Printf("   🌟 并发策略: Go M:N调度器\n")
+	fmt.Printf("   Goroutine总数: %d 个\n", requestCount)
+	fmt.Printf("   并发策略: Go M:N调度器\n")
 	fmt.Printf("   ⏰ 程序结束: [%s]\n", getCurrentTime())
 }
 
@@ -109,7 +109,7 @@ func main() {
 	fmt.Sscanf(os.Args[1], "%d", &requestCount)
 	
 	fmt.Println("========================================")
-	fmt.Println("🎯 Go Goroutine 高并发性能测试")
+	fmt.Println("Go Goroutine 高并发性能测试")
 	fmt.Println("========================================")
 	fmt.Printf("请求数量: %d 个\n", requestCount)
 	fmt.Println("每个请求模拟0ms处理时间 (纯调度测试)")
