@@ -161,10 +161,10 @@ Task<void> when_all_demo() {
 
 | 常见误解 | 实际情况 |
 |----------|----------|
-| ❌ when_all 提供并发机制 | ✅ when_all 只是语法糖 |
-| ❌ co_await 是串行等待 | ✅ co_await 等待已并发的任务 |
-| ❌ FlowCoro 有多种并发模式 | ✅ FlowCoro 只有一种并发方式 |
-| ❌ when_all 性能更高 | ✅ when_all 和 co_await 性能相同 |
+| when_all 提供并发机制 | when_all 只是语法糖 |
+| co_await 是串行等待 | co_await 等待已并发的任务 |
+| FlowCoro 有多种并发模式 | FlowCoro 只有一种并发方式 |
+| when_all 性能更高 | when_all 和 co_await 性能相同 |
 
 ---
 
@@ -248,7 +248,7 @@ T sync_wait(Task<T> task);
 #### 使用场景对比
 
 ```cpp
-// ✅ 正确：在main函数中使用sync_wait
+// 正确：在main函数中使用sync_wait
 int main() {
     flowcoro::enable_v2_features();
     
@@ -258,14 +258,14 @@ int main() {
     return 0;
 }
 
-// ❌ 错误：在协程中使用sync_wait（阻塞协程调度）
+// 错误：在协程中使用sync_wait（阻塞协程调度）
 Task<void> bad_example() {
     // 这会阻塞整个协程调度器！
     auto result = sync_wait(std::move(async_compute(21))); // 不要这样做
     co_return;
 }
 
-// ✅ 正确：在协程中使用co_await（异步非阻塞）
+// 正确：在协程中使用co_await（异步非阻塞）
 Task<void> good_example() {
     // 异步等待，不阻塞协程调度器
     auto result = co_await async_compute(21); // 异步执行
@@ -504,12 +504,12 @@ Task<void> timing_example() {
 
 // 与传统阻塞sleep的对比
 void traditional_blocking_sleep() {
-    // ❌ 阻塞整个线程，其他协程无法执行
+    //  阻塞整个线程，其他协程无法执行
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
 Task<void> coroutine_friendly_sleep() {
-    // ✅ 协程友好，其他协程可以继续执行
+    //  协程友好，其他协程可以继续执行
     co_await sleep_for(std::chrono::milliseconds(1000));
 }
 ```

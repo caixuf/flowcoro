@@ -8,7 +8,7 @@
 - **极高性能**：支持10000+并发任务，吞吐量达71万+请求/秒
 - **稳定性提升**：消除了跨线程协程恢复问题，彻底解决段错误问题
 
-### ✅ sleep_for 协程友好设计
+###  sleep_for 协程友好设计
 
 - **真正协程友好**：使用CoroutineManager的定时器系统，不阻塞线程
 - **非阻塞实现**：通过 `await_suspend` 挂起协程，等待定时器恢复
@@ -280,15 +280,15 @@ Task<UserSession> user_login_scenario(const std::string& username, const std::st
 
 | 常见误解 | 实际情况 |
 |----------|----------|
-| ❌ when_all提供不同的并发机制 | ✅ when_all只是co_await的语法糖 |
-| ❌ co_await是串行执行 | ✅ co_await等待已并发的任务 |
-| ❌ FlowCoro有多种并发模式 | ✅ FlowCoro只有任务启动时的并发 |
-| ❌ when_all性能更高 | ✅ when_all和手动co_await性能相同 |
+|  when_all提供不同的并发机制 |  when_all只是co_await的语法糖 |
+|  co_await是串行执行 |  co_await等待已并发的任务 |
+|  FlowCoro有多种并发模式 |  FlowCoro只有任务启动时的并发 |
+|  when_all性能更高 |  when_all和手动co_await性能相同 |
 
 #### 内存和性能优化
 
 ```cpp
-// ✅ 推荐：预分配容器，避免co_await后的内存分配
+//  推荐：预分配容器，避免co_await后的内存分配
 Task<std::vector<std::string>> optimized_batch_processing(int count) {
     std::vector<Task<std::string>> tasks;
     tasks.reserve(count); // 预分配，避免动态扩展
@@ -307,7 +307,7 @@ Task<std::vector<std::string>> optimized_batch_processing(int count) {
     co_return batch_results;
 }
 
-// ❌ 不推荐：co_await后进行内存分配
+//  不推荐：co_await后进行内存分配
 Task<void> inefficient_processing() {
     auto result = co_await some_task();
     
@@ -381,20 +381,20 @@ Task<void> timing_example() {
 #### sync_wait vs co_await 使用指南
 
 ```cpp
-// ✅ 正确：在main函数中使用sync_wait
+//  正确：在main函数中使用sync_wait
 int main() {
     flowcoro::enable_v2_features();
     auto result = sync_wait(my_async_task()); // 阻塞主线程直到完成
     return 0;
 }
 
-// ❌ 错误：在协程中使用sync_wait
+//  错误：在协程中使用sync_wait
 Task<void> wrong_way() {
     auto result = sync_wait(other_task()); // 阻塞整个协程调度器！
     co_return;
 }
 
-// ✅ 正确：在协程中使用co_await
+//  正确：在协程中使用co_await
 Task<void> right_way() {
     auto result = co_await other_task(); // 异步等待，不阻塞调度器
     co_return;
@@ -455,10 +455,10 @@ for (auto& task : tasks) {
 
 ### 避免的用法
 
-1. **❌ 在协程中使用sync_wait**: 会阻塞整个协程调度器
-2. **❌ 在协程外使用co_await**: 只能在协程函数内使用
-3. **❌ 忘记co_return**: 协程函数必须有返回语句
-4. **❌ 手动管理协程池**: 除非有特殊性能需求
+1. ** 在协程中使用sync_wait**: 会阻塞整个协程调度器
+2. ** 在协程外使用co_await**: 只能在协程函数内使用
+3. ** 忘记co_return**: 协程函数必须有返回语句
+4. ** 手动管理协程池**: 除非有特殊性能需求
 5. **️ when_all 使用限制**:
    - 不能直接用于 `std::vector<Task<T>>`（动态数量任务）
    - 适合 2-10 个固定数量任务

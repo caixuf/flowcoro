@@ -34,7 +34,7 @@ FlowCoro是一个基于C++20的协程库，设计理念是"少即是多"。通�
 
 ### 并发机制性能
 
-#### co_await 链式并发（唯一并发方式）
+#### Task 创建时并发（唯一并发方式）
 - **启动延迟**: 0.1μs (微秒级)
 - **内存开销**: 每协程 80 bytes
 - **适用场景**: 所有异步编程场景
@@ -109,14 +109,14 @@ make -j$(nproc)
 ### 基础示例
 
 ```cpp
-// 基础示例：两种并发方式对比
+// 基础示例：任务创建时并发执行
 #include <flowcoro.hpp>
 
-// 方式1：co_await 串行等待（但内部并发）
+// 方式1：co_await 逐个等待（但任务已在并发执行）
 Task<void> sequential_style() {
-    auto task1 = compute(1); // 启动任务1
-    auto task2 = compute(2); // 启动任务2
-    auto task3 = compute(3); // 启动任务3
+    auto task1 = compute(1); // 启动任务1 - 立即开始并发执行
+    auto task2 = compute(2); // 启动任务2 - 立即开始并发执行
+    auto task3 = compute(3); // 启动任务3 - 立即开始并发执行
     
     // 按顺序等待，但任务实际上在并发执行
     auto r1 = co_await task1; // 等待任务1
@@ -178,12 +178,12 @@ cd benchmarks && cargo build --release && ./target/release/rust_benchmark 10000
 
 ### 协程并发机制
 
-FlowCoro基于单一的并发模式：**co_await 链式并发**，任务启动即并发执行。
+FlowCoro基于单一的并发方式：**Task 创建时立即并发**，任务启动即并发执行。
 
 #### 核心原理
 
 ```cpp
-// FlowCoro的唯一并发方式：co_await 链式并发
+// FlowCoro的唯一并发方式：Task 创建时并发
 Task<void> concurrent_processing() {
     // 1. 任务启动：立即开始并发执行
     auto task1 = async_compute(1); // 任务1立即启动
@@ -221,7 +221,7 @@ Task<void> when_all_example() {
 ```
 
 **重要说明：**
-- FlowCoro只有一种并发方式：`co_await`链式并发
+- FlowCoro只有一种并发方式：`Task创建时立即并发`
 - `when_all`不是独立的并发机制，只是便利的语法糖
 - 内部实现：`when_all`仍然使用`co_await`逐个等待任务
 - 并发发生在任务启动时，而不是等待时
@@ -267,7 +267,7 @@ FlowCoro采用混合调度模型，结合单线程事件循环和多线程工作
 | 层级 | 组件 | 功能 | 特性 |
 |------|------|------|------|
 | **应用层** | Task<T> | 协程接口 | 统一API |
-| | co_await | 异步等待 | 唯一并发方式 |
+| | co_await | 异步等待 | 等待机制 |
 | | when_all() | 语法糖 | 简化多任务等待 |
 | | sleep_for() | 定时器 | 高精度延时 |
 | | sync_wait() | 同步等待 | 阻塞获取结果 |
@@ -334,15 +334,15 @@ void await_suspend(std::coroutine_handle<> h) {
 
 **FlowCoro的实际实现：**
 
-FlowCoro实际上只有一种并发模式：**co_await 链式并发**
+FlowCoro实际上只有一种并发方式：**Task 创建时立即并发**
 
 ```cpp
 // 实际的并发机制：任务启动即并发
 Task<void> real_concurrency() {
     // 这三个任务启动后立即并发执行
-    auto task1 = async_compute(1); // 立即启动
-    auto task2 = async_compute(2); // 立即启动  
-    auto task3 = async_compute(3); // 立即启动
+    auto task1 = async_compute(1); // 立即启动并发执行
+    auto task2 = async_compute(2); // 立即启动并发执行
+    auto task3 = async_compute(3); // 立即启动并发执行
     
     // co_await只是等待结果，不影响并发执行
     auto r1 = co_await task1; // 等待结果
@@ -365,10 +365,10 @@ Task<std::tuple<...>> when_all(Tasks&&... tasks) {
 ```
 
 **澄清错误认知：**
-- ❌ **错误**: when_all提供了不同的并发机制
-- ✅ **正确**: when_all只是co_await的语法糖包装
-- ❌ **错误**: FlowCoro有多种并发模式
-- ✅ **正确**: FlowCoro只有一种并发方式，就是任务启动时的自动并发
+- **错误**: when_all提供了不同的并发机制
+- **正确**: when_all只是co_await的语法糖包装
+- **错误**: FlowCoro有多种并发模式
+- **正确**: FlowCoro只有一种并发方式，就是任务启动时的自动并发
 
 **性能来源：**
 - 并发性能来自任务启动时的立即执行
