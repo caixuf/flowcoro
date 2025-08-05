@@ -30,7 +30,7 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
     println!("Rust Tokio方式：处理 {} 个并发请求", request_count);
     println!("初始内存: {} KB (估算)", initial_memory);
     println!("CPU核心数: {}", num_cpus::get());
-    println!("⏰ 开始时间: [{}]", get_current_time());
+    println!("开始时间: [{}]", get_current_time());
     println!("{}", "-".repeat(50));
     
     println!("同时启动 {} 个async任务...", request_count);
@@ -71,7 +71,7 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
     println!("{}", "-".repeat(50));
     println!("Rust Tokio方式完成！");
     println!("   总请求数: {} 个", request_count);
-    println!("   ⏱️  总耗时: {} ms", duration.as_millis());
+    println!("   总耗时: {} ms", duration.as_millis());
     
     if request_count > 0 {
         println!("   平均耗时: {:.4} ms/请求", 
@@ -92,7 +92,7 @@ async fn handle_concurrent_requests_tokio(request_count: usize) {
     
     println!("   Task总数: {} 个", request_count);
     println!("   并发策略: Tokio异步运行时");
-    println!("   ⏰ 程序结束: [{}]", get_current_time());
+    println!("   程序结束: [{}]", get_current_time());
 }
 
 #[tokio::main]

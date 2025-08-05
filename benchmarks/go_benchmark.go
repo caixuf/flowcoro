@@ -26,7 +26,7 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 	fmt.Printf("Go Goroutine方式：处理 %d 个并发请求\n", requestCount)
 	fmt.Printf("初始内存: %d KB\n", initialMemory)
 	fmt.Printf("CPU核心数: %d\n", runtime.NumCPU())
-	fmt.Printf("⏰ 开始时间: [%s]\n", getCurrentTime())
+	fmt.Printf("开始时间: [%s]\n", getCurrentTime())
 	fmt.Println(string(make([]byte, 50, 50)[0:50]) + "")
 	
 	fmt.Printf("同时启动 %d 个goroutine...\n", requestCount)
@@ -77,7 +77,7 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 	fmt.Println(string(make([]byte, 50, 50)[0:50]) + "")
 	fmt.Printf("Go Goroutine方式完成！\n")
 	fmt.Printf("   总请求数: %d 个\n", requestCount)
-	fmt.Printf("   ⏱️  总耗时: %d ms\n", duration.Milliseconds())
+	fmt.Printf("   总耗时: %d ms\n", duration.Milliseconds())
 	
 	if requestCount > 0 {
 		fmt.Printf("   平均耗时: %.4f ms/请求\n", float64(duration.Nanoseconds())/float64(requestCount)/1000000.0)
@@ -96,7 +96,7 @@ func handleConcurrentRequestsGoroutines(requestCount int) {
 	
 	fmt.Printf("   Goroutine总数: %d 个\n", requestCount)
 	fmt.Printf("   并发策略: Go M:N调度器\n")
-	fmt.Printf("   ⏰ 程序结束: [%s]\n", getCurrentTime())
+	fmt.Printf("   程序结束: [%s]\n", getCurrentTime())
 }
 
 func main() {
