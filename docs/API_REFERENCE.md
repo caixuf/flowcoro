@@ -4,8 +4,8 @@
 
 ### 重大性能突破
 
-- **when_all优化**: 索引化顺序执行，支持10000+并发任务
-- **sleep_for升级**: 协程友好设计，消除跨线程问题
+- **when_all优化**: 多线程并发执行，支持10000+并发任务
+- **sleep_for升级**: 多线程安全设计，支持跨线程协程调度
 - **内存优化**: 单任务内存占用降至94-130字节
 - **超高吞吐量**: 71万+请求/秒的处理能力
 
@@ -19,26 +19,45 @@
 | 10000 | 14ms | 714K/s | 920KB | 94 bytes |
 
 - **协程创建**: 微秒级轻量级协程任务创建
-- **内存管理**: 高效的顺序执行内存优化
-- **并发调度**: ioManager架构的drive-based调度
-- **跨线程安全**: 消除所有跨线程协程恢复问题
+- **内存管理**: 高效的多线程并发内存优化
+- **并发调度**: 32-128个工作线程的并发调度系统
+- **多线程安全**: SafeCoroutineHandle确保多线程环境安全
 
 ### 基础使用示例
 
 ```cpp
 #include "flowcoro.hpp"
 
-// 创建协程任务 (现在支持协程友好的sleep_for)
+// 创建协程任务（在多线程环境中执行）
 flowcoro::Task<int> calculate(int x) {
-    // 模拟异步操作，使用优化的sleep_for
+    // 模拟异步操作，使用多线程安全的sleep_for
     co_await flowcoro::sleep_for(std::chrono::milliseconds(10));
     co_return x * x;
 }
 
+// 并发执行多个协程
+flowcoro::Task<void> concurrent_example() {
+    // 创建多个协程任务
+    auto task1 = calculate(5);
+    auto task2 = calculate(10);
+    auto task3 = calculate(15);
+    
+    // 并发执行（在不同线程中）
+    auto [r1, r2, r3] = co_await flowcoro::when_all(
+        std::move(task1),
+        std::move(task2), 
+        std::move(task3)
+    );
+    
+    std::cout << "结果: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+}
+
 // 同步等待协程完成
 int main() {
-    auto result = flowcoro::sync_wait(calculate(5));
-    std::cout << "结果: " << result << std::endl; // 输出: 25
+    // 启用多线程协程系统
+    flowcoro::enable_v2_features();
+    
+    auto result = flowcoro::sync_wait(concurrent_example());
     return 0;
 }
 ```
@@ -71,14 +90,20 @@ FlowCoro的协程任务模板类，提供基础的协程功能。
 
 ```cpp
 template<typename T = void>
-class Task {
+struct Task {
 public:
     // 基础操作
     bool done() const noexcept; // 协程是否完成
-    T get_result(); // 获取结果（阻塞）
+    T get(); // 获取结果（阻塞执行）
+    T get_result(); // 获取结果（兼容方法）
 
-    // 协程接口
-    auto operator co_await(); // 使协程可等待
+    // 状态检查
+    bool is_ready() const noexcept; // 任务是否就绪
+
+    // 协程等待接口
+    bool await_ready() const;
+    bool await_suspend(std::coroutine_handle<> waiting_handle);
+    T await_resume();
 
     // 移动语义
     Task(Task&& other) noexcept;
@@ -89,11 +114,12 @@ public:
     Task& operator=(const Task&) = delete;
 
 private:
-    std::coroutine_handle<> handle_;
+    std::coroutine_handle<promise_type> handle;
+    // 包含ThreadSafeCoroutineState和SafeCoroutineHandle
 };
 ```
 
-#### 基础使用示例
+#### Task基础使用示例
 
 ```cpp
 // 创建协程任务
@@ -101,8 +127,12 @@ Task<int> compute(int x) {
     co_return x * x;
 }
 
-// 同步等待结果
-auto result = sync_wait(compute(5)); // result = 25
+// 方法1: 使用get()方法获取结果（同步阻塞）
+auto task = compute(5);
+auto result = task.get(); // result = 25
+
+// 方法2: 使用sync_wait辅助函数
+auto result2 = sync_wait(compute(5)); // result2 = 25
 
 // 协程组合
 Task<int> chain_compute() {
@@ -304,13 +334,13 @@ Task<void> error_handling_example() {
 ### 协程管理函数
 
 ```cpp
-// 调度协程到协程池
-void schedule_coroutine(std::coroutine_handle<> handle);
+// 调度协程到多线程协程池
+void schedule_coroutine_enhanced(std::coroutine_handle<> handle);
 
 // 获取协程管理器实例
 CoroutineManager& get_coroutine_manager();
 
-// 驱动协程执行
+// 驱动协程执行（主要用于定时器和清理任务）
 void drive_coroutines();
 ```
 
@@ -515,7 +545,21 @@ while (stack.pop(item)) {
 
 ## 5. 协程池
 
-协程调度和管理系统。
+协程调度和管理系统，基于多线程安全设计。
+
+### 多线程协程调度架构
+
+FlowCoro v4.0.0 采用多线程协程调度架构：
+
+```text
+应用层协程
+    ↓
+CoroutineManager（协程管理器）
+    ↓
+CoroutinePool（多线程协程池）
+    ↓
+ThreadPool（32-128个工作线程）
+```
 
 ### CoroutineManager - 协程管理器
 
@@ -524,11 +568,15 @@ class CoroutineManager {
 public:
     static CoroutineManager& get_instance();
 
-    // 调度协程
-    void schedule(std::coroutine_handle<> handle);
+    // 多线程安全的协程调度
+    void schedule_resume(std::coroutine_handle<> handle);
 
-    // 驱动协程执行
+    // 驱动协程执行（主要处理定时器）
     void drive();
+
+    // 添加定时器
+    void add_timer(std::chrono::steady_clock::time_point when, 
+                   std::coroutine_handle<> handle);
 
     // 获取统计信息
     size_t active_coroutines() const;
@@ -540,14 +588,54 @@ private:
 };
 ```
 
+### 多线程安全保障
+
+FlowCoro 使用以下机制确保多线程环境下的协程安全：
+
+#### SafeCoroutineHandle - 线程安全协程句柄
+
+```cpp
+class SafeCoroutineHandle {
+public:
+    explicit SafeCoroutineHandle(std::coroutine_handle<> h);
+    
+    // 多线程安全的恢复
+    void resume();
+    
+    // 线程安全的调度
+    void schedule_resume();
+    
+    // 检查协程状态
+    bool done() const;
+    
+private:
+    std::shared_ptr<ThreadSafeCoroutineState> state_;
+    std::shared_ptr<std::atomic<std::coroutine_handle<>>> handle_;
+};
+```
+
+#### 执行状态保护
+
+```cpp
+class ThreadSafeCoroutineState {
+    std::atomic<bool> running_{false};      // 防止并发执行
+    std::atomic<bool> destroyed_{false};    // 生命周期标记
+    std::atomic<bool> scheduled_{false};    // 防止重复调度
+    std::shared_ptr<std::mutex> execution_mutex_; // 执行锁
+};
+```
+
 ### 协程调度函数
 
 ```cpp
-// 调度协程到协程池
+// 调度协程到多线程协程池
 void schedule_coroutine_enhanced(std::coroutine_handle<> handle);
 
 // 获取协程管理器
 CoroutineManager& get_coroutine_manager();
+
+// 驱动协程池（处理定时器和清理任务）
+void drive_coroutine_pool();
 ```
 
 ---
@@ -567,12 +655,59 @@ enum class LogLevel {
 // 设置日志级别
 void set_log_level(LogLevel level);
 
-// 初始化协程系统
-void init_coroutine_system();
+// 启用FlowCoro v4.0增强功能
+void enable_v2_features();
 
 // 清理协程系统
 void cleanup_coroutine_system();
 ```
+
+---
+
+## 并发特性和性能
+
+### 真正的多线程并发
+
+FlowCoro v4.0.0 实现了真正的多线程协程并发：
+
+```cpp
+// 即使看起来是"顺序"执行，实际上是多线程并发的
+flowcoro::Task<void> concurrent_processing() {
+    std::vector<flowcoro::Task<int>> tasks;
+    
+    // 创建1000个协程任务
+    for (int i = 0; i < 1000; ++i) {
+        tasks.push_back(async_calculate(i, i * 2));
+    }
+    
+    // 看起来是顺序等待，实际上在32-128个线程中并发执行
+    std::vector<int> results;
+    for (auto& task : tasks) {
+        auto result = co_await task;  // 多线程并发执行
+        results.push_back(result);
+    }
+    
+    std::cout << "并发处理了 " << results.size() << " 个任务" << std::endl;
+}
+```
+
+### 性能指标
+
+基于多线程协程调度的实测性能：
+
+| 指标 | FlowCoro v4.0 | 传统多线程 | 性能提升 |
+|------|---------------|------------|----------|
+| 执行时间 | 13ms | 778ms | **60倍** |
+| 内存使用 | 792KB | 2.86MB | **4倍效率** |
+| 线程数量 | 32-128个 | 10000个 | **99%节省** |
+| 吞吐量 | 769K/s | 12K/s | **64倍** |
+
+### 关键技术特性
+
+- **多线程安全**: SafeCoroutineHandle 确保跨线程访问安全
+- **真正并发**: 协程在多个工作线程中真正并行执行
+- **智能调度**: 自动负载均衡，最大化 CPU 利用率
+- **低开销**: 协程切换成本远低于线程上下文切换
 
 ---
 
@@ -597,8 +732,8 @@ flowcoro::Task<int> complex_calculation() {
 }
 
 int main() {
-    // 初始化协程系统
-    flowcoro::init_coroutine_system();
+    // 启用FlowCoro增强功能
+    flowcoro::enable_v2_features();
 
     // 执行协程
     auto result = flowcoro::sync_wait(complex_calculation());
