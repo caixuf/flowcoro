@@ -180,9 +180,33 @@ int main() {
 
 ### 执行控制
 
-- **`sync_wait(task)`**: 同步等待协程完成，阻塞当前线程
+- **`sync_wait(task)`**: **同步阻塞**等待协程完成，会暂停当前线程执行
+- **`co_await task`**: **异步非阻塞**等待协程完成，允许协程调度器继续工作
 - **`schedule_coroutine_enhanced(handle)`**: 手动将协程提交到协程池
 - **`drive_coroutine_pool()`**: 手动驱动协程池执行
+
+#### sync_wait vs co_await 使用指南
+
+```cpp
+// ✅ 正确：在main函数中使用sync_wait
+int main() {
+    flowcoro::enable_v2_features();
+    auto result = sync_wait(my_async_task()); // 阻塞主线程直到完成
+    return 0;
+}
+
+// ❌ 错误：在协程中使用sync_wait
+Task<void> wrong_way() {
+    auto result = sync_wait(other_task()); // 阻塞整个协程调度器！
+    co_return;
+}
+
+// ✅ 正确：在协程中使用co_await
+Task<void> right_way() {
+    auto result = co_await other_task(); // 异步等待，不阻塞调度器
+    co_return;
+}
+```
 
 ### 重要说明：真正的并发执行
 
@@ -231,17 +255,17 @@ for (auto& task : tasks) {
 
 ### 推荐用法
 
-1. **简单场景**: 直接使用 `sync_wait()`
-2. **批量处理**: 在协程内使用 `co_await` 等待其他协程
-3. **网络IO**: 使用异步等待避免阻塞
-4. **定时任务**: 使用 `sleep_for()` 实现定时器
+1. **主函数场景**: 使用 `sync_wait()` 等待最终结果
+2. **协程内部**: 使用 `co_await` 等待其他协程（异步非阻塞）
+3. **网络IO**: 使用异步等待避免阻塞整个调度器
+4. **定时任务**: 使用 `sleep_for()` 实现协程友好的定时器
 
 ### 避免的用法
 
-1. **不要手动管理协程池**: 除非有特殊需求
-2. **不要在协程外使用co_await**: 只能在协程函数内使用
-3. **不要忘记co_return**: 协程函数必须有返回
-4. **️ 字符串任务注意事项**: 避免在`co_await`后进行字符串拼接
+1. **❌ 在协程中使用sync_wait**: 会阻塞整个协程调度器
+2. **❌ 在协程外使用co_await**: 只能在协程函数内使用
+3. **❌ 忘记co_return**: 协程函数必须有返回语句
+4. **❌ 手动管理协程池**: 除非有特殊性能需求
 5. **️ when_all 使用限制**:
    - 不能直接用于 `std::vector<Task<T>>`（动态数量任务）
    - 适合 2-10 个固定数量任务

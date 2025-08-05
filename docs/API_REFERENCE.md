@@ -144,22 +144,45 @@ Task<int> chain_compute() {
 
 ### sync_wait - 同步等待协程
 
-将异步协程转换为同步调用，阻塞等待协程完成。
+**sync_wait是同步阻塞的**，它将异步协程转换为同步调用，会阻塞当前线程直到协程完成。
 
 ```cpp
 template<typename T>
 T sync_wait(Task<T> task);
+```
 
-// 使用示例
-Task<int> async_compute(int x) {
-    co_return x * 2;
+**重要说明：**
+- `sync_wait` 是**同步阻塞**函数，会暂停当前线程执行
+- 内部调用 `task.get()`，该方法通过 `handle.resume()` 直接执行协程
+- 适用于主函数或需要同步等待结果的场景
+- **不适合**在协程内部使用（会阻塞协程调度）
+
+#### 使用场景对比
+
+```cpp
+// ✅ 正确：在main函数中使用sync_wait
+int main() {
+    flowcoro::enable_v2_features();
+    
+    // 同步阻塞等待协程完成
+    auto result = sync_wait(async_compute(21)); // 阻塞主线程
+    std::cout << result << std::endl; // result = 42
+    return 0;
 }
 
-// 在main函数中同步等待
-int main() {
-    auto result = sync_wait(async_compute(21)); // result = 42
+// ❌ 错误：在协程中使用sync_wait（阻塞协程调度）
+Task<void> bad_example() {
+    // 这会阻塞整个协程调度器！
+    auto result = sync_wait(async_compute(21)); // 不要这样做
+    co_return;
+}
+
+// ✅ 正确：在协程中使用co_await（异步非阻塞）
+Task<void> good_example() {
+    // 异步等待，不阻塞协程调度器
+    auto result = co_await async_compute(21); // 异步执行
     std::cout << result << std::endl;
-    return 0;
+    co_return;
 }
 ```
 
