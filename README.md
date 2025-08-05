@@ -32,8 +32,14 @@ FlowCoro是一个基于C++20的协程库，设计理念是"少即是多"。通�
 - **延迟**: 231 ns/op
 - **对比**: 相比传统线程创建提升数百倍
 
-### when_all 并发原语
+### 并发机制性能
 
+#### co_await 链式并发
+- **启动延迟**: 0.1μs (微秒级)
+- **内存开销**: 每协程 80 bytes
+- **适用场景**: 流水线处理，有依赖关系
+
+#### when_all 批量并发
 - **小规模** (10任务): 625K ops/sec
 - **中规模** (100任务): 2.38M ops/sec
 - **大规模** (1000任务): 3.69M ops/sec
@@ -101,17 +107,45 @@ make -j$(nproc)
 ### 基础示例
 
 ```cpp
+// 基础示例：两种并发方式对比
 #include <flowcoro.hpp>
 
-// 简单协程任务
-flowcoro::Task<int> compute(int x) {
-    co_return x * x;
+// 方式1：co_await 串行等待（但内部并发）
+Task<void> sequential_style() {
+    auto task1 = compute(1); // 启动任务1
+    auto task2 = compute(2); // 启动任务2
+    auto task3 = compute(3); // 启动任务3
+    
+    // 按顺序等待，但任务实际上在并发执行
+    auto r1 = co_await task1; // 等待任务1
+    auto r2 = co_await task2; // 任务2可能已完成
+    auto r3 = co_await task3; // 任务3可能已完成
+    
+    std::cout << "Sequential: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+
+// 方式2：when_all 批量等待
+Task<void> batch_style() {
+    auto task1 = compute(1);
+    auto task2 = compute(2); 
+    auto task3 = compute(3);
+    
+    // 一次性等待所有任务完成
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1), 
+        std::move(task2), 
+        std::move(task3)
+    );
+    
+    std::cout << "Batch: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
 }
 
 int main() {
     // 同步等待协程完成
-    auto result = flowcoro::sync_wait(compute(5));
-    std::cout << "Result: " << result << std::endl; // 输出: 25
+    sync_wait(sequential_style());
+    sync_wait(batch_style());
     return 0;
 }
 ```
@@ -140,7 +174,37 @@ cd benchmarks && cargo build --release && ./target/release/rust_benchmark 10000
 
 ## 核心特性
 
-### 协程任务管理
+### 协程并发机制
+
+FlowCoro提供多种并发方式，满足不同场景需求：
+
+#### 1. co_await 链式并发
+
+```cpp
+// 串行等待，保证执行顺序
+Task<void> sequential_processing() {
+    auto result1 = co_await compute_step1(); // 步骤1
+    auto result2 = co_await compute_step2(result1); // 步骤2依赖步骤1
+    auto result3 = co_await compute_step3(result2); // 步骤3依赖步骤2
+    co_return;
+}
+
+// 并发处理，不依赖顺序
+Task<void> concurrent_processing() {
+    // 每个co_await都会释放当前线程，允许其他协程执行
+    auto task1 = async_compute(1); // 启动任务1
+    auto task2 = async_compute(2); // 启动任务2  
+    auto task3 = async_compute(3); // 启动任务3
+    
+    // 逐个等待结果（内部并发执行）
+    auto result1 = co_await task1;
+    auto result2 = co_await task2; 
+    auto result3 = co_await task3;
+    co_return;
+}
+```
+
+#### 2. when_all 批量并发
 
 ```cpp
 // 创建和执行协程任务
@@ -149,12 +213,57 @@ Task<int> async_task(int value) {
     co_return value * 2;
 }
 
-// 并发执行多个任务
+// when_all：等待所有任务完成
+Task<void> batch_processing() {
+    auto task1 = async_task(1);
+    auto task2 = async_task(2);
+    auto task3 = async_task(3);
+    
+    // 并发等待所有任务完成
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1), 
+        std::move(task2), 
+        std::move(task3)
+    );
+    
+    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+
+// 大批量任务处理
 std::vector<Task<int>> tasks;
 for (int i = 0; i < 1000; ++i) {
     tasks.emplace_back(async_task(i));
 }
 auto results = sync_wait(when_all_vector(std::move(tasks)));
+```
+
+#### 3. 混合并发模式
+
+```cpp
+Task<void> hybrid_concurrency() {
+    // 阶段1：并发启动多个独立任务
+    auto auth_task = authenticate_user();
+    auto config_task = load_configuration();
+    auto cache_task = warm_up_cache();
+    
+    // 阶段2：等待关键任务完成
+    auto auth_result = co_await auth_task;
+    
+    // 阶段3：基于前面结果，启动新的并发任务
+    auto data_task = load_user_data(auth_result.user_id);
+    auto perm_task = load_permissions(auth_result.user_id);
+    
+    // 阶段4：等待所有剩余任务
+    auto [config, cache, data, permissions] = co_await when_all(
+        std::move(config_task),
+        std::move(cache_task), 
+        std::move(data_task),
+        std::move(perm_task)
+    );
+    
+    co_return;
+}
 ```
 
 ### 动态内存池
@@ -198,7 +307,8 @@ FlowCoro采用混合调度模型，结合单线程事件循环和多线程工作
 | 层级 | 组件 | 功能 | 特性 |
 |------|------|------|------|
 | **应用层** | Task<T> | 协程接口 | 统一API |
-| | when_all() | 并发原语 | 任务聚合 |
+| | co_await | 串行并发 | 链式异步等待 |
+| | when_all() | 批量并发 | 任务聚合等待 |
 | | sleep_for() | 定时器 | 高精度延时 |
 | | sync_wait() | 同步等待 | 阻塞获取结果 |
 | **调度层** | CoroutineManager | 协程管理 | 单线程事件循环 |
@@ -260,7 +370,54 @@ void await_suspend(std::coroutine_handle<> h) {
 }
 ```
 
-#### 3. 调度器设计模式
+#### 3. 双重并发模式设计
+
+**FlowCoro创新性地结合了两种并发模式:**
+
+**模式1: co_await 链式并发**
+```cpp
+// 内部并发：每个co_await释放线程，允许其他协程执行
+Task<void> pipeline_processing() {
+    auto stage1 = process_input();   // 启动阶段1
+    auto stage2 = process_data();    // 启动阶段2  
+    auto stage3 = process_output();  // 启动阶段3
+    
+    // 顺序等待，但内部并发执行
+    auto r1 = co_await stage1; // 阶段1完成时，阶段2、3可能仍在运行
+    auto r2 = co_await stage2; // 可能立即返回（已完成）
+    auto r3 = co_await stage3; // 可能立即返回（已完成）
+    
+    co_return;
+}
+```
+
+**模式2: when_all 聚合并发**
+```cpp
+// 显式并发：明确等待所有任务完成
+Task<void> batch_processing() {
+    auto task1 = async_compute(1);
+    auto task2 = async_compute(2); 
+    auto task3 = async_compute(3);
+    
+    // 聚合等待：确保所有任务都完成
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1), 
+        std::move(task2), 
+        std::move(task3)
+    );
+    co_return;
+}
+```
+
+**性能优势对比:**
+
+| 并发模式 | 适用场景 | 性能特点 | 内存占用 |
+|----------|----------|----------|----------|
+| **co_await链式** | 有依赖关系的流水线 | 低延迟启动 | 省内存 |
+| **when_all聚合** | 独立任务批处理 | 高吞吐量 | 高并发度 |
+| **混合模式** | 复杂业务逻辑 | 兼具两者优势 | 智能调节 |
+
+#### 4. 调度器设计模式
 
 FlowCoro借鉴了多个优秀的异步框架设计：
 

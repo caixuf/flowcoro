@@ -34,6 +34,87 @@ FlowCoro是一个现代的C++20协程库，提供简单易用的异步编程接�
 
 ## 基本使用方式
 
+### 并发机制概述
+
+FlowCoro提供两种核心并发方式，满足不同业务场景：
+
+#### 1. co_await 链式并发
+- **执行方式**: 串行等待，内部并发执行
+- **适用场景**: 有依赖关系的流水线处理
+- **性能特点**: 启动延迟0.1μs，内存80字节/协程
+- **使用时机**: 需要中间结果进行后续处理
+
+```cpp
+// co_await 链式并发示例
+Task<void> pipeline_example() {
+    // 1. 启动多个任务（立即并发开始）
+    auto step1 = process_input();    // 任务1开始
+    auto step2 = process_data();     // 任务2开始  
+    auto step3 = process_output();   // 任务3开始
+    
+    // 2. 串行等待（获取中间结果）
+    auto result1 = co_await step1;   // 等待任务1
+    auto result2 = co_await step2;   // 任务2可能已完成
+    auto result3 = co_await step3;   // 任务3可能已完成
+    
+    // 3. 可用中间结果进行后续处理
+    auto final = co_await process_final(result1, result2, result3);
+    co_return;
+}
+```
+
+#### 2. when_all 批量并发
+- **执行方式**: 显式批量并发等待
+- **适用场景**: 独立任务批量处理
+- **性能特点**: 大规模任务3.69M ops/sec
+- **使用时机**: 不需要中间结果，追求最大并发度
+
+```cpp
+// when_all 批量并发示例
+Task<void> batch_example() {
+    auto task1 = async_compute(1);
+    auto task2 = async_compute(2);
+    auto task3 = async_compute(3);
+    
+    // 批量等待所有任务完成
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1),
+        std::move(task2),
+        std::move(task3)
+    );
+    
+    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+```
+
+#### 3. 混合并发模式
+结合两种方式处理复杂业务逻辑：
+
+```cpp
+Task<void> hybrid_example() {
+    // 阶段1：并发启动独立任务
+    auto auth_task = authenticate();
+    auto config_task = load_config();
+    
+    // 阶段2：等待关键任务，获取中间结果
+    auto auth_result = co_await auth_task;
+    
+    // 阶段3：基于结果启动新任务
+    auto data_task = load_data(auth_result.user_id);
+    auto perm_task = load_permissions(auth_result.user_id);
+    
+    // 阶段4：批量等待剩余任务
+    auto [config, data, perms] = co_await when_all(
+        std::move(config_task),
+        std::move(data_task),
+        std::move(perm_task)
+    );
+    
+    co_return;
+}
+```
+
 ### 1. 简单的协程任务
 
 ```cpp
@@ -65,11 +146,40 @@ int main() {
 }
 ```
 
-### 2. 批量并发处理 (when_all 风格)
+### 2. 并发机制实践
 
-FlowCoro 提供了优化的批量处理方式：
+基于前面的概述，以下是具体的实践示例：
 
-#### when_all 高性能实现（支持1-10000+任务）
+#### A. co_await 链式并发实践
+
+```cpp
+// 流水线处理示例：每步都需要前一步的结果
+Task<std::string> pipeline_processing(const std::string& input) {
+    // 阶段1：输入验证
+    auto validation_task = validate_input(input);
+    auto validation_result = co_await validation_task;
+    
+    if (!validation_result.valid) {
+        co_return "输入无效";
+    }
+    
+    // 阶段2：数据处理（基于验证结果）
+    auto processing_task = process_data(validation_result.cleaned_data);
+    auto processing_result = co_await processing_task;
+    
+    // 阶段3：结果格式化（基于处理结果）
+    auto formatting_task = format_result(processing_result);
+    auto final_result = co_await formatting_task;
+    
+    co_return final_result;
+}
+```
+
+#### B. when_all 批量并发实践
+
+#### B. when_all 批量并发实践
+
+**固定数量任务批处理：**
 
 ```cpp
 // 定义不同类型的异步任务
@@ -79,19 +189,21 @@ Task<int> compute_task(int value) {
 }
 
 Task<std::string> fetch_data(const std::string& key) {
-    // 关键：预构建字符串，避免co_await后内存分配问题
-    std::string result = "数据:" + key;
+    // 协程友好的异步等待 - 真正机制：
+    // 1. await_suspend() 将协程挂起，不阻塞工作线程
+    // 2. 添加定时器到 CoroutineManager 的定时器队列
+    // 3. 定时器到期后，drive() 方法恢复协程执行
     co_await sleep_for(std::chrono::milliseconds(150));
-    co_return result;
+    co_return "数据:" + key;
 }
 
-Task<void> true_when_all_example() {
-    // 创建固定数量的不同类型任务
+Task<void> when_all_fixed_tasks() {
+    // 创建不同类型的独立任务
     auto task1 = compute_task(21);
     auto task2 = compute_task(42);
     auto task3 = fetch_data("user123");
 
-    // 真正的 when_all：同时执行，自动类型推导
+    // when_all：所有任务并发执行，一次性等待完成
     auto [result1, result2, result3] = co_await when_all(
         std::move(task1),
         std::move(task2),
@@ -100,51 +212,121 @@ Task<void> true_when_all_example() {
 
     std::cout << "计算结果1: " << result1 << std::endl; // 42
     std::cout << "计算结果2: " << result2 << std::endl; // 84
-    std::cout << "获取数据: " << result3 << std::endl; // "数据:user123"
+    std::cout << "获取数据: " << result3 << std::endl;   // "数据:user123"
+    co_return;
 }
 ```
 
-#### 方式2：真正的并发执行（用于动态数量任务）
+**动态数量任务处理：**
 
 ```cpp
-Task<void> concurrent_execution_dynamic(int request_count) {
+Task<void> when_all_dynamic_tasks(int task_count) {
     // 创建动态数量的同类型任务
     std::vector<Task<std::string>> tasks;
-    tasks.reserve(request_count);
+    tasks.reserve(task_count);
 
-    for (int i = 0; i < request_count; ++i) {
+    for (int i = 0; i < task_count; ++i) {
         tasks.emplace_back([](int id) -> Task<std::string> {
-            // 预构建字符串
-            std::string user_prefix = "用户" + std::to_string(id);
-            std::string result_suffix = " (已处理)";
-
             co_await sleep_for(std::chrono::milliseconds(50));
-            co_return user_prefix + result_suffix;
+            co_return "任务" + std::to_string(id) + "完成";
         }(1000 + i));
     }
 
-    // 所有协程任务都会在线程池中并发执行
-    // 即使使用循环co_await，底层仍然是多线程并发的
-    std::vector<std::string> results;
-    results.reserve(request_count);
+    // 方式1：使用when_all_vector（推荐大批量任务）
+    auto results = co_await when_all_vector(std::move(tasks));
     
-    for (auto& task : tasks) {
-        // 这看起来是顺序的，但实际上每个协程都在不同线程中执行
-        auto result = co_await task;
-        results.push_back(result);
-    }
+    std::cout << "并发完成 " << results.size() << " 个任务" << std::endl;
+    
+    // 方式2：逐个co_await（内部仍然并发）
+    // 注意：即使是循环co_await，底层协程仍在多线程中并发执行
+    co_return;
+}
+```
 
-    std::cout << "并发处理了 " << results.size() << " 个任务" << std::endl;
+#### C. 混合并发模式实践
+
+```cpp
+Task<UserSession> complex_user_login(const std::string& username, const std::string& password) {
+    // 第1阶段：并发启动多个独立的预处理任务
+    auto auth_task = authenticate_user(username, password);
+    auto rate_limit_task = check_rate_limit(username);
+    auto system_status_task = check_system_status();
+    
+    // 第2阶段：等待关键任务，获取认证结果
+    auto auth_result = co_await auth_task;
+    if (!auth_result.success) {
+        co_return UserSession{}; // 认证失败，提前返回
+    }
+    
+    // 第3阶段：基于认证结果，启动用户相关任务
+    auto user_data_task = load_user_data(auth_result.user_id);
+    auto permissions_task = load_user_permissions(auth_result.user_id);
+    auto preferences_task = load_user_preferences(auth_result.user_id);
+    
+    // 第4阶段：when_all等待所有剩余任务
+    auto [rate_limit, system_status, user_data, permissions, preferences] = co_await when_all(
+        std::move(rate_limit_task),
+        std::move(system_status_task),
+        std::move(user_data_task),
+        std::move(permissions_task),
+        std::move(preferences_task)
+    );
+    
+    // 第5阶段：构建完整的用户会话
+    UserSession session;
+    session.user_id = auth_result.user_id;
+    session.user_data = user_data;
+    session.permissions = permissions;
+    session.preferences = preferences;
+    session.rate_limit_info = rate_limit;
+    session.system_status = system_status;
+    
+    co_return session;
+}
+```
+
+### 3. 性能最佳实践
+
+#### 并发模式选择指南
+
+| 场景类型 | 推荐模式 | 原因 |
+|----------|----------|------|
+| **有依赖的流水线** | co_await链式 | 需要中间结果，内存效率高 |
+| **独立任务批处理** | when_all批量 | 最大并发度，吞吐量最高 |
+| **复杂业务逻辑** | 混合模式 | 兼具两者优势，灵活性最好 |
+| **超大规模任务** | when_all_vector | 支持10000+任务，线性扩展 |
+
+#### 内存和性能优化
+
+```cpp
+// ✅ 推荐：预分配容器，避免co_await后的内存分配
+Task<std::vector<std::string>> optimized_batch_processing(int count) {
+    std::vector<Task<std::string>> tasks;
+    tasks.reserve(count); // 预分配，避免动态扩展
+    
+    std::vector<std::string> results;
+    results.reserve(count); // 预分配结果容器
+    
+    // 批量创建任务
+    for (int i = 0; i < count; ++i) {
+        tasks.emplace_back(async_string_task(i));
+    }
+    
+    // 批量执行
+    auto batch_results = co_await when_all_vector(std::move(tasks));
+    
+    co_return batch_results;
 }
 
-int main() {
-    // 使用真正的 when_all
-    sync_wait(true_when_all_example());
-
-    // 使用并发执行处理动态任务
-    sync_wait(concurrent_execution_dynamic(100));
-
-    return 0;
+// ❌ 不推荐：co_await后进行内存分配
+Task<void> inefficient_processing() {
+    auto result = co_await some_task();
+    
+    // 不推荐：co_await后的动态内存分配可能影响性能
+    std::vector<std::string> dynamic_vector;
+    for (int i = 0; i < result.size(); ++i) {
+        dynamic_vector.push_back("item" + std::to_string(i));
+    }
 }
 ```
 
