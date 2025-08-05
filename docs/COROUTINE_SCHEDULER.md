@@ -129,18 +129,20 @@ struct ExecutionGuard {
 ### 1. 协程调度策略
 
 ```cpp
-// 小任务: 使用when_all并发执行
+// 小任务: 使用when_all语法糖简化等待
 if (request_count <= 3) {
+    // 任务创建时已开始并发执行，when_all只是等待语法糖
     auto results = co_await when_all(task1, task2, task3);
 }
 
-// 大任务: 批量创建，线程池并发执行
+// 大任务: 批量创建，自动并发执行
 else {
     std::vector<Task<std::string>> all_tasks;
     for (int i = 0; i < request_count; ++i) {
+        // 每个Task创建时立即开始并发执行
         all_tasks.push_back(handle_single_request(1000 + i));
     }
-    // 等待所有任务完成
+    // 等待所有已在并发执行的任务完成
     for (auto& task : all_tasks) {
         auto result = co_await task;
     }

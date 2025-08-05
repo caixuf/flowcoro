@@ -20,8 +20,8 @@ FlowCoro是一个现代的C++20协程库，提供简单易用的异步编程接�
 
 ## 最新更新 (v4.0)
 
-### when_all 重大改进
-- **真正的并发执行**：协程在多线程环境中并发执行，充分利用多核CPU
+### Task 创建时并发改进
+- **真正的并发执行**：Task创建时立即在多线程环境中开始执行，充分利用多核CPU  
 - **内存优化**：单请求内存使用降至94-130 bytes/请求
 - **极高性能**：支持10000+并发任务，吞吐量达71万+请求/秒
 - **稳定性提升**：多线程安全的协程调度，解决跨线程访问问题
@@ -34,86 +34,70 @@ FlowCoro是一个现代的C++20协程库，提供简单易用的异步编程接�
 
 ## 基本使用方式
 
-### 并发机制概述
+### 并发机制澄清
 
-FlowCoro提供两种核心并发方式，满足不同业务场景：
+FlowCoro只有一种并发方式：**任务启动时的自动并发**
 
-#### 1. co_await 链式并发
-- **执行方式**: 串行等待，内部并发执行
-- **适用场景**: 有依赖关系的流水线处理
-- **性能特点**: 启动延迟0.1μs，内存80字节/协程
-- **使用时机**: 需要中间结果进行后续处理
+#### 核心原理
 
 ```cpp
-// co_await 链式并发示例
-Task<void> pipeline_example() {
-    // 1. 启动多个任务（立即并发开始）
-    auto step1 = process_input();    // 任务1开始
-    auto step2 = process_data();     // 任务2开始  
-    auto step3 = process_output();   // 任务3开始
+// FlowCoro的唯一并发机制：任务启动即并发
+Task<void> real_concurrency() {
+    // 1. 任务启动：立即开始并发执行
+    auto task1 = async_compute(1);    // 立即启动
+    auto task2 = async_compute(2);    // 立即启动  
+    auto task3 = async_compute(3);    // 立即启动
     
-    // 2. 串行等待（获取中间结果）
-    auto result1 = co_await step1;   // 等待任务1
-    auto result2 = co_await step2;   // 任务2可能已完成
-    auto result3 = co_await step3;   // 任务3可能已完成
+    // 2. 结果等待：任务已在后台并发运行
+    auto result1 = co_await task1;    // 等待结果
+    auto result2 = co_await task2;    // 等待结果（可能已完成）
+    auto result3 = co_await task3;    // 等待结果（可能已完成）
     
-    // 3. 可用中间结果进行后续处理
-    auto final = co_await process_final(result1, result2, result3);
     co_return;
 }
 ```
 
-#### 2. when_all 批量并发
-- **执行方式**: 显式批量并发等待
-- **适用场景**: 独立任务批量处理
-- **性能特点**: 大规模任务3.69M ops/sec
-- **使用时机**: 不需要中间结果，追求最大并发度
+#### when_all 语法糖
+
+when_all 不是独立的并发机制，只是简化语法的便利封装：
 
 ```cpp
-// when_all 批量并发示例
-Task<void> batch_example() {
+// when_all 的便利语法
+Task<void> when_all_syntax() {
     auto task1 = async_compute(1);
     auto task2 = async_compute(2);
     auto task3 = async_compute(3);
     
-    // 批量等待所有任务完成
+    // 语法糖：简化多结果获取
     auto [r1, r2, r3] = co_await when_all(
         std::move(task1),
         std::move(task2),
         std::move(task3)
     );
     
-    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+
+// 完全等价的手动方式
+Task<void> manual_equivalent() {
+    auto task1 = async_compute(1);
+    auto task2 = async_compute(2);
+    auto task3 = async_compute(3);
+    
+    // 手动获取：功能完全相同
+    auto r1 = co_await task1;
+    auto r2 = co_await task2;
+    auto r3 = co_await task3;
+    
     co_return;
 }
 ```
 
-#### 3. 混合并发模式
-结合两种方式处理复杂业务逻辑：
-
-```cpp
-Task<void> hybrid_example() {
-    // 阶段1：并发启动独立任务
-    auto auth_task = authenticate();
-    auto config_task = load_config();
-    
-    // 阶段2：等待关键任务，获取中间结果
-    auto auth_result = co_await auth_task;
-    
-    // 阶段3：基于结果启动新任务
-    auto data_task = load_data(auth_result.user_id);
-    auto perm_task = load_permissions(auth_result.user_id);
-    
-    // 阶段4：批量等待剩余任务
-    auto [config, data, perms] = co_await when_all(
-        std::move(config_task),
-        std::move(data_task),
-        std::move(perm_task)
-    );
-    
-    co_return;
-}
-```
+**重要说明：**
+- FlowCoro只有一种并发方式：任务启动时的自动并发
+- co_await 是等待机制，不是并发机制
+- when_all 是语法糖，内部仍使用co_await顺序等待
+- 并发性能来源于Task创建时的立即执行
 
 ### 1. 简单的协程任务
 
@@ -148,62 +132,57 @@ int main() {
 
 ### 2. 并发机制实践
 
-基于前面的概述，以下是具体的实践示例：
+基于前面的澄清，以下是具体的实践示例：
 
-#### A. co_await 链式并发实践
+#### A. 基础并发实践
 
 ```cpp
-// 流水线处理示例：每步都需要前一步的结果
-Task<std::string> pipeline_processing(const std::string& input) {
-    // 阶段1：输入验证
+// 基础并发：任务启动即并发执行
+Task<std::string> process_data_concurrently(const std::string& input) {
+    // 1. 并发启动多个处理步骤
     auto validation_task = validate_input(input);
+    auto preprocessing_task = preprocess_data(input);
+    auto metadata_task = extract_metadata(input);
+    
+    // 2. 等待所有结果（任务已在并发执行）
     auto validation_result = co_await validation_task;
+    auto preprocessed_data = co_await preprocessing_task;
+    auto metadata = co_await metadata_task;
     
-    if (!validation_result.valid) {
-        co_return "输入无效";
-    }
-    
-    // 阶段2：数据处理（基于验证结果）
-    auto processing_task = process_data(validation_result.cleaned_data);
-    auto processing_result = co_await processing_task;
-    
-    // 阶段3：结果格式化（基于处理结果）
-    auto formatting_task = format_result(processing_result);
-    auto final_result = co_await formatting_task;
-    
+    // 3. 基于所有结果进行最终处理
+    auto final_result = co_await combine_results(validation_result, preprocessed_data, metadata);
     co_return final_result;
 }
 ```
 
-#### B. when_all 批量并发实践
+**关键理解：**
+- 任务创建时立即开始并发执行
+- co_await 只是等待已在运行的任务的结果
+- 真正的并发发生在Task构造时，不是co_await时
 
-#### B. when_all 批量并发实践
+#### B. when_all 语法糖简化
 
-**固定数量任务批处理：**
+**使用when_all简化多任务等待：**
 
 ```cpp
-// 定义不同类型的异步任务
+// 定义异步任务
 Task<int> compute_task(int value) {
     co_await sleep_for(std::chrono::milliseconds(100));
     co_return value * 2;
 }
 
 Task<std::string> fetch_data(const std::string& key) {
-    // 协程友好的异步等待 - 真正机制：
-    // 1. await_suspend() 将协程挂起，不阻塞工作线程
-    // 2. 添加定时器到 CoroutineManager 的定时器队列
-    // 3. 定时器到期后，drive() 方法恢复协程执行
     co_await sleep_for(std::chrono::milliseconds(150));
     co_return "数据:" + key;
 }
 
-Task<void> when_all_fixed_tasks() {
-    // 创建不同类型的独立任务
+Task<void> when_all_syntax_demo() {
+    // 创建任务（立即开始并发执行）
     auto task1 = compute_task(21);
     auto task2 = compute_task(42);
     auto task3 = fetch_data("user123");
 
-    // when_all：所有任务并发执行，一次性等待完成
+    // when_all语法糖：简化多结果获取
     auto [result1, result2, result3] = co_await when_all(
         std::move(task1),
         std::move(task2),
@@ -213,15 +192,21 @@ Task<void> when_all_fixed_tasks() {
     std::cout << "计算结果1: " << result1 << std::endl; // 42
     std::cout << "计算结果2: " << result2 << std::endl; // 84
     std::cout << "获取数据: " << result3 << std::endl;   // "数据:user123"
+    
+    // 完全等价的手动方式：
+    // auto r1 = co_await task1;
+    // auto r2 = co_await task2;
+    // auto r3 = co_await task3;
+    
     co_return;
 }
 ```
 
-**动态数量任务处理：**
+**动态任务数量处理：**
 
 ```cpp
-Task<void> when_all_dynamic_tasks(int task_count) {
-    // 创建动态数量的同类型任务
+Task<void> dynamic_task_processing(int task_count) {
+    // 创建动态数量的任务（全部立即开始并发执行）
     std::vector<Task<std::string>> tasks;
     tasks.reserve(task_count);
 
@@ -232,21 +217,25 @@ Task<void> when_all_dynamic_tasks(int task_count) {
         }(1000 + i));
     }
 
-    // 方式1：使用when_all_vector（推荐大批量任务）
-    auto results = co_await when_all_vector(std::move(tasks));
+    // 手动等待所有任务（因为是动态数量，无法使用when_all语法糖）
+    std::vector<std::string> results;
+    results.reserve(task_count);
     
+    for (auto& task : tasks) {
+        // 每个co_await等待一个已在并发执行的任务
+        auto result = co_await task;
+        results.push_back(result);
+    }
+
     std::cout << "并发完成 " << results.size() << " 个任务" << std::endl;
-    
-    // 方式2：逐个co_await（内部仍然并发）
-    // 注意：即使是循环co_await，底层协程仍在多线程中并发执行
     co_return;
 }
 ```
 
-#### C. 混合并发模式实践
+#### C. 复杂业务场景实践
 
 ```cpp
-Task<UserSession> complex_user_login(const std::string& username, const std::string& password) {
+Task<UserSession> user_login_scenario(const std::string& username, const std::string& password) {
     // 第1阶段：并发启动多个独立的预处理任务
     auto auth_task = authenticate_user(username, password);
     auto rate_limit_task = check_rate_limit(username);
@@ -263,7 +252,7 @@ Task<UserSession> complex_user_login(const std::string& username, const std::str
     auto permissions_task = load_user_permissions(auth_result.user_id);
     auto preferences_task = load_user_preferences(auth_result.user_id);
     
-    // 第4阶段：when_all等待所有剩余任务
+    // 第4阶段：使用when_all语法糖等待剩余任务
     auto [rate_limit, system_status, user_data, permissions, preferences] = co_await when_all(
         std::move(rate_limit_task),
         std::move(system_status_task),
@@ -287,14 +276,14 @@ Task<UserSession> complex_user_login(const std::string& username, const std::str
 
 ### 3. 性能最佳实践
 
-#### 并发模式选择指南
+#### 并发方式澄清
 
-| 场景类型 | 推荐模式 | 原因 |
-|----------|----------|------|
-| **有依赖的流水线** | co_await链式 | 需要中间结果，内存效率高 |
-| **独立任务批处理** | when_all批量 | 最大并发度，吞吐量最高 |
-| **复杂业务逻辑** | 混合模式 | 兼具两者优势，灵活性最好 |
-| **超大规模任务** | when_all_vector | 支持10000+任务，线性扩展 |
+| 常见误解 | 实际情况 |
+|----------|----------|
+| ❌ when_all提供不同的并发机制 | ✅ when_all只是co_await的语法糖 |
+| ❌ co_await是串行执行 | ✅ co_await等待已并发的任务 |
+| ❌ FlowCoro有多种并发模式 | ✅ FlowCoro只有任务启动时的并发 |
+| ❌ when_all性能更高 | ✅ when_all和手动co_await性能相同 |
 
 #### 内存和性能优化
 
