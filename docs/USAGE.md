@@ -8,11 +8,11 @@
 - **极高性能**：支持10000+并发任务，吞吐量达71万+请求/秒
 - **稳定性提升**：消除了跨线程协程恢复问题，彻底解决段错误问题
 
-### ️ sleep_for 架构升级
+### ✅ sleep_for 协程友好设计
 
-- **协程友好设计**：使用CoroutineManager的定时器系统，不再依赖多线程
-- **消除跨线程问题**：所有协程恢复都在正确的执行上下文中进行
-- **ioManager架构**：采用drive-based调度系统，提供更好的性能和稳定性
+- **真正协程友好**：使用CoroutineManager的定时器系统，不阻塞线程
+- **非阻塞实现**：通过 `await_suspend` 挂起协程，等待定时器恢复
+- **单线程定时器**：定时器管理在单独线程中，避免复杂的多线程同步
 
 ## 快速开始
 
@@ -26,11 +26,11 @@ FlowCoro是一个现代的C++20协程库，提供简单易用的异步编程接�
 - **极高性能**：支持10000+并发任务，吞吐量达71万+请求/秒
 - **稳定性提升**：多线程安全的协程调度，解决跨线程访问问题
 
-### sleep_for 架构升级
+### sleep_for 真正机制
 
-- **多线程协程调度**：协程在32-128个工作线程中并发执行
-- **线程安全设计**：使用SafeCoroutineHandle确保多线程环境下的安全性
-- **真正的并发性能**：即使顺序的co_await也会利用线程池并发执行
+- **协程友好实现**：使用定时器系统，不阻塞工作线程
+- **真正的异步等待**：协程挂起后定时器负责恢复
+- **线程安全设计**：定时器队列使用互斥锁保护，确保多线程安全
 
 ## 基本使用方式
 
@@ -44,7 +44,10 @@ using namespace flowcoro;
 Task<int> async_compute(int value) {
     std::cout << "开始计算: " << value << std::endl;
 
-    // 异步等待（模拟IO操作） - 现在使用协程友好的实现
+    // 协程友好的异步等待 - 真正机制：
+    // 1. await_suspend() 将协程挂起，不阻塞工作线程
+    // 2. 添加定时器到 CoroutineManager 的定时器队列
+    // 3. 定时器到期后，drive() 方法恢复协程执行
     co_await sleep_for(std::chrono::milliseconds(100));
 
     int result = value * 2;
@@ -175,8 +178,27 @@ int main() {
 - **`Task<T>`**: 协程任务类型，T是返回值类型
 - **`co_await`**: 等待另一个协程完成
 - **`co_return`**: 从协程返回值
-- **`sleep_for(duration)`**: 异步等待指定时间
+- **`sleep_for(duration)`**: 协程友好的异步等待，使用定时器系统实现
 - **`when_all(tasks...)`**: 并发等待多个固定任务完成，返回所有结果的元组
+
+#### sleep_for 实现机制
+
+```cpp
+// sleep_for 的真正工作方式
+Task<void> timing_example() {
+    std::cout << "开始等待..." << std::endl;
+    
+    // 这不会阻塞工作线程！实际发生的事情：
+    // 1. await_suspend() 挂起当前协程
+    // 2. 添加定时器到 CoroutineManager 的定时器队列  
+    // 3. 当前工作线程继续处理其他协程
+    // 4. 定时器线程在指定时间后恢复这个协程
+    co_await sleep_for(std::chrono::milliseconds(1000));
+    
+    std::cout << "等待完成！" << std::endl;
+    co_return;
+}
+```
 
 ### 执行控制
 

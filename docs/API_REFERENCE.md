@@ -5,7 +5,7 @@
 ### 重大性能突破
 
 - **when_all优化**: 多线程并发执行，支持10000+并发任务
-- **sleep_for升级**: 多线程安全设计，支持跨线程协程调度
+- **sleep_for升级**: 协程友好的定时器系统，真正的异步非阻塞等待
 - **内存优化**: 单任务内存占用降至94-130字节
 - **超高吞吐量**: 71万+请求/秒的处理能力
 
@@ -30,7 +30,7 @@
 
 // 创建协程任务（在多线程环境中执行）
 flowcoro::Task<int> calculate(int x) {
-    // 模拟异步操作，使用多线程安全的sleep_for
+    // 协程友好的异步等待 - 使用定时器系统，不阻塞工作线程
     co_await flowcoro::sleep_for(std::chrono::milliseconds(10));
     co_return x * x;
 }
@@ -132,7 +132,7 @@ auto task = compute(5);
 auto result = task.get(); // result = 25
 
 // 方法2: 使用sync_wait辅助函数
-auto result2 = sync_wait(compute(5)); // result2 = 25
+auto result2 = sync_wait(std::move(compute(5))); // result2 = 25
 
 // 协程组合
 Task<int> chain_compute() {
@@ -165,7 +165,7 @@ int main() {
     flowcoro::enable_v2_features();
     
     // 同步阻塞等待协程完成
-    auto result = sync_wait(async_compute(21)); // 阻塞主线程
+    auto result = sync_wait(std::move(async_compute(21))); // 阻塞主线程
     std::cout << result << std::endl; // result = 42
     return 0;
 }
@@ -173,7 +173,7 @@ int main() {
 // ❌ 错误：在协程中使用sync_wait（阻塞协程调度）
 Task<void> bad_example() {
     // 这会阻塞整个协程调度器！
-    auto result = sync_wait(async_compute(21)); // 不要这样做
+    auto result = sync_wait(std::move(async_compute(21))); // 不要这样做
     co_return;
 }
 
@@ -198,7 +198,7 @@ auto when_all(Tasks&&... tasks) -> WhenAllAwaiter<Tasks...>;
 #### 基础使用
 
 ```cpp
-// 不同类型的协程任务
+// 不同类型的协程任务  
 Task<int> compute_int(int x) {
     co_return x * x;
 }
@@ -213,11 +213,15 @@ Task<bool> compute_bool() {
 
 // 并发执行多个不同类型的任务
 Task<void> example_mixed_types() {
+    auto task1 = compute_int(5);
+    auto task2 = compute_string("hello");
+    auto task3 = compute_bool();
+
     auto [int_result, str_result, bool_result] =
         co_await when_all(
-            compute_int(5), // 返回 25
-            compute_string("hello"), // 返回 "hello_processed"
-            compute_bool() // 返回 true
+            std::move(task1),    // 返回 25
+            std::move(task2),    // 返回 "hello_processed"
+            std::move(task3)     // 返回 true
         );
 
     std::cout << "整数结果: " << int_result << std::endl;
@@ -236,12 +240,18 @@ Task<int> heavy_compute(int x) {
 }
 
 Task<void> example_same_types() {
+    // 创建任务
+    auto task1 = heavy_compute(10);
+    auto task2 = heavy_compute(20);
+    auto task3 = heavy_compute(30);
+    auto task4 = heavy_compute(40);
+
     // 并发执行多个相同类型的任务
     auto [r1, r2, r3, r4] = co_await when_all(
-        heavy_compute(10), // 返回 110
-        heavy_compute(20), // 返回 420
-        heavy_compute(30), // 返回 930
-        heavy_compute(40) // 返回 1640
+        std::move(task1), // 返回 110
+        std::move(task2), // 返回 420
+        std::move(task3), // 返回 930
+        std::move(task4)  // 返回 1640
     );
 
     std::cout << "结果: " << r1 << ", " << r2 << ", " << r3 << ", " << r4 << std::endl;
@@ -351,6 +361,68 @@ Task<void> error_handling_example() {
     } catch (const std::exception& e) {
         std::cout << "捕获异常: " << e.what() << std::endl;
     }
+}
+```
+
+### sleep_for - 协程友好的异步等待
+
+FlowCoro提供真正协程友好的sleep_for实现，使用定时器系统而非阻塞线程。
+
+```cpp
+auto sleep_for(std::chrono::milliseconds duration);
+```
+
+#### 实现机制
+
+**sleep_for使用协程友好的定时器系统：**
+
+```cpp
+// 内部实现机制
+class CoroutineFriendlySleepAwaiter {
+    bool await_suspend(std::coroutine_handle<> h) {
+        // 1. 挂起当前协程，不阻塞工作线程
+        // 2. 添加定时器到 CoroutineManager 的定时器队列
+        auto& manager = CoroutineManager::get_instance();
+        auto when = std::chrono::steady_clock::now() + duration_;
+        manager.add_timer(when, h);
+        
+        // 3. 返回true，让协程调度器继续处理其他协程
+        return true;
+    }
+};
+```
+
+#### 关键特性
+
+- **非阻塞**: 不占用工作线程，允许其他协程继续执行
+- **精确定时**: 基于 `std::chrono::steady_clock` 实现精确计时
+- **线程安全**: 定时器队列使用互斥锁保护，确保多线程环境安全
+- **真正异步**: 协程挂起后，定时器线程负责在指定时间恢复协程
+
+#### 使用示例
+
+```cpp
+Task<void> timing_example() {
+    std::cout << "开始等待..." << std::endl;
+    
+    // 这不会阻塞工作线程！
+    // 1. 协程挂起，工作线程继续处理其他协程
+    // 2. 定时器在1秒后恢复这个协程
+    co_await sleep_for(std::chrono::milliseconds(1000));
+    
+    std::cout << "等待完成！" << std::endl;
+    co_return;
+}
+
+// 与传统阻塞sleep的对比
+void traditional_blocking_sleep() {
+    // ❌ 阻塞整个线程，其他协程无法执行
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+}
+
+Task<void> coroutine_friendly_sleep() {
+    // ✅ 协程友好，其他协程可以继续执行
+    co_await sleep_for(std::chrono::milliseconds(1000));
 }
 ```
 
@@ -740,15 +812,16 @@ flowcoro::Task<void> concurrent_processing() {
 
 ```cpp
 #include "flowcoro.hpp"
+using namespace flowcoro;
 
 // 异步计算任务
-flowcoro::Task<int> async_calculate(int x, int y) {
+Task<int> async_calculate(int x, int y) {
     // 模拟一些异步工作
     co_return x + y;
 }
 
 // 协程组合
-flowcoro::Task<int> complex_calculation() {
+Task<int> complex_calculation() {
     auto result1 = co_await async_calculate(10, 20);
     auto result2 = co_await async_calculate(result1, 30);
     co_return result2; // 返回 60
@@ -756,14 +829,13 @@ flowcoro::Task<int> complex_calculation() {
 
 int main() {
     // 启用FlowCoro增强功能
-    flowcoro::enable_v2_features();
+    enable_v2_features();
 
-    // 执行协程
-    auto result = flowcoro::sync_wait(complex_calculation());
+    // 执行协程（注意：sync_wait需要move语义）
+    auto task = complex_calculation();
+    auto result = task.get(); // 或者使用 sync_wait(std::move(task))
     std::cout << "计算结果: " << result << std::endl;
 
-    // 清理资源
-    flowcoro::cleanup_coroutine_system();
     return 0;
 }
 ```
