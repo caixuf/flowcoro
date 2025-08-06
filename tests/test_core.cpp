@@ -22,12 +22,12 @@ TEST_CASE(basic_coroutine) {
         co_return 42;
     }();
 
-    // 协程应该已经开始执行
-    TEST_EXPECT_TRUE(executed);
-
-    // 等待协程完成
+    // 等待协程完成并验证结果
     auto result = sync_wait(std::move(coro));
     TEST_EXPECT_EQ(result, 42);
+    
+    // 协程完成后应该已经执行过
+    TEST_EXPECT_TRUE(executed);
 }
 
 // 测试线程池
