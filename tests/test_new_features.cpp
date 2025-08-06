@@ -105,161 +105,31 @@ Task<void> test_channel_close() {
     co_return;
 }
 
-// 异步互斥锁测试
-Task<void> test_async_mutex() {
-    std::cout << "测试: AsyncMutex互斥锁..." << std::endl;
-    
-    sync::AsyncMutex mutex;
-    std::atomic<int> counter{0};
-    std::atomic<int> concurrent_access{0};
-    
-    auto worker = [&](int worker_id) -> Task<void> {
-        for (int i = 0; i < 5; ++i) {
-            co_await mutex.lock();
-            
-            // 检查是否有并发访问
-            int current_concurrent = concurrent_access.fetch_add(1);
-            ASSERT_EQ(current_concurrent, 0, "互斥锁应该防止并发访问");
-            
-            // 模拟工作
-            int old_value = counter.load();
-            co_await sleep_for(std::chrono::milliseconds(1));
-            counter.store(old_value + 1);
-            
-            concurrent_access.fetch_sub(1);
-            mutex.unlock();
-        }
-        co_return;
-    };
-    
-    // 启动多个工作协程
-    auto worker1 = worker(1);
-    auto worker2 = worker(2);
-    auto worker3 = worker(3);
-    
-    co_await worker1;
-    co_await worker2;
-    co_await worker3;
-    
-    ASSERT_EQ(counter.load(), 15, "互斥锁保护下的计数器应该正确");
-    
-    std::cout << "✓ AsyncMutex测试通过" << std::endl;
-    co_return;
-}
-
-// 异步信号量测试（简化版）
-Task<void> test_async_semaphore() {
-    std::cout << "测试: AsyncSemaphore信号量..." << std::endl;
-    
-    sync::AsyncSemaphore semaphore(1); // 只允许1个并发，简化测试
-    std::atomic<int> counter{0};
-    
-    auto worker = [&](int worker_id) -> Task<void> {
-        co_await semaphore.acquire();
-        
-        counter.fetch_add(1);
-        co_await sleep_for(std::chrono::milliseconds(10)); // 缩短等待时间
-        
-        semaphore.release();
-        co_return;
-    };
-    
-    // 只启动2个工作协程
-    auto worker1 = worker(1);
-    auto worker2 = worker(2);
-    
-    co_await worker1;
-    co_await worker2;
-    
-    ASSERT_EQ(counter.load(), 2, "应该完成2个工作");
-    
-    std::cout << "✓ AsyncSemaphore测试通过" << std::endl;
-    co_return;
-}
-
-// 异步条件变量测试
-Task<void> test_async_condition_variable() {
-    std::cout << "测试: AsyncConditionVariable条件变量..." << std::endl;
-    
-    sync::AsyncConditionVariable cv;
-    bool ready = false;
-    std::atomic<int> wakeup_count{0};
-    
-    auto waiter = [&](int id) -> Task<void> {
-        co_await cv.wait();
-        if (ready) {
-            wakeup_count.fetch_add(1);
-        }
-        co_return;
-    };
-    
-    auto notifier = [&]() -> Task<void> {
-        co_await sleep_for(std::chrono::milliseconds(50));
-        ready = true;
-        cv.notify_all(); // 唤醒所有等待者
-        co_return;
-    };
-    
-    // 启动等待者和通知者
-    auto waiter1 = waiter(1);
-    auto waiter2 = waiter(2);
-    auto waiter3 = waiter(3);
-    auto notifier_task = notifier();
-    
-    co_await waiter1;
-    co_await waiter2;
-    co_await waiter3;
-    co_await notifier_task;
-    
-    ASSERT_EQ(wakeup_count.load(), 3, "应该唤醒所有等待者");
-    
-    std::cout << "✓ AsyncConditionVariable测试通过" << std::endl;
-    co_return;
-}
-
-// 生产者-消费者综合测试
+// 基于Channel的生产者-消费者测试（FlowCoro推荐模式）
 Task<void> test_producer_consumer() {
-    std::cout << "测试: 生产者-消费者模式..." << std::endl;
+    std::cout << "测试: Channel生产者-消费者模式..." << std::endl;
     
-    constexpr int buffer_size = 3;
     constexpr int item_count = 10;
+    auto channel = make_channel<int>(3);  // 使用Channel作为缓冲区
     
-    sync::AsyncSemaphore empty_slots(buffer_size);  // 空槽位
-    sync::AsyncSemaphore filled_slots(0);           // 已填充槽位
-    sync::AsyncMutex buffer_mutex;
-    
-    std::queue<int> buffer;
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
     
     auto producer = [&]() -> Task<void> {
         for (int i = 0; i < item_count; ++i) {
-            co_await empty_slots.acquire();
-            co_await buffer_mutex.lock();
-            
-            buffer.push(i);
+            co_await channel->send(i);
             produced.fetch_add(1);
-            
-            buffer_mutex.unlock();
-            filled_slots.release();
-            
             co_await sleep_for(std::chrono::milliseconds(1));
         }
+        channel->close();  // 关闭channel表示生产完成
         co_return;
     };
     
     auto consumer = [&]() -> Task<void> {
-        for (int i = 0; i < item_count; ++i) {
-            co_await filled_slots.acquire();
-            co_await buffer_mutex.lock();
-            
-            int item = buffer.front();
-            buffer.pop();
+        while (true) {
+            auto item = co_await channel->recv();
+            if (!item.has_value()) break;  // channel已关闭且为空
             consumed.fetch_add(1);
-            
-            buffer_mutex.unlock();
-            empty_slots.release();
-            
             co_await sleep_for(std::chrono::milliseconds(1));
         }
         co_return;
@@ -273,9 +143,8 @@ Task<void> test_producer_consumer() {
     
     ASSERT_EQ(produced.load(), item_count, "应该生产所有物品");
     ASSERT_EQ(consumed.load(), item_count, "应该消费所有物品");
-    ASSERT_TRUE(buffer.empty(), "缓冲区应该为空");
     
-    std::cout << "✓ 生产者-消费者测试通过" << std::endl;
+    std::cout << "✓ Channel生产者-消费者测试通过" << std::endl;
     co_return;
 }
 
@@ -336,9 +205,10 @@ Task<void> run_all_tests() {
         co_await test_channel_basic();
         co_await test_channel_buffered();
         co_await test_channel_close();
-        co_await test_async_mutex();
-        co_await test_async_semaphore();
-        co_await test_async_condition_variable();
+        // 移除传统同步原语测试 - 与FlowCoro设计哲学不符
+        // co_await test_async_mutex();
+        // co_await test_async_semaphore();
+        // co_await test_async_condition_variable();
         co_await test_producer_consumer();
         co_await test_performance();
         

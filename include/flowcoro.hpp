@@ -49,7 +49,6 @@
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 #include "flowcoro/channel.h"
-#include "flowcoro/async_sync.h"
 
 // #include "flowcoro/rpc.h" // 暂时注释掉复杂的RPC实现
 

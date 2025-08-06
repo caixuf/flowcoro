@@ -20,23 +20,9 @@ find_package(Threads REQUIRED)
 add_executable(test_core test_core.cpp)
 target_link_libraries(test_core flowcoro_net Threads::Threads)
 
-# 新功能测试 - Channel和异步同步原语
+# 新功能测试 - Channel通信
 add_executable(test_new_features test_new_features.cpp)
 target_link_libraries(test_new_features flowcoro_net Threads::Threads)
-
-# Channel独立测试 - 已删除
-# add_executable(test_channel_only test_channel_only.cpp)
-# target_link_libraries(test_channel_only flowcoro_net Threads::Threads)
-
-# 调试协程行为测试 - 已删除
-# add_executable(debug_coroutine debug_coroutine.cpp)
-# target_link_libraries(debug_coroutine flowcoro_net Threads::Threads)
-
-# 异步同步原语完整测试 - 合并到 test_new_features 中
-# add_executable(test_async_sync test_async_sync.cpp)
-# target_link_libraries(test_async_sync flowcoro_net Threads::Threads)
-
-# AsyncSemaphore测试已合并到 test_new_features 中
 
 # 网络模块测试
 add_executable(test_network test_network.cpp)
