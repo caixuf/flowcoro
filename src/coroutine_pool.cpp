@@ -6,30 +6,145 @@
 #include <queue>
 #include <atomic>
 #include <thread>
+#include <vector>
+#include <random>
 
 namespace flowcoro {
 
 // ==========================================
-// 协程池实现 - 运行在主线程，使用后台线程池
+// 单个协程调度器 - 每个调度器独立运行在自己的线程中
+// ==========================================
+
+class CoroutineScheduler {
+private:
+    size_t scheduler_id_;
+    std::thread worker_thread_;
+    std::atomic<bool> stop_flag_{false};
+    
+    // 协程队列 - 每个调度器独立的队列
+    std::queue<std::coroutine_handle<>> coroutine_queue_;
+    mutable std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    
+    // 统计信息
+    std::atomic<size_t> total_coroutines_{0};
+    std::atomic<size_t> completed_coroutines_{0};
+    std::chrono::steady_clock::time_point start_time_;
+
+    void worker_loop() {
+        const size_t BATCH_SIZE = 32; // 每次处理32个协程
+        std::vector<std::coroutine_handle<>> batch;
+        batch.reserve(BATCH_SIZE);
+        
+        while (!stop_flag_.load()) {
+            batch.clear();
+            
+            // 批量提取协程
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+                queue_cv_.wait_for(lock, std::chrono::milliseconds(1), 
+                    [this] { return !coroutine_queue_.empty() || stop_flag_.load(); });
+                
+                while (!coroutine_queue_.empty() && batch.size() < BATCH_SIZE) {
+                    batch.push_back(coroutine_queue_.front());
+                    coroutine_queue_.pop();
+                }
+            }
+            
+            // 批量执行协程
+            for (auto handle : batch) {
+                if (handle && !handle.done() && !stop_flag_.load()) {
+                    try {
+                        handle.resume();
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                    } catch (...) {
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        // 协程异常处理
+                    }
+                }
+            }
+        }
+    }
+
+public:
+    CoroutineScheduler(size_t id) 
+        : scheduler_id_(id), start_time_(std::chrono::steady_clock::now()) {
+        worker_thread_ = std::thread(&CoroutineScheduler::worker_loop, this);
+    }
+    
+    ~CoroutineScheduler() {
+        stop();
+    }
+    
+    void stop() {
+        if (!stop_flag_.exchange(true)) {
+            queue_cv_.notify_all();
+            if (worker_thread_.joinable()) {
+                worker_thread_.join();
+            }
+            
+            // 清理剩余协程
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            while (!coroutine_queue_.empty()) {
+                auto handle = coroutine_queue_.front();
+                coroutine_queue_.pop();
+                if (handle && !handle.done()) {
+                    handle.destroy();
+                }
+            }
+        }
+    }
+    
+    void schedule_coroutine(std::coroutine_handle<> handle) {
+        if (!handle || handle.done() || stop_flag_.load()) return;
+        
+        total_coroutines_.fetch_add(1, std::memory_order_relaxed);
+        
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            coroutine_queue_.push(handle);
+        }
+        queue_cv_.notify_one();
+    }
+    
+    size_t get_queue_size() const {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        return coroutine_queue_.size();
+    }
+    
+    size_t get_total_coroutines() const { return total_coroutines_.load(); }
+    size_t get_completed_coroutines() const { return completed_coroutines_.load(); }
+    size_t get_scheduler_id() const { return scheduler_id_; }
+    
+    std::chrono::milliseconds get_uptime() const {
+        auto now = std::chrono::steady_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_);
+    }
+};
+
+// ==========================================
+// 多调度器协程池 - 管理12个独立的协程调度器
 // ==========================================
 
 class CoroutinePool {
 private:
     static CoroutinePool* instance_;
     static std::mutex instance_mutex_;
-
-    // 协程队列 - 在主线程上调度
-    std::queue<std::coroutine_handle<>> coroutine_queue_;
-    std::mutex coroutine_mutex_;
-
+    
+    static constexpr size_t NUM_SCHEDULERS = 12;
+    
+    // 12个独立的协程调度器
+    std::vector<std::unique_ptr<CoroutineScheduler>> schedulers_;
+    
+    // 负载均衡计数器
+    std::atomic<size_t> round_robin_counter_{0};
+    
     // 后台线程池 - 处理CPU密集型任务
     std::unique_ptr<lockfree::ThreadPool> thread_pool_;
-
+    
     std::atomic<bool> stop_flag_{false};
-
+    
     // 统计信息
-    std::atomic<size_t> total_coroutines_{0};
-    std::atomic<size_t> completed_coroutines_{0};
     std::atomic<size_t> total_tasks_{0};
     std::atomic<size_t> completed_tasks_{0};
     std::chrono::steady_clock::time_point start_time_;
@@ -37,6 +152,12 @@ private:
 public:
     CoroutinePool()
         : start_time_(std::chrono::steady_clock::now()) {
+        // 初始化12个独立的协程调度器
+        schedulers_.reserve(NUM_SCHEDULERS);
+        for (size_t i = 0; i < NUM_SCHEDULERS; ++i) {
+            schedulers_.emplace_back(std::make_unique<CoroutineScheduler>(i));
+        }
+        
         // 针对大规模协程优化线程池配置
         size_t thread_count = std::thread::hardware_concurrency();
         if (thread_count == 0) thread_count = 4; // 备用值
@@ -48,24 +169,23 @@ public:
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
-        std::cout << " FlowCoro协程池启动 - 主线程协程调度 + "
-                  << thread_count << "个高性能工作线程 (优化大规模并发)" << std::endl;
+        std::cout << "🚀 FlowCoro多调度器协程池启动 - " << NUM_SCHEDULERS 
+                  << "个独立协程调度器 + " << thread_count 
+                  << "个高性能工作线程 (调度器完全隔离)" << std::endl;
     }
 
     ~CoroutinePool() {
         stop_flag_.store(true);
-
-        // 清理剩余协程
-        std::lock_guard<std::mutex> lock(coroutine_mutex_);
-        while (!coroutine_queue_.empty()) {
-            auto handle = coroutine_queue_.front();
-            coroutine_queue_.pop();
-            if (handle && !handle.done()) {
-                handle.destroy(); // 安全销毁未完成的协程
+        
+        // 停止所有调度器
+        for (auto& scheduler : schedulers_) {
+            if (scheduler) {
+                scheduler->stop();
             }
         }
-
-        std::cout << " FlowCoro协程池关闭" << std::endl;
+        
+        schedulers_.clear();
+        std::cout << "🔥 FlowCoro多调度器协程池关闭" << std::endl;
     }
 
     static CoroutinePool& get_instance() {
@@ -82,24 +202,15 @@ public:
         instance_ = nullptr;
     }
 
-    // 协程调度 - 在主线程上执行协程 (高性能版本)
+    // 协程调度 - 使用轮询负载均衡分配到12个调度器
     void schedule_coroutine(std::coroutine_handle<> handle) {
         if (!handle || handle.done() || stop_flag_.load()) return;
 
-        total_coroutines_.fetch_add(1, std::memory_order_relaxed);
-
-        // 大规模优化：减少锁竞争
-        {
-            std::unique_lock<std::mutex> lock(coroutine_mutex_, std::try_to_lock);
-            if (lock.owns_lock()) {
-                // 快速路径：直接入队
-                coroutine_queue_.push(handle);
-            } else {
-                // 慢速路径：使用普通锁
-                std::lock_guard<std::mutex> fallback_lock(coroutine_mutex_);
-                coroutine_queue_.push(handle);
-            }
-        }
+        // 轮询负载均衡：选择调度器
+        size_t scheduler_index = round_robin_counter_.fetch_add(1, std::memory_order_relaxed) % NUM_SCHEDULERS;
+        
+        // 分配给对应的调度器
+        schedulers_[scheduler_index]->schedule_coroutine(handle);
     }
 
     // CPU密集型任务 - 提交到后台线程池
@@ -120,40 +231,19 @@ public:
         });
     }
 
-    // 驱动协程池 - 在主线程中调用 (高性能批处理版本)
+    // 驱动协程池 - 现在由各个调度器自动运行，无需手动驱动
     void drive() {
+        // 多调度器架构下，每个调度器都在独立线程中自动运行
+        // 这个方法保留为兼容接口，实际不需要调用
         if (stop_flag_.load()) return;
-
-        // 大规模优化：批量处理协程
-        const size_t BATCH_SIZE = 64; // 每次处理64个协程
-        std::vector<std::coroutine_handle<>> batch;
-        batch.reserve(BATCH_SIZE);
-
-        // 批量提取协程
-        {
-            std::lock_guard<std::mutex> lock(coroutine_mutex_);
-            while (!coroutine_queue_.empty() && batch.size() < BATCH_SIZE) {
-                batch.push_back(coroutine_queue_.front());
-                coroutine_queue_.pop();
-            }
-        }
-
-        // 批量执行协程（减少锁竞争）
-        for (auto handle : batch) {
-            if (handle && !handle.done()) {
-                try {
-                    handle.resume();
-                    completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                } catch (...) {
-                    completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                    // 协程异常处理
-                }
-            }
-        }
+        
+        // 可以在这里添加一些全局监控逻辑
+        // 但协程调度已经由各个独立调度器自动处理
     }
 
     // 获取统计信息
     struct PoolStats {
+        size_t num_schedulers;
         size_t thread_pool_workers;
         size_t pending_coroutines;
         size_t total_coroutines;
@@ -170,17 +260,23 @@ public:
         auto uptime = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_);
 
         size_t pending = 0;
-        {
-            std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(coroutine_mutex_));
-            pending = coroutine_queue_.size();
+        size_t total_cor = 0;
+        size_t completed_cor = 0;
+        
+        // 汇总所有调度器的统计信息
+        for (const auto& scheduler : schedulers_) {
+            if (scheduler) {
+                pending += scheduler->get_queue_size();
+                total_cor += scheduler->get_total_coroutines();
+                completed_cor += scheduler->get_completed_coroutines();
+            }
         }
 
-        size_t total_cor = total_coroutines_.load();
-        size_t completed_cor = completed_coroutines_.load();
         size_t total_task = total_tasks_.load();
         size_t completed_task = completed_tasks_.load();
 
         return PoolStats{
+            NUM_SCHEDULERS, // num_schedulers
             std::max(std::thread::hardware_concurrency(), static_cast<unsigned int>(32)), // thread_pool_workers (显示实际线程数)
             pending, // pending_coroutines
             total_cor, // total_coroutines
@@ -196,9 +292,9 @@ public:
     void print_stats() const {
         auto stats = get_stats();
 
-        std::cout << "\n=== FlowCoro 协程池统计 ===" << std::endl;
-        std::cout << "️ 运行时间: " << stats.uptime.count() << " ms" << std::endl;
-        std::cout << "️ 架构模式: 主线程协程池 + 后台线程池" << std::endl;
+        std::cout << "\n=== FlowCoro 多调度器协程池统计 ===" << std::endl;
+        std::cout << " 运行时间: " << stats.uptime.count() << " ms" << std::endl;
+        std::cout << " 架构模式: " << stats.num_schedulers << "个独立协程调度器 + 后台线程池" << std::endl;
         std::cout << " 工作线程: " << stats.thread_pool_workers << " 个" << std::endl;
         std::cout << " 待处理协程: " << stats.pending_coroutines << std::endl;
         std::cout << " 总协程数: " << stats.total_coroutines << std::endl;
@@ -209,6 +305,18 @@ public:
                   << (stats.coroutine_completion_rate * 100) << "%" << std::endl;
         std::cout << " 任务完成率: " << std::fixed << std::setprecision(1)
                   << (stats.task_completion_rate * 100) << "%" << std::endl;
+        
+        // 显示各个调度器的详细信息
+        std::cout << "\n--- 调度器详情 ---" << std::endl;
+        for (const auto& scheduler : schedulers_) {
+            if (scheduler) {
+                std::cout << "调度器 #" << scheduler->get_scheduler_id() 
+                          << " - 队列: " << scheduler->get_queue_size()
+                          << ", 总数: " << scheduler->get_total_coroutines()
+                          << ", 完成: " << scheduler->get_completed_coroutines()
+                          << ", 运行时间: " << scheduler->get_uptime().count() << "ms" << std::endl;
+            }
+        }
         std::cout << "===============================" << std::endl;
     }
 };
