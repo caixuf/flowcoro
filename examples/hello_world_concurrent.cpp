@@ -133,9 +133,23 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
             auto result = co_await task; // 每个co_await都会使用协程池
             all_results.push_back(result);
 
-            // 减少输出频率，避免竞争
-            if ((i + 1) % 100 == 0 || (i + 1) == request_count) {
-                std::cout << " 完成 " << (i + 1) << "/" << request_count << std::endl;
+            // 大幅减少输出频率，提高性能
+            if (request_count >= 10000) {
+                // 大规模任务：每5000个输出一次
+                if ((i + 1) % 5000 == 0 || (i + 1) == request_count) {
+                    std::cout << " 完成 " << (i + 1) << "/" << request_count 
+                              << " (" << ((i + 1) * 100 / request_count) << "%)" << std::endl;
+                }
+            } else if (request_count >= 1000) {
+                // 中等规模：每500个输出一次
+                if ((i + 1) % 500 == 0 || (i + 1) == request_count) {
+                    std::cout << " 完成 " << (i + 1) << "/" << request_count << std::endl;
+                }
+            } else {
+                // 小规模：每100个输出一次
+                if ((i + 1) % 100 == 0 || (i + 1) == request_count) {
+                    std::cout << " 完成 " << (i + 1) << "/" << request_count << std::endl;
+                }
             }
         }
 
@@ -211,7 +225,21 @@ void handle_concurrent_requests_threads(int request_count) {
             std::string result = "用户" + std::to_string(1000 + i) + " (已处理)";
 
             int current_completed = completed.fetch_add(1) + 1;
-            if (current_completed % (request_count / 10) == 0 || current_completed == request_count) {
+            
+            // 优化输出频率，提高性能
+            bool should_print = false;
+            if (request_count >= 10000) {
+                // 大规模：每5000个输出一次
+                should_print = (current_completed % 5000 == 0 || current_completed == request_count);
+            } else if (request_count >= 1000) {
+                // 中等规模：每500个输出一次  
+                should_print = (current_completed % 500 == 0 || current_completed == request_count);
+            } else {
+                // 小规模：每100个输出一次
+                should_print = (current_completed % 100 == 0 || current_completed == request_count);
+            }
+            
+            if (should_print) {
                 std::cout << " 已完成 " << current_completed << "/" << request_count
                           << " 个线程 (" << (current_completed * 100 / request_count) << "%)" << std::endl;
             }
