@@ -14,6 +14,7 @@
 #include <optional>
 #include <type_traits>
 #include <variant>
+#include <any>
 #include <queue>
 #include <condition_variable>
 #include <iostream>
@@ -211,6 +212,7 @@ private:
     void process_timer_queue() {
         static constexpr size_t BATCH_SIZE = 32; // 批处理大小
         std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
+        std::array<TimerNode*, BATCH_SIZE> nodes_to_delete;
         size_t batch_count = 0;
         
         auto now = std::chrono::steady_clock::now();
@@ -224,14 +226,23 @@ private:
             
             if (current->when <= now && current->handle && !current->handle.done()) {
                 // 找到到期的定时器
-                batch[batch_count++] = current->handle;
+                batch[batch_count] = current->handle;
+                nodes_to_delete[batch_count] = current;
+                batch_count++;
                 
-                // 从链表中移除（简化版：延迟清理）
-                // 在实际实现中可以使用更复杂的无锁删除算法
+                // 从链表中移除节点 - 使用简化的移除策略
+                if (prev) {
+                    prev->next.store(next, std::memory_order_release);
+                } else {
+                    // 移除头节点
+                    timer_head_.compare_exchange_strong(current, next, std::memory_order_release);
+                }
+                
                 timer_count_.fetch_sub(1, std::memory_order_relaxed);
+            } else {
+                prev = current;
             }
             
-            prev = current;
             current = next;
         }
         
@@ -241,6 +252,11 @@ private:
             for (size_t i = 0; i < batch_count; ++i) {
                 ready_queue_.push(batch[i]);
             }
+        }
+        
+        // 延迟删除定时器节点以避免内存问题
+        for (size_t i = 0; i < batch_count; ++i) {
+            delete nodes_to_delete[i];
         }
     }
 
@@ -2127,6 +2143,77 @@ Task<std::tuple<decltype(std::declval<Tasks>().get())...>> when_all(Tasks&&... t
 
     // 调用执行函数
     co_return co_await execute_all(std::forward<Tasks>(tasks)...);
+}
+
+// when_any实现 - 等待任意一个task完成 (套壳实现，参考when_all)
+template<typename... Tasks>
+Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
+    // 使用fold expression和参数展开，参考when_all的实现方式
+    auto execute_any = []<typename... Ts>(Ts&&... ts) -> Task<std::pair<std::size_t, std::any>> {
+        // 将所有tasks存储在tuple中，避免引用问题
+        std::tuple<Ts...> task_tuple(std::forward<Ts>(ts)...);
+        
+        // 启动所有任务的轮询检查
+        while (true) {
+            // 检查每个任务是否完成
+            std::size_t winner_index = std::size_t(-1);
+            std::any result;
+            bool found = false;
+            
+            // 使用索引展开来检查每个task
+            auto check_tasks = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                // 使用fold expression检查所有任务
+                (check_single_task<Is>(std::get<Is>(task_tuple), found, winner_index, result) || ...);
+            };
+            
+            check_tasks(std::index_sequence_for<Ts...>{});
+            
+            if (found) {
+                co_return std::make_pair(winner_index, std::move(result));
+            }
+            
+            // 短暂休眠避免忙等待
+            co_await sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+
+    // 调用执行函数
+    co_return co_await execute_any(std::forward<Tasks>(tasks)...);
+}
+
+// 检查单个任务的辅助函数模板
+template<std::size_t Index, typename Task>
+bool check_single_task(Task& task, bool& found, std::size_t& winner_index, std::any& result) {
+    if (found) return false; // 已找到完成的任务
+    
+    if (task.await_ready()) {
+        // 任务已完成，获取结果
+        try {
+            auto task_result = task.await_resume();
+            result = std::make_any<std::decay_t<decltype(task_result)>>(std::move(task_result));
+            winner_index = Index;
+            found = true;
+            return true;
+        } catch (...) {
+            // 如果有异常，也算完成
+            winner_index = Index;
+            found = true;
+            // 可以在这里设置异常信息到result中
+            return true;
+        }
+    }
+    return false;
+}
+
+// 便捷的when_any重载 - 支持超时
+template<typename TaskType, typename Duration>
+auto when_any_timeout(TaskType&& task, Duration timeout) {
+    auto timeout_task = [timeout]() -> Task<bool> {
+        co_await sleep_for(timeout);
+        co_return false; // 超时返回false
+    }();
+    
+    return when_any(std::forward<TaskType>(task), std::move(timeout_task));
 }
 
 // 同步等待协程完成的函数

@@ -33,6 +33,12 @@ add_executable(test_database test_database.cpp)
 # RPC模块测试
 add_executable(test_rpc test_rpc.cpp)
 
+# 跨线程协程测试
+add_executable(test_cross_thread test_cross_thread.cpp)
+
+# when_any功能测试
+add_executable(test_when_any test_when_any.cpp)
+
 # 链接库
 target_link_libraries(test_core
     flowcoro_net
@@ -53,6 +59,18 @@ target_link_libraries(test_database
 
 # RPC模块测试链接库
 target_link_libraries(test_rpc
+    flowcoro_net
+    Threads::Threads
+)
+
+# 跨线程协程测试链接库
+target_link_libraries(test_cross_thread
+    flowcoro_net
+    Threads::Threads
+)
+
+# when_any功能测试链接库
+target_link_libraries(test_when_any
     flowcoro_net
     Threads::Threads
 )
