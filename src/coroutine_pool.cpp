@@ -186,7 +186,7 @@ public:
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
-        std::cout << "🚀 FlowCoro智能协程池启动 - " << NUM_SCHEDULERS 
+        std::cout << "FlowCoro智能协程池启动 - " << NUM_SCHEDULERS 
                   << "个独立协程调度器 (智能负载均衡) + " << thread_count 
                   << "个高性能工作线程 (无锁优化)" << std::endl;
     }
@@ -202,7 +202,7 @@ public:
         }
         
         schedulers_.clear();
-        std::cout << "🔥 FlowCoro自适应协程池关闭 (" << NUM_SCHEDULERS << "个调度器)" << std::endl;
+        std::cout << "FlowCoro自适应协程池关闭 (" << NUM_SCHEDULERS << "个调度器)" << std::endl;
     }
 
     static CoroutinePool& get_instance() {
