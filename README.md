@@ -385,7 +385,7 @@ FlowCoro借鉴了多个优秀的异步框架设计：
 - **cppcoro库**: C++20协程的工业级实现
 
 ```cpp
-// FlowCoro的drive()方法 (类似ioManager)
+// FlowCoro的drive()方法 
 void CoroutineManager::drive() {
     // 1. 处理定时器队列
     process_timer_queue();

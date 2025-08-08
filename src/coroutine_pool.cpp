@@ -236,21 +236,16 @@ public:
         schedulers_[scheduler_index]->schedule_coroutine(handle);
     }
 
-    // CPU密集型任务 - 提交到后台线程池
+    // CPU密集型任务 - 提交到后台线程池 (优化版：无异常处理)
     void schedule_task(std::function<void()> task) {
         if (stop_flag_.load()) return;
 
-        total_tasks_.fetch_add(1);
+        total_tasks_.fetch_add(1, std::memory_order_relaxed);
 
-        // 将任务提交到后台线程池执行
+        // 将任务提交到后台线程池执行 - 移除异常处理提高性能
         thread_pool_->enqueue([this, task = std::move(task)]() {
-            try {
-                task();
-                completed_tasks_.fetch_add(1);
-            } catch (...) {
-                completed_tasks_.fetch_add(1);
-                // 记录异常但不传播
-            }
+            task(); // 直接执行，不捕获异常
+            completed_tasks_.fetch_add(1, std::memory_order_relaxed);
         });
     }
 
@@ -377,78 +372,56 @@ void shutdown_coroutine_pool() {
     CoroutinePool::shutdown();
 }
 
-// 运行协程直到完成的安全实现
+// 运行协程直到完成的高性能实现 - 移除异常处理
 void run_until_complete(Task<void>& task) {
     std::atomic<bool> completed{false};
-    std::exception_ptr exception_holder = nullptr;
 
     // 获取协程管理器
     auto& manager = CoroutineManager::get_instance();
 
-    // 创建完成回调
+    // 创建完成回调 - 简化版本，无异常处理
     auto completion_task = [&]() -> Task<void> {
-        try {
-            co_await task;
-            completed.store(true);
-        } catch (...) {
-            exception_holder = std::current_exception();
-            completed.store(true);
-        }
+        co_await task;
+        completed.store(true, std::memory_order_release);
     }();
 
     // 启动任务
     manager.schedule_resume(completion_task.handle);
 
-    // 等待完成并持续驱动协程管理器
-    while (!completed.load()) {
+    // 等待完成并持续驱动协程管理器 - 优化轮询间隔
+    while (!completed.load(std::memory_order_acquire)) {
         manager.drive(); // 驱动协程调度
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(100)); // 减少睡眠时间提高响应性
     }
 
     // 最终清理
     manager.drive();
-
-    // 重新抛出异常
-    if (exception_holder) {
-        std::rethrow_exception(exception_holder);
-    }
 }
 
 template<typename T>
 void run_until_complete(Task<T>& task) {
     std::atomic<bool> completed{false};
-    std::exception_ptr exception_holder = nullptr;
 
     // 获取协程管理器
     auto& manager = CoroutineManager::get_instance();
 
-    // 创建完成回调
+    // 创建完成回调 - 简化版本，无异常处理
     auto completion_task = [&]() -> Task<void> {
-        try {
-            co_await task;
-            completed.store(true);
-        } catch (...) {
-            exception_holder = std::current_exception();
-            completed.store(true);
-        }
+        co_await task;
+        completed.store(true, std::memory_order_release);
     }();
 
     // 启动任务
     manager.schedule_resume(completion_task.handle);
 
-    // 等待完成并持续驱动协程管理器
-    while (!completed.load()) {
+    // 等待完成并持续驱动协程管理器 - 优化轮询间隔
+    while (!completed.load(std::memory_order_acquire)) {
         manager.drive(); // 驱动协程调度
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(100)); // 减少睡眠时间提高响应性
     }
 
     // 最终清理
     manager.drive();
-
-    // 重新抛出异常
-    if (exception_holder) {
-        std::rethrow_exception(exception_holder);
-    }
 }
 
 // 显式实例化常用类型

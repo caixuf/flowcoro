@@ -49,7 +49,7 @@ void print_pool_stats();
 void shutdown_coroutine_pool();
 
 // ==========================================
-// FlowCoro 2.0 - 基于ioManager设计的协程管理器架构
+// FlowCoro 2.0
 // ==========================================
 
 // 智能负载均衡器 - 无锁实现
@@ -123,7 +123,7 @@ public:
 // 前向声明
 class CoroutineManager;
 
-// 协程管理器 - 参考ioManager的manager设计
+// 协程管理器
 class CoroutineManager {
 private:
     // 智能负载均衡器实例
@@ -132,13 +132,13 @@ private:
 public:
     CoroutineManager() = default;
 
-    // 禁止拷贝和移动（参考ioManager设计）
+    // 禁止拷贝和移动
     CoroutineManager(const CoroutineManager&) = delete;
     CoroutineManager& operator=(const CoroutineManager&) = delete;
     CoroutineManager(CoroutineManager&&) = delete;
     CoroutineManager& operator=(CoroutineManager&&) = delete;
 
-    // 驱动协程调度（类似ioManager的drive方法）
+    // 驱动协程调度
     void drive() {
         // 驱动新的协程池系统
         drive_coroutine_pool();
@@ -297,7 +297,7 @@ private:
     std::mutex destroy_mutex_;
 };
 
-// 安全的时钟等待器 - 参考ioManager的clock设计
+// 安全的时钟等待器
 class ClockAwaiter {
 private:
     std::chrono::milliseconds duration_;
@@ -602,21 +602,22 @@ struct CoroTask {
     }
 
     void await_suspend(std::coroutine_handle<> waiting_handle) {
-        if (handle && !handle.done()) {
+        if (handle && !handle.done()) [[likely]] {
             // 在线程池中运行当前任务，然后恢复等待的协程
             GlobalThreadPool::get().enqueue_void([h = handle, waiting_handle]() {
-                if (h && !h.done()) {
+                // 快速路径：先检查是否还有效，减少重复检查
+                if (h) [[likely]] {
                     h.resume();
                 }
                 // 任务完成后恢复等待的协程
-                if (waiting_handle && !waiting_handle.done()) {
+                if (waiting_handle) [[likely]] {
                     waiting_handle.resume();
                 }
             });
         } else {
             // 如果任务已经完成，直接恢复等待的协程
             GlobalThreadPool::get().enqueue_void([waiting_handle]() {
-                if (waiting_handle && !waiting_handle.done()) {
+                if (waiting_handle) [[likely]] {
                     waiting_handle.resume();
                 }
             });
@@ -733,7 +734,6 @@ struct Task {
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
-        mutable std::mutex state_mutex_; // 保护状态变更
 
         promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
 
@@ -749,23 +749,20 @@ struct Task {
         std::suspend_always final_suspend() noexcept { return {}; }
 
         void return_value(T v) noexcept {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!is_cancelled_.load(std::memory_order_relaxed) && !is_destroyed_.load(std::memory_order_relaxed)) {
+            // 快速路径：通常情况下协程没有被取消或销毁
+            if (!is_cancelled_.load(std::memory_order_relaxed)) [[likely]] {
                 value = std::move(v);
             }
         }
 
         void unhandled_exception() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                has_error = true;
-                LOG_ERROR("Task<T> unhandled exception occurred");
-            }
+            // 快速路径：直接设置错误标志，不使用锁
+            has_error = true;
+            LOG_ERROR("Task<T> unhandled exception occurred");
         }
 
-        // 安全的取消支持
-        void request_cancellation() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
+        // 快速的取消支持 - 去除锁
+        void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
         }
 
@@ -782,22 +779,18 @@ struct Task {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
         }
 
-        // 安全获取值
-        std::optional<T> safe_get_value() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return std::nullopt;
+        // 快速获取值 - 去除锁，使用原子读取
+        std::optional<T> safe_get_value() const noexcept {
+            // 快速路径：通常情况下协程没有被销毁
+            if (!is_destroyed_.load(std::memory_order_acquire)) [[likely]] {
+                return value;
             }
-            return value;
+            return std::nullopt;
         }
 
-        // 安全获取错误状态
-        bool safe_has_error() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return false;
-            }
-            return has_error;
+        // 快速获取错误状态 - 去除锁
+        bool safe_has_error() const noexcept {
+            return has_error && !is_destroyed_.load(std::memory_order_acquire);
         }
     };
     std::coroutine_handle<promise_type> handle;
@@ -884,7 +877,7 @@ struct Task {
         return is_cancelled() || (handle.promise().exception != nullptr);
     }
 
-    // 安全销毁方法 - ioManager风格的延迟销毁
+    // 安全销毁方法 
     void safe_destroy() {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
@@ -1072,7 +1065,6 @@ struct Task<Result<T, E>> {
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
-        mutable std::mutex state_mutex_;
 
         promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
 
@@ -1087,32 +1079,27 @@ struct Task<Result<T, E>> {
         std::suspend_always final_suspend() noexcept { return {}; }
 
         void return_value(Result<T, E> r) noexcept {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!is_cancelled_.load(std::memory_order_relaxed) &&
-                !is_destroyed_.load(std::memory_order_relaxed)) {
+            // 快速路径：通常情况下协程没有被取消
+            if (!is_cancelled_.load(std::memory_order_relaxed)) [[likely]] {
                 result = std::move(r);
             }
         }
 
-        // 增强版异常处理 - 转换为Result
+        // 快速异常处理 - 转换为Result，去除锁
         void unhandled_exception() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                // 不使用异常，只设置错误状态
-                if constexpr (std::is_same_v<E, ErrorInfo>) {
-                    result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
-                } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
-                    result = err(std::exception_ptr{}); // 不能捕获异常，只返回空指针
-                } else {
-                    // 对于其他错误类型，只能设置为默认错误
-                    result = err(E{});
-                }
+            // 不使用异常，只设置错误状态
+            if constexpr (std::is_same_v<E, ErrorInfo>) {
+                result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
+            } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
+                result = err(std::exception_ptr{}); // 不能捕获异常，只返回空指针
+            } else {
+                // 对于其他错误类型，只能设置为默认错误
+                result = err(E{});
             }
         }
 
-        // 状态管理方法
-        void request_cancellation() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
+        // 快速状态管理方法 - 去除锁
+        void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
         }
 
@@ -1129,12 +1116,12 @@ struct Task<Result<T, E>> {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
         }
 
-        std::optional<Result<T, E>> safe_get_result() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return std::nullopt;
+        std::optional<Result<T, E>> safe_get_result() const noexcept {
+            // 快速路径：通常情况下协程没有被销毁
+            if (!is_destroyed_.load(std::memory_order_acquire)) [[likely]] {
+                return result;
             }
-            return result;
+            return std::nullopt;
         }
     };
 
@@ -1278,7 +1265,6 @@ struct Task<void> {
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
-        mutable std::mutex state_mutex_; // 保护状态变更
 
         promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
 
@@ -1294,24 +1280,18 @@ struct Task<void> {
         std::suspend_always final_suspend() noexcept { return {}; }
 
         void return_void() noexcept {
-            // 增强版 - 检查状态
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (is_cancelled_.load(std::memory_order_relaxed) || is_destroyed_.load(std::memory_order_relaxed)) {
-                return; // 已取消或销毁，不做处理
-            }
+            // 快速路径：通常情况下协程没有被取消
+            // return_void本身就是空操作，不需要额外检查
         }
 
         void unhandled_exception() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!is_destroyed_.load(std::memory_order_relaxed)) {
-                has_error = true;
-                LOG_ERROR("Task<void> unhandled exception occurred");
-            }
+            // 快速路径：直接设置错误标志
+            has_error = true;
+            LOG_ERROR("Task<void> unhandled exception occurred");
         }
 
-        // 增强版取消支持
-        void request_cancellation() {
-            std::lock_guard<std::mutex> lock(state_mutex_);
+        // 快速取消支持 - 去除锁
+        void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
         }
 
@@ -1328,13 +1308,9 @@ struct Task<void> {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
         }
 
-        // 安全获取错误状态
-        bool safe_has_error() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (is_destroyed_.load(std::memory_order_relaxed)) {
-                return false;
-            }
-            return has_error;
+        // 快速获取错误状态 - 去除锁
+        bool safe_has_error() const noexcept {
+            return has_error && !is_destroyed_.load(std::memory_order_acquire);
         }
     };
     std::coroutine_handle<promise_type> handle;
@@ -2064,7 +2040,7 @@ inline void start_coroutine_manager() {
         }
     }).detach();
 
-    std::cout << "FlowCoro: Coroutine manager started with ioManager-style architecture" << std::endl;
+    std::cout << "FlowCoro: Coroutine manager started" << std::endl;
 }
 
 // 修复when_all - 使用参数展开支持任意数量的task
@@ -2118,20 +2094,12 @@ auto sync_wait(Func&& func) {
 // ========================================
 
 /**
- * @brief 启用FlowCoro v2.0 增强功能 - 基于ioManager架构设计
+ * @brief 启用FlowCoro v2.0 增强功能
  */
 inline void enable_v2_features() {
     // 启动协程管理器
     start_coroutine_manager();
-
-    std::cout << " FlowCoro v4.0 Enhanced Features Enabled (ioManager-inspired)" << std::endl;
-    std::cout << " Centralized coroutine manager with drive-based scheduling" << std::endl;
-    std::cout << " Safe timer-based sleep implementation" << std::endl;
-    std::cout << " Delayed destruction for coroutine safety" << std::endl;
-    std::cout << " Enhanced lifecycle management integrated" << std::endl;
-    std::cout << " Cancel/timeout support with proper state tracking" << std::endl;
-    std::cout << " Architecture inspired by ioManager's FSM design" << std::endl;
-    std::cout << " All v2/v3 features are now unified in FlowCoro v4.0" << std::endl;
+    LOG_INFO("FlowCoro v2.0 features enabled");
 }
 
 /**
