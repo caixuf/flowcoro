@@ -32,7 +32,7 @@ private:
     std::chrono::steady_clock::time_point start_time_;
 
     void worker_loop() {
-        const size_t BATCH_SIZE = 32; // 每次处理32个协程
+        const size_t BATCH_SIZE = 64; // 增加批处理大小，减少锁竞争
         std::vector<std::coroutine_handle<>> batch;
         batch.reserve(BATCH_SIZE);
         
@@ -131,9 +131,10 @@ private:
     static CoroutinePool* instance_;
     static std::mutex instance_mutex_;
     
-    static constexpr size_t NUM_SCHEDULERS = 12;
+    // 动态根据CPU核心数确定调度器数量
+    const size_t NUM_SCHEDULERS;
     
-    // 12个独立的协程调度器
+    // 动态数量的独立协程调度器
     std::vector<std::unique_ptr<CoroutineScheduler>> schedulers_;
     
     // 负载均衡计数器
@@ -151,8 +152,9 @@ private:
 
 public:
     CoroutinePool()
-        : start_time_(std::chrono::steady_clock::now()) {
-        // 初始化12个独立的协程调度器
+        : NUM_SCHEDULERS(std::max(std::thread::hardware_concurrency(), static_cast<unsigned int>(4))), // 至少4个，最多CPU核心数
+          start_time_(std::chrono::steady_clock::now()) {
+        // 根据CPU核心数初始化调度器
         schedulers_.reserve(NUM_SCHEDULERS);
         for (size_t i = 0; i < NUM_SCHEDULERS; ++i) {
             schedulers_.emplace_back(std::make_unique<CoroutineScheduler>(i));
@@ -169,8 +171,8 @@ public:
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
-        std::cout << "🚀 FlowCoro多调度器协程池启动 - " << NUM_SCHEDULERS 
-                  << "个独立协程调度器 + " << thread_count 
+        std::cout << "🚀 FlowCoro自适应协程池启动 - " << NUM_SCHEDULERS 
+                  << "个独立协程调度器 (匹配CPU核心数) + " << thread_count 
                   << "个高性能工作线程 (调度器完全隔离)" << std::endl;
     }
 
@@ -185,7 +187,7 @@ public:
         }
         
         schedulers_.clear();
-        std::cout << "🔥 FlowCoro多调度器协程池关闭" << std::endl;
+        std::cout << "🔥 FlowCoro自适应协程池关闭 (" << NUM_SCHEDULERS << "个调度器)" << std::endl;
     }
 
     static CoroutinePool& get_instance() {

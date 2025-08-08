@@ -122,15 +122,27 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
             std::cout << " 任务" << i << "完成: " << result << std::endl;
         }
     } else {
-        std::cout << " 任务数量较多，使用顺序协程处理..." << std::endl;
+        std::cout << " 任务数量较多，使用真正并发协程处理..." << std::endl;
 
-        // 大规模任务：顺序处理，让协程池自动并发
+        // 大规模任务：先创建所有任务（利用Task创建即执行特性）
+        std::vector<Task<std::string>> tasks;
+        tasks.reserve(request_count);
+
+        std::cout << " 创建所有协程任务 (它们将立即开始执行)..." << std::endl;
+        
+        // 同时创建所有任务 - 它们会立即开始并发执行
+        for (int i = 0; i < request_count; ++i) {
+            tasks.emplace_back(handle_single_request(1000 + i));
+        }
+
+        std::cout << " 所有任务已创建并开始执行，等待完成..." << std::endl;
+
+        // 收集所有结果
         std::vector<std::string> all_results;
         all_results.reserve(request_count);
 
         for (int i = 0; i < request_count; ++i) {
-            auto task = handle_single_request(1000 + i);
-            auto result = co_await task; // 每个co_await都会使用协程池
+            auto result = co_await tasks[i]; // 等待第i个任务完成
             all_results.push_back(result);
 
             // 大幅减少输出频率，提高性能
@@ -190,7 +202,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
         std::cout << " 单请求内存: " << (memory_delta / request_count) << " bytes/请求" << std::endl;
     }
 
-    std::cout << " 并发策略: 纯协程调度 (无线程池)" << std::endl;
+    std::cout << " 并发策略: 协程真正并发 (Task创建即执行)" << std::endl;
     std::cout << " 管理方式: Task内置协程池自动处理" << std::endl;
 
     // 主动清理协程资源，避免静态对象析构顺序问题
@@ -221,7 +233,7 @@ void handle_concurrent_requests_threads(int request_count) {
     for (int i = 0; i < request_count; ++i) {
         threads.emplace_back([i, &completed, request_count]() {
             // 模拟IO操作
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(50));
             std::string result = "用户" + std::to_string(1000 + i) + " (已处理)";
 
             int current_completed = completed.fetch_add(1) + 1;
@@ -284,7 +296,8 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================" << std::endl;
     std::cout << "测试模式: " << mode << std::endl;
     std::cout << "请求数量: " << request_count << " 个" << std::endl;
-    std::cout << "每个请求模拟50ms IO延迟" << std::endl;
+    std::cout << "测试类型: CPU密集型 (无IO延迟)" << std::endl;
+    std::cout << "并发方式: " << (mode == "coroutine" ? "Task创建即执行并发" : "多线程并发") << std::endl;
     std::cout << "========================================" << std::endl << std::endl;
 
     try {
