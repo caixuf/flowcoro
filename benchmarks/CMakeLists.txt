@@ -14,6 +14,11 @@ if(NOT BENCHMARK_FOUND)
     add_executable(accurate_benchmarks accurate_bench.cpp)
     target_link_libraries(accurate_benchmarks flowcoro_net pthread)
     target_include_directories(accurate_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    
+    # 添加QPS性能测试 - 稳定可靠的QPS基准测试
+    add_executable(qps_benchmarks simple_qps_benchmark.cpp)
+    target_link_libraries(qps_benchmarks flowcoro_net pthread)
+    target_include_directories(qps_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
