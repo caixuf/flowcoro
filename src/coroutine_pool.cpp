@@ -32,12 +32,16 @@ private:
     std::chrono::steady_clock::time_point start_time_;
 
     void worker_loop() {
-        const size_t BATCH_SIZE = 64; // 增加批处理大小，减少锁竞争
+        const size_t BATCH_SIZE = 128; // 增加批处理大小，进一步减少锁竞争
         std::vector<std::coroutine_handle<>> batch;
         batch.reserve(BATCH_SIZE);
         
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        auto& load_balancer = manager.get_load_balancer();
+        
         while (!stop_flag_.load()) {
             batch.clear();
+            size_t remaining_queue_size = 0;
             
             // 批量提取协程
             {
@@ -49,18 +53,19 @@ private:
                     batch.push_back(coroutine_queue_.front());
                     coroutine_queue_.pop();
                 }
+                remaining_queue_size = coroutine_queue_.size();
             }
             
-            // 批量执行协程
+            // 更新负载均衡器的队列大小
+            if (!batch.empty()) {
+                load_balancer.update_load(scheduler_id_, remaining_queue_size);
+            }
+            
+            // 批量执行协程 - 移除异常处理以提高性能
             for (auto handle : batch) {
                 if (handle && !handle.done() && !stop_flag_.load()) {
-                    try {
-                        handle.resume();
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                    } catch (...) {
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        // 协程异常处理
-                    }
+                    handle.resume();
+                    completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
         }
@@ -100,10 +105,18 @@ public:
         
         total_coroutines_.fetch_add(1, std::memory_order_relaxed);
         
+        size_t new_queue_size;
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             coroutine_queue_.push(handle);
+            new_queue_size = coroutine_queue_.size();
         }
+        
+        // 更新负载均衡器的队列大小信息
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        auto& load_balancer = manager.get_load_balancer();
+        load_balancer.update_load(scheduler_id_, new_queue_size);
+        
         queue_cv_.notify_one();
     }
     
@@ -137,9 +150,6 @@ private:
     // 动态数量的独立协程调度器
     std::vector<std::unique_ptr<CoroutineScheduler>> schedulers_;
     
-    // 负载均衡计数器
-    std::atomic<size_t> round_robin_counter_{0};
-    
     // 后台线程池 - 处理CPU密集型任务
     std::unique_ptr<lockfree::ThreadPool> thread_pool_;
     
@@ -160,6 +170,11 @@ public:
             schedulers_.emplace_back(std::make_unique<CoroutineScheduler>(i));
         }
         
+        // 初始化智能负载均衡器
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        auto& load_balancer = manager.get_load_balancer();
+        load_balancer.set_scheduler_count(NUM_SCHEDULERS);
+        
         // 针对大规模协程优化线程池配置
         size_t thread_count = std::thread::hardware_concurrency();
         if (thread_count == 0) thread_count = 4; // 备用值
@@ -171,9 +186,9 @@ public:
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
-        std::cout << "🚀 FlowCoro自适应协程池启动 - " << NUM_SCHEDULERS 
-                  << "个独立协程调度器 (匹配CPU核心数) + " << thread_count 
-                  << "个高性能工作线程 (调度器完全隔离)" << std::endl;
+        std::cout << "🚀 FlowCoro智能协程池启动 - " << NUM_SCHEDULERS 
+                  << "个独立协程调度器 (智能负载均衡) + " << thread_count 
+                  << "个高性能工作线程 (无锁优化)" << std::endl;
     }
 
     ~CoroutinePool() {
@@ -204,12 +219,18 @@ public:
         instance_ = nullptr;
     }
 
-    // 协程调度 - 使用轮询负载均衡分配到12个调度器
+    // 协程调度 - 使用智能负载均衡分配到调度器
     void schedule_coroutine(std::coroutine_handle<> handle) {
         if (!handle || handle.done() || stop_flag_.load()) return;
 
-        // 轮询负载均衡：选择调度器
-        size_t scheduler_index = round_robin_counter_.fetch_add(1, std::memory_order_relaxed) % NUM_SCHEDULERS;
+        // 使用智能负载均衡：选择最优调度器
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        auto& load_balancer = manager.get_load_balancer();
+        
+        size_t scheduler_index = load_balancer.select_scheduler();
+        
+        // 增加选中调度器的负载计数
+        load_balancer.increment_load(scheduler_index);
         
         // 分配给对应的调度器
         schedulers_[scheduler_index]->schedule_coroutine(handle);

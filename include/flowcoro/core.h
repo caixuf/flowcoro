@@ -52,11 +52,83 @@ void shutdown_coroutine_pool();
 // FlowCoro 2.0 - 基于ioManager设计的协程管理器架构
 // ==========================================
 
+// 智能负载均衡器 - 无锁实现
+class SmartLoadBalancer {
+private:
+    static constexpr size_t MAX_SCHEDULERS = 32;
+    std::array<std::atomic<size_t>, MAX_SCHEDULERS> queue_loads_;
+    std::atomic<size_t> scheduler_count_{0};
+    std::atomic<size_t> round_robin_counter_{0};
+
+public:
+    SmartLoadBalancer() {
+        for (auto& load : queue_loads_) {
+            load.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    void set_scheduler_count(size_t count) noexcept {
+        scheduler_count_.store(std::min(count, MAX_SCHEDULERS), std::memory_order_release);
+    }
+
+    // 选择负载最小的调度器
+    size_t select_scheduler() noexcept {
+        size_t count = scheduler_count_.load(std::memory_order_acquire);
+        if (count == 0) return 0;
+        if (count == 1) return 0;
+
+        // 快速路径：使用轮询（性能更好）
+        size_t quick_choice = round_robin_counter_.fetch_add(1, std::memory_order_relaxed) % count;
+        
+        // 每16次执行一次负载检查
+        if ((quick_choice & 0xF) == 0) {
+            size_t min_load = SIZE_MAX;
+            size_t best_scheduler = 0;
+            
+            for (size_t i = 0; i < count; ++i) {
+                size_t load = queue_loads_[i].load(std::memory_order_relaxed);
+                if (load < min_load) {
+                    min_load = load;
+                    best_scheduler = i;
+                }
+            }
+            return best_scheduler;
+        }
+        
+        return quick_choice;
+    }
+
+    // 更新调度器负载
+    void update_load(size_t scheduler_id, size_t load) noexcept {
+        if (scheduler_id < MAX_SCHEDULERS) {
+            queue_loads_[scheduler_id].store(load, std::memory_order_relaxed);
+        }
+    }
+
+    // 增加调度器负载
+    void increment_load(size_t scheduler_id) noexcept {
+        if (scheduler_id < MAX_SCHEDULERS) {
+            queue_loads_[scheduler_id].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // 减少调度器负载
+    void decrement_load(size_t scheduler_id) noexcept {
+        if (scheduler_id < MAX_SCHEDULERS) {
+            queue_loads_[scheduler_id].fetch_sub(1, std::memory_order_relaxed);
+        }
+    }
+};
+
 // 前向声明
 class CoroutineManager;
 
 // 协程管理器 - 参考ioManager的manager设计
 class CoroutineManager {
+private:
+    // 智能负载均衡器实例
+    SmartLoadBalancer load_balancer_;
+    
 public:
     CoroutineManager() = default;
 
@@ -83,7 +155,7 @@ public:
         timer_queue_.emplace(when, handle);
     }
 
-    // 调度协程恢复 - 集成协程池
+    // 调度协程恢复 - 集成协程池和智能负载均衡
     void schedule_resume(std::coroutine_handle<> handle) {
         if (!handle) {
             LOG_ERROR("Null handle in schedule_resume");
@@ -107,6 +179,11 @@ public:
         schedule_coroutine_enhanced(handle);
     }
 
+    // 获取负载均衡器引用
+    SmartLoadBalancer& get_load_balancer() noexcept {
+        return load_balancer_;
+    }
+
     // 调度协程销毁（延迟销毁）
     void schedule_destroy(std::coroutine_handle<> handle) {
         if (!handle) return;
@@ -123,51 +200,55 @@ public:
 
 private:
     void process_timer_queue() {
+        static constexpr size_t BATCH_SIZE = 32; // 批处理大小
+        std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
+        size_t batch_count = 0;
+        
         std::lock_guard<std::mutex> lock(timer_mutex_);
         auto now = std::chrono::steady_clock::now();
 
-        while (!timer_queue_.empty()) {
+        // 批量处理到期的定时器
+        while (!timer_queue_.empty() && batch_count < BATCH_SIZE) {
             const auto& [when, handle] = timer_queue_.top();
             if (when > now) break;
 
-            // 将到期的定时器移到ready队列
+            // 收集到批处理数组中
             if (handle && !handle.done()) {
-                std::lock_guard<std::mutex> ready_lock(ready_mutex_);
-                ready_queue_.push(handle);
+                batch[batch_count++] = handle;
             }
             timer_queue_.pop();
+        }
+        
+        // 批量移动到ready队列
+        if (batch_count > 0) {
+            std::lock_guard<std::mutex> ready_lock(ready_mutex_);
+            for (size_t i = 0; i < batch_count; ++i) {
+                ready_queue_.push(batch[i]);
+            }
         }
     }
 
     void process_ready_queue() {
-        std::queue<std::coroutine_handle<>> local_queue;
+        static constexpr size_t BATCH_SIZE = 64; // 增大批处理大小
+        std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
+        size_t batch_count = 0;
+        
+        // 批量获取就绪的协程
         {
             std::lock_guard<std::mutex> lock(ready_mutex_);
-            local_queue.swap(ready_queue_);
+            while (!ready_queue_.empty() && batch_count < BATCH_SIZE) {
+                batch[batch_count++] = ready_queue_.front();
+                ready_queue_.pop();
+            }
         }
 
-        while (!local_queue.empty()) {
-            auto handle = local_queue.front();
-            local_queue.pop();
-
-            // 增强的安全检查
-            if (!handle) {
-                LOG_DEBUG("Null handle in process_ready_queue");
-                continue;
-            }
-
-            // 检查句柄地址有效性
-            void* addr = handle.address();
-            if (!addr) {
-                LOG_ERROR("Invalid handle address in process_ready_queue");
-                continue;
-            }
-
-            // 检查协程是否已完成
-            if (handle.done()) {
-                LOG_DEBUG("Handle already done in process_ready_queue");
-                continue;
-            }
+        // 批量处理协程，无锁执行
+        for (size_t i = 0; i < batch_count; ++i) {
+            auto handle = batch[i];
+            
+            // 快速检查 - 最小化验证开销
+            if (!handle) continue;
+            if (handle.done()) continue;
 
             // 安全地恢复协程
             handle.resume();
@@ -175,29 +256,26 @@ private:
     }
 
     void process_pending_tasks() {
-        // 处理延迟销毁队列
-        std::queue<std::coroutine_handle<>> local_destroy_queue;
+        static constexpr size_t BATCH_SIZE = 32; // 销毁操作批处理
+        std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
+        size_t batch_count = 0;
+        
+        // 批量获取待销毁的协程
         {
             std::lock_guard<std::mutex> lock(destroy_mutex_);
-            local_destroy_queue.swap(destroy_queue_);
+            while (!destroy_queue_.empty() && batch_count < BATCH_SIZE) {
+                batch[batch_count++] = destroy_queue_.front();
+                destroy_queue_.pop();
+            }
         }
 
-        while (!local_destroy_queue.empty()) {
-            auto handle = local_destroy_queue.front();
-            local_destroy_queue.pop();
-
-            if (!handle) {
-                LOG_DEBUG("Null handle in process_pending_tasks");
-                continue;
-            }
-
-            // 检查句柄地址有效性
-            void* addr = handle.address();
-            if (!addr) {
-                LOG_ERROR("Invalid handle address in process_pending_tasks");
-                continue;
-            }
-
+        // 批量销毁协程，无锁执行
+        for (size_t i = 0; i < batch_count; ++i) {
+            auto handle = batch[i];
+            
+            if (!handle) continue;
+            
+            // 快速销毁，不检查地址有效性（减少开销）
             handle.destroy();
         }
     }
@@ -293,24 +371,28 @@ public:
     }
 };
 
-// 取消状态（被cancellation_token使用）
+// 无锁取消状态（被cancellation_token使用）
 class cancellation_state {
 private:
     std::atomic<bool> cancelled_{false};
-    std::mutex callbacks_mutex_;
-    std::vector<std::function<void()>> callbacks_;
+    // 使用无锁数组替代vector，避免互斥锁
+    static constexpr size_t MAX_CALLBACKS = 16;
+    std::array<std::function<void()>, MAX_CALLBACKS> callbacks_;
+    std::atomic<size_t> callback_count_{0};
 
 public:
     cancellation_state() = default;
 
-    // 请求取消
+    // 请求取消 - 无锁实现
     void request_cancellation() noexcept {
         bool expected = false;
         if (cancelled_.compare_exchange_strong(expected, true)) {
-            // 第一次取消，触发回调
-            std::lock_guard<std::mutex> lock(callbacks_mutex_);
-            for (auto& callback : callbacks_) {
-                callback(); // 直接调用，不捕获异常
+            // 第一次取消，触发回调 - 无锁遍历
+            size_t count = callback_count_.load(std::memory_order_acquire);
+            for (size_t i = 0; i < count; ++i) {
+                if (callbacks_[i]) {
+                    callbacks_[i](); // 直接调用，不捕获异常
+                }
             }
         }
     }
@@ -320,22 +402,30 @@ public:
         return cancelled_.load(std::memory_order_acquire);
     }
 
-    // 注册取消回调
+    // 注册取消回调 - 无锁实现
     template<typename Callback>
     void register_callback(Callback&& cb) {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
-        callbacks_.emplace_back(std::forward<Callback>(cb));
+        size_t current_count = callback_count_.load(std::memory_order_acquire);
+        if (current_count >= MAX_CALLBACKS) {
+            return; // 超出容量限制，忽略新回调
+        }
 
-        // 如果已经取消，立即调用回调
-        if (is_cancelled()) {
-            cb(); // 直接调用，不捕获异常
+        // 原子性地添加回调
+        size_t index = callback_count_.fetch_add(1, std::memory_order_acq_rel);
+        if (index < MAX_CALLBACKS) {
+            callbacks_[index] = std::forward<Callback>(cb);
+            
+            // 如果已经取消，立即调用回调
+            if (is_cancelled()) {
+                cb(); // 直接调用，不捕获异常
+            }
         }
     }
 
-    // 清空回调
+    // 清空回调 - 无锁实现
     void clear_callbacks() noexcept {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
-        callbacks_.clear();
+        callback_count_.store(0, std::memory_order_release);
+        // 不需要清空数组内容，只需重置计数器
     }
 };
 
