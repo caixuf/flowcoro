@@ -253,14 +253,14 @@ Task<void> timed_operation() {
 
 ## 架构设计
 
-FlowCoro采用混合调度模型，结合单线程事件循环和多线程工作池的优势：
+FlowCoro采用先进的多线程协程调度模型，结合智能负载均衡和高性能工作池：
 
-- **协程调度**: 单线程事件循环，避免跨线程安全问题
-- **CPU任务**: 32线程工作池，充分利用多核性能
+- **协程调度**: 多线程智能调度器，支持跨线程协程恢复
+- **CPU任务**: 32线程工作池，充分利用多核性能  
 - **内存管理**: 动态扩展内存池，零内存泄漏
-- **无锁设计**: 关键路径使用无锁数据结构
+- **无锁设计**: 关键路径使用无锁数据结构和原子操作
 
-这种设计在保持协程轻量级特性的同时，解决了传统协程库的线程安全和性能瓶颈问题。
+这种设计在保持协程轻量级特性的同时，实现了真正的多线程并行和线程安全保证。
 
 ### 分层架构设计
 
@@ -271,10 +271,11 @@ FlowCoro采用混合调度模型，结合单线程事件循环和多线程工作
 | | when_all() | 语法糖 | 简化多任务等待 |
 | | sleep_for() | 定时器 | 高精度延时 |
 | | sync_wait() | 同步等待 | 阻塞获取结果 |
-| **调度层** | CoroutineManager | 协程管理 | 单线程事件循环 |
+| **调度层** | CoroutineManager | 协程管理 | 智能多线程调度 |
 | | Ready Queue | 就绪队列 | O(1)调度 |
 | | Timer Queue | 定时器队列 | 红黑树实现 |
-| | SafeCoroutineHandle | 安全检测 | 跨线程保护 |
+| | SafeCoroutineHandle | 安全检测 | 跨线程生命周期保护 |
+| | SmartLoadBalancer | 负载均衡 | 智能调度器选择 |
 | **执行层** | ThreadPool | 工作线程池 | 32-128工作线程 |
 | | Work Queue | 任务队列 | CPU密集型任务 |
 | | Load Balancer | 负载均衡 | 工作窃取算法 |
@@ -284,20 +285,23 @@ FlowCoro采用混合调度模型，结合单线程事件循环和多线程工作
 
 ### 核心技术创新
 
-#### 1. 混合调度模型
+#### 1. 多线程协程调度模型
 
-**问题**: 协程使用中单线程(性能受限)，多线程不安全(段错误)
+**问题**: 传统协程库要么单线程(性能受限)，要么多线程不安全(段错误)
 
 **FlowCoro解决方案**:
 
 ```cpp
-// 协程调度：单线程事件循环 (线程安全)
-void CoroutineManager::drive() {
-    process_ready_queue(); // O(1) 协程恢复
-    process_timer_queue(); // 高精度定时器
-    process_io_events(); // I/O事件处理
-    process_destroy_queue(); // 安全资源清理
+// 协程调度：多线程智能调度器 (高性能+线程安全)
+void CoroutineManager::schedule_resume(std::coroutine_handle<> handle) {
+    // 智能负载均衡选择最优调度器
+    auto& load_balancer = get_load_balancer();
+    size_t scheduler_id = load_balancer.select_scheduler();
+    
+    // 安全的跨线程恢复
+    schedule_coroutine_enhanced(handle);
 }
+```
 
 // CPU任务：工作窃取线程池 (高性能)
 class WorkStealingThreadPool {
@@ -307,15 +311,15 @@ class WorkStealingThreadPool {
 }
 ```
 
-#### 2. 单线程事件循环 vs 多线程池
+#### 2. 跨线程协程恢复支持
 
-**传统多线程问题:**
+**传统问题:**
 
 ```cpp
-// 危险：跨线程协程恢复
+// 之前：跨线程协程恢复可能导致挂死
 void await_suspend(std::coroutine_handle<> h) {
     ThreadPool::enqueue([h]() {
-        h.resume(); // 段错误！不同线程间句柄无效
+        h.resume(); // 潜在的线程安全问题
     });
 }
 ```
@@ -323,11 +327,13 @@ void await_suspend(std::coroutine_handle<> h) {
 **FlowCoro解决方案:**
 
 ```cpp
-// 安全：事件循环调度
+// 现在：安全的跨线程调度机制
 void await_suspend(std::coroutine_handle<> h) {
     CoroutineManager::get_instance().schedule_resume(h);
-    // 所有协程恢复都在同一个事件循环线程中执行
+    // 协程可以在任意工作线程中安全恢复
+    // 智能负载均衡确保最优性能
 }
+```
 ```
 
 #### 3. 协程并发模式澄清
