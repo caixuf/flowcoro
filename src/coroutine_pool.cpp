@@ -162,7 +162,7 @@ private:
 
 public:
     CoroutinePool()
-        : NUM_SCHEDULERS(std::max(std::thread::hardware_concurrency() / 4, static_cast<unsigned int>(2))), // 减少调度器数量，最少2个，最多CPU核心数/4
+        : NUM_SCHEDULERS(std::max(std::thread::hardware_concurrency(), static_cast<unsigned int>(4))), // 调度器数=CPU核数，最少4个
           start_time_(std::chrono::steady_clock::now()) {
         // 根据CPU核心数初始化调度器
         schedulers_.reserve(NUM_SCHEDULERS);
@@ -175,23 +175,22 @@ public:
         auto& load_balancer = manager.get_load_balancer();
         load_balancer.set_scheduler_count(NUM_SCHEDULERS);
         
-        // 智能线程池配置：根据负载自适应
+        // 智能线程池配置：大规模并发优化
         size_t thread_count = std::thread::hardware_concurrency();
-        if (thread_count == 0) thread_count = 4; // 备用值
+        if (thread_count == 0) thread_count = 8; // 备用值
 
-        // 轻量级启动：避免小规模任务的启动开销
-        // 初始时使用较少线程，根据需要动态扩展
-        thread_count = std::max(thread_count / 2, static_cast<size_t>(2)); // 初始线程数减半，最少2个
-        thread_count = std::min(thread_count, static_cast<size_t>(16)); // 初始最多16个线程
+        // 高性能配置：工作线程数应该足够大以支持大规模并发
+        thread_count = std::max(thread_count * 2, static_cast<size_t>(32)); // 至少32个线程，通常为核数的2倍
+        thread_count = std::min(thread_count, static_cast<size_t>(128)); // 最多128个线程，避免过度创建
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
         // 仅在需要时输出启动信息
         static bool first_init = true;
         if (first_init) {
-            std::cout << "FlowCoro轻量级协程池启动 - " << NUM_SCHEDULERS 
+            std::cout << "FlowCoro智能协程池启动 - " << NUM_SCHEDULERS 
                       << "个协程调度器 + " << thread_count 
-                      << "个工作线程 (可扩展)" << std::endl;
+                      << "个工作线程 (智能负载均衡)" << std::endl;
             first_init = false;
         }
     }
