@@ -131,8 +131,8 @@ TestResult run_process_test(const std::string& mode, int request_count) {
     std::string result_file = mode + "_result.json";
     std::remove(result_file.c_str());
 
-    // 构建命令
-    std::string command = "./build/examples/hello_world_concurrent " + mode + " " + std::to_string(request_count);
+    // 构建命令 - 使用项目根目录的绝对路径
+    std::string command = "/home/caixuf/my_code/cpp_code/FlowCoro/build/examples/hello_world_concurrent " + mode + " " + std::to_string(request_count);
     
     // 执行命令
     int exit_code = std::system(command.c_str());

@@ -364,8 +364,9 @@ int main(int argc, char* argv[]) {
 
     try {
         if (mode == "coroutine") {
-            auto task = handle_concurrent_requests_coroutine(request_count);
-            task.get();
+            sync_wait([&]() {
+                return handle_concurrent_requests_coroutine(request_count);
+            });
 
             // 给系统一点时间来清理资源
             std::cout << " 等待资源清理..." << std::endl;

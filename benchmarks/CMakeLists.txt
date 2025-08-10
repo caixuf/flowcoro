@@ -9,16 +9,11 @@ endif()
 if(NOT BENCHMARK_FOUND)
     message(STATUS "Google Benchmark not found, building simple benchmarks")
 
-
-    # 添加精确基准测试
-    add_executable(accurate_benchmarks accurate_bench.cpp)
-    target_link_libraries(accurate_benchmarks flowcoro_net pthread)
-    target_include_directories(accurate_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    
-    # 添加QPS性能测试 - 稳定可靠的QPS基准测试
-    add_executable(qps_benchmarks simple_qps_benchmark.cpp)
-    target_link_libraries(qps_benchmarks flowcoro_net pthread)
-    target_include_directories(qps_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    # 添加简单基准测试 - 核心功能性能测试
+    add_executable(simple_benchmark simple_benchmark.cpp)
+    target_link_libraries(simple_benchmark flowcoro_net pthread)
+    target_include_directories(simple_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_features(simple_benchmark PRIVATE cxx_std_20)
 
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
