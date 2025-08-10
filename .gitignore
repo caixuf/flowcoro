@@ -72,3 +72,6 @@ coverage/
 # 文档生成
 docs/_build/
 site/
+
+#测试json文件
+*.json

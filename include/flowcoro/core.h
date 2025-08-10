@@ -1391,7 +1391,7 @@ struct Task<void> {
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
-        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always initial_suspend() noexcept { return {}; }  // 懒执行
         std::suspend_always final_suspend() noexcept { return {}; }
 
         void return_void() noexcept {
@@ -1538,9 +1538,27 @@ struct Task<void> {
             return;
         }
 
-        // 安全恢复协程
+        // 支持懒执行：启动协程并驱动事件循环
         if (!handle.done() && !handle.promise().is_cancelled()) {
-            handle.resume();
+            // 获取协程管理器实例
+            auto& manager = CoroutineManager::get_instance();
+            
+            // 启动协程（如果尚未开始）
+            try {
+                if (!handle.done()) {
+                    handle.resume();
+                }
+                
+                // 驱动事件循环直到协程完成
+                while (!handle.done() && !handle.promise().is_cancelled()) {
+                    manager.drive();
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR("Exception during Task<void> execution: %s", e.what());
+            } catch (...) {
+                LOG_ERROR("Unknown exception during Task<void> execution");
+            }
         }
 
         // 检查是否有错误
@@ -2139,7 +2157,7 @@ public:
 // 保持向后兼容
 using CoroutineFriendlySleepAwaiter = EnhancedSleepAwaiter;
 
-// 便捷函数：休眠 - 使用增强版专用线程实现
+// 便捷函数：休眠 - 使用增强版专用线程实现  
 inline auto sleep_for(std::chrono::milliseconds duration)
 {
     return EnhancedSleepAwaiter(duration);

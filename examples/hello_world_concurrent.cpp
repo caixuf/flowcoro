@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <cjson/cJSON.h>
 
 using namespace flowcoro;
 
@@ -207,6 +208,37 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
 
     // 主动清理协程资源，避免静态对象析构顺序问题
     std::cout << " 清理协程资源..." << std::endl;
+    std::cout << " 等待资源清理..." << std::endl;
+    
+    // 输出JSON结果到文件
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duration_ms", duration.count());
+    cJSON_AddNumberToObject(json, "request_count", request_count);
+    if (duration.count() > 0) {
+        cJSON_AddNumberToObject(json, "throughput_rps", (double)(request_count * 1000) / duration.count());
+    } else {
+        cJSON_AddNumberToObject(json, "throughput_rps", 0);
+    }
+    if (request_count > 0) {
+        cJSON_AddNumberToObject(json, "avg_latency_ms", (double)duration.count() / request_count);
+    } else {
+        cJSON_AddNumberToObject(json, "avg_latency_ms", 0);
+    }
+    cJSON_AddNumberToObject(json, "memory_usage_bytes", final_memory);
+    cJSON_AddNumberToObject(json, "memory_delta_bytes", memory_delta);
+    cJSON_AddStringToObject(json, "mode", "coroutine");
+    cJSON_AddNumberToObject(json, "exit_code", 0);
+    
+    char *json_string = cJSON_Print(json);
+    std::ofstream result_file("coroutine_result.json");
+    if (result_file.is_open()) {
+        result_file << json_string << std::endl;
+        result_file.close();
+        std::cout << " JSON结果已保存到 coroutine_result.json" << std::endl;
+    }
+    
+    free(json_string);
+    cJSON_Delete(json);
 
     // 强制等待一段时间确保所有异步操作完成
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -280,6 +312,36 @@ void handle_concurrent_requests_threads(int request_count) {
               << " (增加 " << SystemInfo::format_memory_bytes(memory_delta) << ")" << std::endl;
     std::cout << " 单请求内存: " << (memory_delta / request_count) << " bytes/请求" << std::endl;
     std::cout << " 线程总数: " << request_count << " 个" << std::endl;
+    
+    // 输出JSON结果到文件
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duration_ms", duration.count());
+    cJSON_AddNumberToObject(json, "request_count", request_count);
+    if (duration.count() > 0) {
+        cJSON_AddNumberToObject(json, "throughput_rps", (double)(request_count * 1000) / duration.count());
+    } else {
+        cJSON_AddNumberToObject(json, "throughput_rps", 0);
+    }
+    if (request_count > 0) {
+        cJSON_AddNumberToObject(json, "avg_latency_ms", (double)duration.count() / request_count);
+    } else {
+        cJSON_AddNumberToObject(json, "avg_latency_ms", 0);
+    }
+    cJSON_AddNumberToObject(json, "memory_usage_bytes", final_memory);
+    cJSON_AddNumberToObject(json, "memory_delta_bytes", memory_delta);
+    cJSON_AddStringToObject(json, "mode", "thread");
+    cJSON_AddNumberToObject(json, "exit_code", 0);
+    
+    char *json_string = cJSON_Print(json);
+    std::ofstream result_file("thread_result.json");
+    if (result_file.is_open()) {
+        result_file << json_string << std::endl;
+        result_file.close();
+        std::cout << " JSON结果已保存到 thread_result.json" << std::endl;
+    }
+    
+    free(json_string);
+    cJSON_Delete(json);
 }
 
 int main(int argc, char* argv[]) {

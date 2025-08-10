@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <cjson/cJSON.h>
 
 // 系统信息工具
 class SystemInfo {
@@ -61,6 +62,56 @@ struct TestResult {
     double throughput;
     double avg_latency;
     int exit_code;
+    size_t memory_usage = 0;
+    size_t memory_delta = 0;
+    
+    // 从JSON文件读取结果
+    bool load_from_json(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << " 无法打开结果文件: " << filename << std::endl;
+            return false;
+        }
+        
+        std::string json_content((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+        file.close();
+        
+        cJSON *json = cJSON_Parse(json_content.c_str());
+        if (!json) {
+            std::cerr << " JSON解析失败: " << filename << std::endl;
+            return false;
+        }
+        
+        cJSON *duration = cJSON_GetObjectItem(json, "duration_ms");
+        cJSON *throughput_item = cJSON_GetObjectItem(json, "throughput_rps");
+        cJSON *latency = cJSON_GetObjectItem(json, "avg_latency_ms");
+        cJSON *exit_code_item = cJSON_GetObjectItem(json, "exit_code");
+        cJSON *memory_usage_item = cJSON_GetObjectItem(json, "memory_usage_bytes");
+        cJSON *memory_delta_item = cJSON_GetObjectItem(json, "memory_delta_bytes");
+        
+        if (duration && cJSON_IsNumber(duration)) {
+            duration_ms = (long)cJSON_GetNumberValue(duration);
+        }
+        if (throughput_item && cJSON_IsNumber(throughput_item)) {
+            throughput = cJSON_GetNumberValue(throughput_item);
+        }
+        if (latency && cJSON_IsNumber(latency)) {
+            avg_latency = cJSON_GetNumberValue(latency);
+        }
+        if (exit_code_item && cJSON_IsNumber(exit_code_item)) {
+            exit_code = (int)cJSON_GetNumberValue(exit_code_item);
+        }
+        if (memory_usage_item && cJSON_IsNumber(memory_usage_item)) {
+            memory_usage = (size_t)cJSON_GetNumberValue(memory_usage_item);
+        }
+        if (memory_delta_item && cJSON_IsNumber(memory_delta_item)) {
+            memory_delta = (size_t)cJSON_GetNumberValue(memory_delta_item);
+        }
+        
+        cJSON_Delete(json);
+        return true;
+    }
 };
 
 // 运行独立进程测试
@@ -74,139 +125,39 @@ TestResult run_process_test(const std::string& mode, int request_count) {
     std::cout << " 开始时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
     std::cout << std::string(60, '=') << std::endl;
 
-    // 创建管道用于捕获子进程输出
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        std::cerr << " 创建管道失败" << std::endl;
-        result.exit_code = -1;
-        return result;
-    }
-
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // 创建子进程执行测试
-    pid_t pid = fork();
-    if (pid == 0) {
-        // 子进程：重定向输出到管道
-        close(pipefd[0]); // 关闭读端
-        dup2(pipefd[1], STDOUT_FILENO); // 重定向标准输出
-        close(pipefd[1]);
+    // 删除旧的结果文件
+    std::string result_file = mode + "_result.json";
+    std::remove(result_file.c_str());
 
-        // 执行测试程序
-        execl("./examples/hello_world_concurrent", "hello_world_concurrent", mode.c_str(), std::to_string(request_count).c_str(), nullptr);
-        exit(1); // 如果execl失败
-    } else if (pid > 0) {
-        // 父进程：读取子进程输出并等待完成
-        close(pipefd[1]); // 关闭写端
-
-        char buffer[4096];
-        std::string output;
-        ssize_t bytes_read;
-
-        // 读取子进程输出
-        while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0';
-            output += buffer;
-        }
-        close(pipefd[0]);
-
-        // 等待子进程完成
-        int status;
-        waitpid(pid, &status, 0);
-        result.exit_code = WEXITSTATUS(status);
-
-        // 显示子进程输出
-        std::cout << output;
-
-        // 尝试多种方式解析执行时间
-        std::vector<std::string> time_patterns = {
-            " [TIME_MARKER] ",  // 新增的明确标记
-            " 总耗时: ",
-            "总耗时: ",
-            "耗时: ",
-            " ms"
-        };
-        
-        bool found_time = false;
-        for (const auto& pattern : time_patterns) {
-            size_t pos = output.find(pattern);
-            if (pos != std::string::npos) {
-                // 找到模式后，向前查找数字
-                size_t start_pos = pos;
-                while (start_pos > 0 && output[start_pos - 1] != ' ' && output[start_pos - 1] != ':') {
-                    start_pos--;
-                }
-                
-                // 跳过模式本身，找到数字
-                size_t num_start = pos + pattern.length();
-                size_t end_pos = output.find(" ms", num_start);
-                if (end_pos == std::string::npos) {
-                    end_pos = output.find("ms", num_start);
-                }
-                if (end_pos == std::string::npos) {
-                    end_pos = output.find(" ", num_start);
-                }
-                if (end_pos == std::string::npos) {
-                    end_pos = output.find("\n", num_start);
-                }
-                
-                if (end_pos != std::string::npos && end_pos > num_start) {
-                    std::string time_str = output.substr(num_start, end_pos - num_start);
-                    // 清理字符串，只保留数字和小数点
-                    std::string clean_time;
-                    for (char c : time_str) {
-                        if (std::isdigit(c) || c == '.') {
-                            clean_time += c;
-                        } else {
-                            break; // 遇到非数字字符就停止
-                        }
-                    }
-                    
-                    if (!clean_time.empty()) {
-                        try {
-                            double time_val = std::stod(clean_time);
-                            result.duration_ms = static_cast<long>(time_val);
-                            found_time = true;
-                            std::cerr << " [DEBUG] 成功解析时间: " << clean_time << " -> " << result.duration_ms << " ms (模式: " << pattern << ")" << std::endl;
-                            break;
-                        } catch (const std::exception& e) {
-                            std::cerr << " [DEBUG] 解析失败: '" << clean_time << "' (模式: " << pattern << ") - " << e.what() << std::endl;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (!found_time) {
-            std::cerr << " [DEBUG] 在输出中未找到任何时间标记，输出内容：" << std::endl;
-            std::cerr << "=== 输出开始 ===" << std::endl;
-            std::cerr << output << std::endl;
-            std::cerr << "=== 输出结束 ===" << std::endl;
-        }
-    } else {
-        std::cerr << " 创建进程失败" << std::endl;
-        close(pipefd[0]);
-        close(pipefd[1]);
-        result.exit_code = -1;
-        return result;
-    }
-
+    // 构建命令
+    std::string command = "./build/examples/hello_world_concurrent " + mode + " " + std::to_string(request_count);
+    
+    // 执行命令
+    int exit_code = std::system(command.c_str());
+    
     auto end_time = std::chrono::high_resolution_clock::now();
-    // 如果没有从子进程解析到时间，使用父进程计时作为备用
-    if (result.duration_ms == 0) {
-        result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-    }
-
-    // 计算性能指标
-    result.throughput = (double)request_count * 1000.0 / result.duration_ms;
-    result.avg_latency = (double)result.duration_ms / request_count;
+    auto process_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
     std::cout << std::string(60, '=') << std::endl;
     std::cout << " " << mode << " 测试进程完成" << std::endl;
     std::cout << " 结束时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
-    std::cout << " 进程耗时: " << result.duration_ms << " ms" << std::endl;
+    std::cout << " 进程耗时: " << process_duration.count() << " ms" << std::endl;
+    
+    // 尝试从JSON文件读取结果
+    if (result.load_from_json(result_file)) {
+        result.exit_code = (exit_code == 0) ? 0 : 1;
+        std::cout << " 成功读取JSON结果: " << result_file << std::endl;
+    } else {
+        std::cerr << " 读取JSON结果失败，使用默认值" << std::endl;
+        result.duration_ms = process_duration.count();
+        result.exit_code = (exit_code == 0) ? 0 : 1;
+        result.throughput = 0;
+        result.avg_latency = 0;
+    }
+    
     std::cout << std::endl;
-
     return result;
 }
 
@@ -247,16 +198,63 @@ int main(int argc, char* argv[]) {
         auto thread_result = run_process_test("thread", request_count);
         results.push_back(thread_result);
 
-        // 对比分析
+        // 对比分析 - 使用cJSON库生成标准JSON输出
         std::cout << std::string(80, '=') << std::endl;
-        std::cout << " 终极对比分析（基于独立进程测试）" << std::endl;
+        std::cout << " 标准化性能分析报告（cJSON格式）" << std::endl;
         std::cout << std::string(80, '=') << std::endl;
 
-        std::cout << " 性能对比：" << std::endl;
+        // 使用cJSON生成标准JSON
+        cJSON *json = cJSON_CreateObject();
+        
+        // 测试配置
+        cJSON *test_config = cJSON_CreateObject();
+        cJSON_AddNumberToObject(test_config, "task_count", request_count);
+        cJSON_AddNumberToObject(test_config, "cpu_cores", std::thread::hardware_concurrency());
+        cJSON_AddStringToObject(test_config, "test_type", "CPU密集型");
+        cJSON_AddItemToObject(json, "test_config", test_config);
+        
+        // 协程结果
+        cJSON *coroutine_result = cJSON_CreateObject();
+        cJSON_AddNumberToObject(coroutine_result, "duration_ms", coro_result.duration_ms);
+        cJSON_AddNumberToObject(coroutine_result, "throughput_rps", coro_result.throughput);
+        cJSON_AddNumberToObject(coroutine_result, "avg_latency_ms", coro_result.avg_latency);
+        cJSON_AddNumberToObject(coroutine_result, "exit_code", coro_result.exit_code);
+        cJSON_AddItemToObject(json, "coroutine_result", coroutine_result);
+        
+        // 线程结果
+        cJSON *thread_result_json = cJSON_CreateObject();
+        cJSON_AddNumberToObject(thread_result_json, "duration_ms", thread_result.duration_ms);
+        cJSON_AddNumberToObject(thread_result_json, "throughput_rps", thread_result.throughput);
+        cJSON_AddNumberToObject(thread_result_json, "avg_latency_ms", thread_result.avg_latency);
+        cJSON_AddNumberToObject(thread_result_json, "exit_code", thread_result.exit_code);
+        cJSON_AddItemToObject(json, "thread_result", thread_result_json);
+
+        double speed_ratio = (double)thread_result.duration_ms / coro_result.duration_ms;
+        std::string winner = (speed_ratio > 1.0) ? "coroutine" : "thread";
+        double advantage = (speed_ratio > 1.0) ? speed_ratio : (1.0 / speed_ratio);
+        
+        // 比较结果
+        cJSON *comparison = cJSON_CreateObject();
+        cJSON_AddStringToObject(comparison, "winner", winner.c_str());
+        cJSON_AddNumberToObject(comparison, "speed_advantage", advantage);
+        cJSON_AddNumberToObject(comparison, "performance_improvement_percent", (advantage - 1) * 100);
+        cJSON_AddBoolToObject(comparison, "coroutine_faster", speed_ratio > 1.0);
+        cJSON_AddItemToObject(json, "comparison", comparison);
+        
+        // 输出格式化的JSON
+        char *json_string = cJSON_Print(json);
+        std::cout << "[PERF_REPORT_BEGIN]" << std::endl;
+        std::cout << json_string << std::endl;
+        std::cout << "[PERF_REPORT_END]" << std::endl;
+        
+        // 清理内存
+        free(json_string);
+        cJSON_Delete(json);
+        std::cout << std::endl;
+        std::cout << " 传统格式性能对比：" << std::endl;
         std::cout << " 协程总耗时： " << coro_result.duration_ms << " ms" << std::endl;
         std::cout << " 多线程总耗时： " << thread_result.duration_ms << " ms" << std::endl;
 
-        double speed_ratio = (double)thread_result.duration_ms / coro_result.duration_ms;
         if (speed_ratio > 1.0) {
             std::cout << " 协程速度优势： " << std::fixed << std::setprecision(1)
                       << speed_ratio << "x (快 " << std::setprecision(0)

@@ -157,6 +157,7 @@ target_link_libraries(flowcoro_net PUBLIC
     flowcoro
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
+    cjson
 )
 
 # 协程支持
