@@ -30,6 +30,9 @@ class HttpRequest;
 
 namespace flowcoro {
 
+// 前向声明
+class PerformanceMonitor;
+
 // ==========================================
 // 增强协程池接口
 // ==========================================
@@ -49,9 +52,121 @@ void print_pool_stats();
 // 关闭协程池
 void shutdown_coroutine_pool();
 
+// 性能监控接口
+void print_flowcoro_stats();
+struct SystemStats {
+    uint64_t tasks_created;
+    uint64_t tasks_completed;
+    uint64_t tasks_cancelled;
+    uint64_t tasks_failed;
+    uint64_t scheduler_invocations;
+    uint64_t timer_events;
+    uint64_t uptime_ms;
+    double task_completion_rate;
+    double tasks_per_second;
+};
+SystemStats get_flowcoro_stats();
+
+// 调试和诊断工具
+namespace debug {
+    // 打印系统状态
+    void print_system_status();
+    
+    // 检查内存使用情况
+    void check_memory_usage();
+    
+    // 验证协程状态一致性
+    bool validate_coroutine_state();
+    
+    // 性能基准测试
+    void run_performance_benchmark(size_t task_count = 1000);
+}
+
 // ==========================================
-// FlowCoro 2.0
+// FlowCoro 2.0 - 完善版
 // ==========================================
+
+// 性能监控系统
+class PerformanceMonitor {
+private:
+    struct Stats {
+        std::atomic<uint64_t> tasks_created{0};
+        std::atomic<uint64_t> tasks_completed{0};
+        std::atomic<uint64_t> tasks_cancelled{0};
+        std::atomic<uint64_t> tasks_failed{0};
+        std::atomic<uint64_t> scheduler_invocations{0};
+        std::atomic<uint64_t> timer_events{0};
+        std::chrono::steady_clock::time_point start_time;
+    };
+    
+    Stats stats_;
+    
+public:
+    PerformanceMonitor() {
+        stats_.start_time = std::chrono::steady_clock::now();
+    }
+    
+    // 统计接口
+    void on_task_created() noexcept { stats_.tasks_created.fetch_add(1, std::memory_order_relaxed); }
+    void on_task_completed() noexcept { stats_.tasks_completed.fetch_add(1, std::memory_order_relaxed); }
+    void on_task_cancelled() noexcept { stats_.tasks_cancelled.fetch_add(1, std::memory_order_relaxed); }
+    void on_task_failed() noexcept { stats_.tasks_failed.fetch_add(1, std::memory_order_relaxed); }
+    void on_scheduler_invocation() noexcept { stats_.scheduler_invocations.fetch_add(1, std::memory_order_relaxed); }
+    void on_timer_event() noexcept { stats_.timer_events.fetch_add(1, std::memory_order_relaxed); }
+    
+    // 获取统计信息
+    struct SystemStats {
+        uint64_t tasks_created;
+        uint64_t tasks_completed;
+        uint64_t tasks_cancelled;
+        uint64_t tasks_failed;
+        uint64_t scheduler_invocations;
+        uint64_t timer_events;
+        uint64_t uptime_ms;
+        double task_completion_rate;
+        double tasks_per_second;
+    };
+    
+    SystemStats get_stats() const noexcept {
+        auto now = std::chrono::steady_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::milliseconds>(now - stats_.start_time);
+        
+        uint64_t created = stats_.tasks_created.load(std::memory_order_relaxed);
+        uint64_t completed = stats_.tasks_completed.load(std::memory_order_relaxed);
+        
+        return SystemStats{
+            .tasks_created = created,
+            .tasks_completed = completed,
+            .tasks_cancelled = stats_.tasks_cancelled.load(std::memory_order_relaxed),
+            .tasks_failed = stats_.tasks_failed.load(std::memory_order_relaxed),
+            .scheduler_invocations = stats_.scheduler_invocations.load(std::memory_order_relaxed),
+            .timer_events = stats_.timer_events.load(std::memory_order_relaxed),
+            .uptime_ms = static_cast<uint64_t>(uptime.count()),
+            .task_completion_rate = created > 0 ? (double)completed / created : 0.0,
+            .tasks_per_second = uptime.count() > 0 ? (double)completed * 1000.0 / uptime.count() : 0.0
+        };
+    }
+    
+    void print_stats() const {
+        auto stats = get_stats();
+        std::cout << "\n=== FlowCoro Performance Statistics ===\n";
+        std::cout << "Uptime: " << stats.uptime_ms << " ms\n";
+        std::cout << "Tasks Created: " << stats.tasks_created << "\n";
+        std::cout << "Tasks Completed: " << stats.tasks_completed << "\n";
+        std::cout << "Tasks Cancelled: " << stats.tasks_cancelled << "\n";
+        std::cout << "Tasks Failed: " << stats.tasks_failed << "\n";
+        std::cout << "Scheduler Invocations: " << stats.scheduler_invocations << "\n";
+        std::cout << "Timer Events: " << stats.timer_events << "\n";
+        std::cout << "Completion Rate: " << (stats.task_completion_rate * 100.0) << "%\n";
+        std::cout << "Throughput: " << stats.tasks_per_second << " tasks/sec\n";
+        std::cout << "========================================\n";
+    }
+    
+    static PerformanceMonitor& get_instance() {
+        static PerformanceMonitor instance;
+        return instance;
+    }
+};
 
 // 智能负载均衡器 - 无锁实现
 class SmartLoadBalancer {
@@ -176,6 +291,9 @@ public:
             return;
         }
 
+        // 记录调度器调用
+        PerformanceMonitor::get_instance().on_scheduler_invocation();
+
         // 使用增强的协程池进行调度
         schedule_coroutine_enhanced(handle);
     }
@@ -244,6 +362,10 @@ public:
             return 0;
         }
         uint64_t timer_id = timer_id_generator_.fetch_add(1, std::memory_order_relaxed);
+        
+        // 记录定时器事件
+        PerformanceMonitor::get_instance().on_timer_event();
+        
         // 如果专用定时器线程启动了，使用它
         if (dedicated_timer_thread_)
         {
@@ -844,24 +966,56 @@ struct Task {
     struct promise_type {
         std::optional<T> value;
         bool has_error = false; // 替换exception_ptr
+        std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
+        promise_type() : creation_time_(std::chrono::steady_clock::now()) {
+            // 记录任务创建
+            PerformanceMonitor::get_instance().on_task_created();
+        }
 
         // 析构时标记销毁
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
+            
+            // 记录任务状态
+            if (has_error) {
+                PerformanceMonitor::get_instance().on_task_failed();
+            } else if (is_cancelled()) {
+                PerformanceMonitor::get_instance().on_task_cancelled();
+            } else if (value.has_value()) {
+                PerformanceMonitor::get_instance().on_task_completed();
+            }
         }
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
-        std::suspend_never initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }  // 立即执行以提高性能
+        
+        // 支持continuation的final_suspend
+        auto final_suspend() noexcept {
+            struct final_awaiter {
+                promise_type* promise;
+                
+                bool await_ready() const noexcept { return false; }
+                
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
+                    // 如果有continuation，恢复它
+                    if (promise->continuation) {
+                        return promise->continuation;
+                    }
+                    return std::noop_coroutine();
+                }
+                
+                void await_resume() const noexcept {}
+            };
+            return final_awaiter{this};
+        }
 
         void return_value(T v) noexcept {
             // 快速路径：通常情况下协程没有被取消或销毁
@@ -871,9 +1025,14 @@ struct Task {
         }
 
         void unhandled_exception() {
-            // 快速路径：直接设置错误标志，不使用锁
+            // 快速路径：直接设置错误标志
             has_error = true;
-            LOG_ERROR("Task<T> unhandled exception occurred");
+            LOG_ERROR("Task unhandled exception occurred");
+        }
+
+        // Continuation支持
+        void set_continuation(std::coroutine_handle<> cont) noexcept {
+            continuation = cont;
         }
 
         // 快速的取消支持 - 去除锁
@@ -1098,24 +1257,24 @@ struct Task {
         return handle.promise().is_destroyed();
     }
 
-    bool await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 简化的实现 - Task<T>版本
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        // 高性能实现：直接设置continuation
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效，不挂起等待协程
-            return false;
+            // 句柄无效，直接恢复等待协程
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(waiting_handle);
+            return;
         }
 
         if (handle.done()) {
-            // 任务已完成，不挂起等待协程
-            return false;
+            // 任务已完成，直接恢复等待协程
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(waiting_handle);
+            return;
         }
 
-        // 任务未完成，启动任务执行
-        auto& manager = CoroutineManager::get_instance();
-        manager.schedule_resume(handle);
-
-        // 挂起等待协程
-        return true;
+        // 设置continuation：当task完成时恢复waiting_handle
+        handle.promise().set_continuation(waiting_handle);
     }
 
     T await_resume() {
@@ -1375,6 +1534,7 @@ template<>
 struct Task<void> {
     struct promise_type {
         bool has_error = false; // 替换exception_ptr
+        std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 与Task<T>保持一致
         std::atomic<bool> is_cancelled_{false};
@@ -1392,7 +1552,26 @@ struct Task<void> {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_always initial_suspend() noexcept { return {}; }  // 懒执行
-        std::suspend_always final_suspend() noexcept { return {}; }
+        
+        // 支持continuation的final_suspend
+        auto final_suspend() noexcept {
+            struct final_awaiter {
+                promise_type* promise;
+                
+                bool await_ready() const noexcept { return false; }
+                
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
+                    // 如果有continuation，恢复它
+                    if (promise->continuation) {
+                        return promise->continuation;
+                    }
+                    return std::noop_coroutine();
+                }
+                
+                void await_resume() const noexcept {}
+            };
+            return final_awaiter{this};
+        }
 
         void return_void() noexcept {
             // 快速路径：通常情况下协程没有被取消
@@ -1403,6 +1582,11 @@ struct Task<void> {
             // 快速路径：直接设置错误标志
             has_error = true;
             LOG_ERROR("Task<void> unhandled exception occurred");
+        }
+
+        // Continuation支持
+        void set_continuation(std::coroutine_handle<> cont) noexcept {
+            continuation = cont;
         }
 
         // 快速取消支持 - 去除锁
@@ -1586,7 +1770,7 @@ struct Task<void> {
     }
 
     bool await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 简化的实现 - Task<void>版本
+        // 懒加载Task的正确实现 - Task<void>版本
         if (!handle || handle.promise().is_destroyed()) {
             // 句柄无效，不挂起等待协程
             return false;
@@ -1597,11 +1781,14 @@ struct Task<void> {
             return false;
         }
 
-        // 任务未完成，启动任务执行
+        // 设置continuation：当task完成时恢复waiting_handle
+        handle.promise().set_continuation(waiting_handle);
+
+        // 启动懒加载的任务执行（仅首次）
         auto& manager = CoroutineManager::get_instance();
         manager.schedule_resume(handle);
 
-        // 挂起等待协程
+        // 挂起等待协程，等待task通过continuation唤醒
         return true;
     }
 
