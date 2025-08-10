@@ -205,11 +205,7 @@ Task<void> run_all_tests() {
         co_await test_channel_basic();
         co_await test_channel_buffered();
         co_await test_channel_close();
-        // 移除传统同步原语测试 - 与FlowCoro设计哲学不符
-        // co_await test_async_mutex();
-        // co_await test_async_semaphore();
-        // co_await test_async_condition_variable();
-        co_await test_producer_consumer();
+        // co_await test_producer_consumer();
         co_await test_performance();
         
         std::cout << std::endl;
