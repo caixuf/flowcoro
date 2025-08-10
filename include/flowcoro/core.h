@@ -132,7 +132,7 @@ private:
     
 public:
     CoroutineManager() = default;
-
+    
     // 禁止拷贝和移动
     CoroutineManager(const CoroutineManager&) = delete;
     CoroutineManager& operator=(const CoroutineManager&) = delete;
@@ -199,7 +199,112 @@ public:
         return instance;
     }
 
+    ~CoroutineManager()
+    {
+        stop_timer_thread();
+    }
+    // 启动专用定时器线程
+    void start_timer_thread()
+    {
+        if (dedicated_timer_thread_)
+        {
+            return; // 已启动
+        }
+        timer_thread_stop_.store(false, std::memory_order_release);
+        dedicated_timer_thread_ = std::make_unique<std::thread>([this]
+                                                                { dedicated_timer_thread_func(); });
+        LOG_INFO("Dedicated timer thread started");
+    }
+    // 停止专用定时器线程
+    void stop_timer_thread()
+    {
+        if (!dedicated_timer_thread_)
+        {
+            return;
+        }
+        timer_thread_stop_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(timer_thread_mutex_);
+            timer_thread_cv_.notify_all();
+        }
+        if (dedicated_timer_thread_->joinable())
+        {
+            dedicated_timer_thread_->join();
+        }
+        dedicated_timer_thread_.reset();
+        LOG_INFO("Dedicated timer thread stopped");
+    }
+    // 增强版添加定时器 - 支持专用线程
+    uint64_t add_timer_enhanced(std::chrono::steady_clock::time_point when,
+                                std::coroutine_handle<> handle)
+    {
+        if (!handle)
+        {
+            LOG_ERROR("Invalid handle in add_timer_enhanced");
+            return 0;
+        }
+        uint64_t timer_id = timer_id_generator_.fetch_add(1, std::memory_order_relaxed);
+        // 如果专用定时器线程启动了，使用它
+        if (dedicated_timer_thread_)
+        {
+            std::lock_guard<std::mutex> lock(timer_mutex_);
+            timer_queue_.emplace(when, handle);
+            timer_thread_cv_.notify_one(); // 通知专用线程
+            return timer_id;
+        }
+        // 否则使用原有方式
+        add_timer(when, handle);
+        return timer_id;
+    }
+
 private:
+    // 专用定时器线程主函数
+    void dedicated_timer_thread_func()
+    {
+        LOG_INFO("Dedicated timer thread started");
+        while (!timer_thread_stop_.load(std::memory_order_acquire))
+        {
+            std::unique_lock<std::mutex> lock(timer_mutex_);
+            if (timer_queue_.empty())
+            {
+                // 等待新的定时器或停止信号
+                timer_thread_cv_.wait(lock, [this]
+                                      { return timer_thread_stop_.load(std::memory_order_acquire) ||
+                                               !timer_queue_.empty(); });
+                continue;
+            }
+            auto now = std::chrono::steady_clock::now();
+            const auto &[when, handle] = timer_queue_.top();
+            if (when <= now)
+            {
+                // 批量处理到期的定时器
+                std::vector<std::coroutine_handle<>> expired_handles;
+                while (!timer_queue_.empty() && timer_queue_.top().first <= now)
+                {
+                    expired_handles.push_back(timer_queue_.top().second);
+                    timer_queue_.pop();
+                }
+                lock.unlock(); // 释放锁，避免在恢复协程时阻塞
+                // 批量恢复协程（通过线程池异步执行）
+                for (auto h : expired_handles)
+                {
+                    if (h && !h.done())
+                    {
+                        // 使用现有的协程池恢复
+                        schedule_coroutine_enhanced(h);
+                    }
+                }
+            }
+            else
+            {
+                // 精确等待到下一个定时器时间
+                timer_thread_cv_.wait_until(lock, when, [this]
+                                            { return timer_thread_stop_.load(std::memory_order_acquire); });
+            }
+        }
+        LOG_INFO("Dedicated timer thread stopped");
+    }
+
     void process_timer_queue() {
         static constexpr size_t BATCH_SIZE = 32; // 批处理大小
         std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
@@ -296,6 +401,15 @@ private:
     // 延迟销毁队列
     std::queue<std::coroutine_handle<>> destroy_queue_;
     std::mutex destroy_mutex_;
+
+    // 专用定时器线程
+    std::unique_ptr<std::thread> dedicated_timer_thread_;
+    std::atomic<bool> timer_thread_stop_{false};        
+    // 定时器线程专用的条件变量（独立于现有的timer_mutex_）
+    std::condition_variable timer_thread_cv_;    
+    mutable std::mutex timer_thread_mutex_;        
+    // 定时器ID生成器
+    std::atomic<uint64_t> timer_id_generator_{1};
 };
 
 // 安全的时钟等待器
@@ -1993,47 +2107,66 @@ public:
     }
 };
 
-// 协程友好的sleep_for实现 - 不使用任何多线程！
-class CoroutineFriendlySleepAwaiter {
+class EnhancedSleepAwaiter
+{
 private:
     std::chrono::milliseconds duration_;
+    CoroutineManager *manager_;
 
 public:
-    explicit CoroutineFriendlySleepAwaiter(std::chrono::milliseconds duration)
-        : duration_(duration) {}
-
-    bool await_ready() const noexcept {
+    explicit EnhancedSleepAwaiter(std::chrono::milliseconds duration)
+        : duration_(duration), manager_(&CoroutineManager::get_instance()) {}
+    bool await_ready() const noexcept
+    {
         return duration_.count() <= 0;
     }
-
-    bool await_suspend(std::coroutine_handle<> h) {
-        // 如果时间为0，不挂起
-        if (duration_.count() <= 0) {
+    bool await_suspend(std::coroutine_handle<> h)
+    {
+        if (duration_.count() <= 0)
+        {
             return false; // 不挂起，立即继续
         }
-
-        // 使用CoroutineManager的定时器，让它在合适的时候恢复我们
-        auto& manager = CoroutineManager::get_instance();
+        // 使用增强版定时器，支持专用线程
         auto when = std::chrono::steady_clock::now() + duration_;
-        manager.add_timer(when, h);
-
-        // 挂起协程，等待定时器恢复
-        return true;
+        manager_->add_timer_enhanced(when, h);
+        return true; // 挂起协程，等待定时器恢复
     }
-
-    void await_resume() const noexcept {
+    void await_resume() const noexcept
+    {
         // 定时器恢复了我们，休眠完成
     }
 };
+// 保持向后兼容
+using CoroutineFriendlySleepAwaiter = EnhancedSleepAwaiter;
 
-// 便捷函数：休眠 - 使用协程友好的实现
-inline auto sleep_for(std::chrono::milliseconds duration) {
-    return CoroutineFriendlySleepAwaiter(duration);
+// 便捷函数：休眠 - 使用增强版专用线程实现
+inline auto sleep_for(std::chrono::milliseconds duration)
+{
+    return EnhancedSleepAwaiter(duration);
+}
+// 支持其他时间单位
+template <typename Rep, typename Period>
+auto sleep_for(std::chrono::duration<Rep, Period> duration)
+{
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    return EnhancedSleepAwaiter(ms);
+}
+// 新增：sleep_until 支持
+inline auto sleep_until(std::chrono::steady_clock::time_point target_time)
+{
+    auto now = std::chrono::steady_clock::now();
+    auto duration = target_time - now;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    return EnhancedSleepAwaiter(ms);
 }
 
-// 启动协程管理器的驱动循环
 inline void start_coroutine_manager() {
     auto& manager = CoroutineManager::get_instance();
+    
+    // 启动专用定时器线程
+    manager.start_timer_thread();
+    
+    // 保持原有的驱动循环
     std::thread([&manager]() {
         while (true) {
             manager.drive();
@@ -2041,7 +2174,7 @@ inline void start_coroutine_manager() {
         }
     }).detach();
 
-    std::cout << "FlowCoro: Coroutine manager started" << std::endl;
+    std::cout << "FlowCoro: Enhanced coroutine manager with dedicated timer thread started" << std::endl;
 }
 
 // 修复when_all - 使用参数展开支持任意数量的task
