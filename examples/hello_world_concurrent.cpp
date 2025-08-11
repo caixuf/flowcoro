@@ -60,7 +60,7 @@ public:
 };
 
 // 修复协程测试 - 完全依赖Task内置协程池
-Task<void> handle_concurrent_requests_coroutine(int request_count) {
+Task<void> handle_concurrent_requests_coroutine(int request_count, const std::string& project_root) {
     auto start_time = std::chrono::high_resolution_clock::now();
     auto initial_memory = SystemInfo::get_memory_usage_bytes();
 
@@ -230,11 +230,12 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
     cJSON_AddNumberToObject(json, "exit_code", 0);
     
     char *json_string = cJSON_Print(json);
-    std::ofstream result_file("coroutine_result.json");
+    std::string result_path = project_root + "/coroutine_result.json";
+    std::ofstream result_file(result_path);
     if (result_file.is_open()) {
         result_file << json_string << std::endl;
         result_file.close();
-        std::cout << " JSON结果已保存到 coroutine_result.json" << std::endl;
+        std::cout << " JSON结果已保存到 " << result_path << std::endl;
     }
     
     free(json_string);
@@ -246,7 +247,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count) {
     co_return;
 }
 // 高并发多线程测试
-void handle_concurrent_requests_threads(int request_count) {
+void handle_concurrent_requests_threads(int request_count, const std::string& project_root) {
     auto start_time = std::chrono::high_resolution_clock::now();
     auto initial_memory = SystemInfo::get_memory_usage_bytes();
 
@@ -333,11 +334,12 @@ void handle_concurrent_requests_threads(int request_count) {
     cJSON_AddNumberToObject(json, "exit_code", 0);
     
     char *json_string = cJSON_Print(json);
-    std::ofstream result_file("thread_result.json");
+    std::string result_path = project_root + "/thread_result.json";
+    std::ofstream result_file(result_path);
     if (result_file.is_open()) {
         result_file << json_string << std::endl;
         result_file.close();
-        std::cout << " JSON结果已保存到 thread_result.json" << std::endl;
+        std::cout << " JSON结果已保存到 " << result_path << std::endl;
     }
     
     free(json_string);
@@ -345,13 +347,14 @@ void handle_concurrent_requests_threads(int request_count) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        std::cerr << "用法: " << argv[0] << " <coroutine|thread> <request_count>" << std::endl;
+    if (argc != 4) {
+        std::cerr << "用法: " << argv[0] << " <coroutine|thread> <request_count> <project_root_dir>" << std::endl;
         return 1;
     }
 
     std::string mode = argv[1];
     int request_count = std::stoi(argv[2]);
+    std::string project_root = argv[3];
 
     std::cout << "========================================" << std::endl;
     std::cout << " FlowCoro 高并发性能测试" << std::endl;
@@ -365,7 +368,7 @@ int main(int argc, char* argv[]) {
     try {
         if (mode == "coroutine") {
             sync_wait([&]() {
-                return handle_concurrent_requests_coroutine(request_count);
+                return handle_concurrent_requests_coroutine(request_count, project_root);
             });
 
             // 给系统一点时间来清理资源
@@ -378,7 +381,7 @@ int main(int argc, char* argv[]) {
             std::quick_exit(0);
 
         } else if (mode == "thread") {
-            handle_concurrent_requests_threads(request_count);
+            handle_concurrent_requests_threads(request_count, project_root);
             std::cout << " 线程测试完成" << std::endl;
         } else {
             std::cerr << " 无效的模式: " << mode << " (支持: coroutine, thread)" << std::endl;

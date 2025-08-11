@@ -3,6 +3,11 @@
 # Hello World 示例 - 基础协程入门
 add_executable(hello_world hello_world.cpp)
 target_link_libraries(hello_world PRIVATE flowcoro_net)
+# 定义项目根路径宏，让程序能够动态获取构建目录
+target_compile_definitions(hello_world PRIVATE 
+    "PROJECT_BUILD_DIR=\"${CMAKE_BINARY_DIR}\""
+    "PROJECT_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\""
+)
 
 # Hello World 并发测试程序 - 独立进程版本
 add_executable(hello_world_concurrent hello_world_concurrent.cpp)
