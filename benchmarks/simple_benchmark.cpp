@@ -80,6 +80,81 @@ Task<void> scheduled_coroutine() {
     co_return;
 }
 
+// 7. 无锁队列性能测试
+BenchmarkResult benchmark_lockfree_queue(int iterations) {
+    Timer timer;
+    lockfree::Queue<int> queue;
+    
+    // 入队测试
+    for (int i = 0; i < iterations; ++i) {
+        queue.enqueue(i);
+    }
+    
+    // 出队测试
+    int value;
+    int dequeue_count = 0;
+    while (queue.dequeue(value) && dequeue_count < iterations) {
+        dequeue_count++;
+    }
+    
+    double total_time = timer.elapsed_ms();
+    
+    return {
+        "Lockfree Queue Ops",
+        iterations * 2,  // 入队 + 出队
+        total_time,
+        total_time / (iterations * 2),
+        (iterations * 2) * 1000.0 / total_time
+    };
+}
+
+// 8. 协程池调度性能测试
+std::atomic<int> pool_counter{0};
+
+Task<void> pool_test_task(int id) {
+    pool_counter.fetch_add(1);
+    // 模拟一些轻量级工作
+    volatile int sum = 0;
+    for (int i = 0; i < 1000; ++i) {
+        sum += i;
+    }
+    co_return;
+}
+
+BenchmarkResult benchmark_coroutine_pool(int iterations) {
+    Timer timer;
+    pool_counter = 0;
+    
+    // 启用协程池功能
+    enable_v2_features();
+    
+    std::vector<Task<void>> tasks;
+    tasks.reserve(iterations);
+    
+    // 创建任务（会立即投递到协程池）
+    for (int i = 0; i < iterations; ++i) {
+        tasks.emplace_back(pool_test_task(i));
+    }
+    
+    // 等待所有任务完成
+    for (auto& task : tasks) {
+        sync_wait([&task]() -> Task<void> {
+            co_await task;
+            co_return;
+        });
+    }
+    
+    double total_time = timer.elapsed_ms();
+    
+    return {
+        "Coroutine Pool",
+        iterations,
+        total_time,
+        total_time / iterations,
+        iterations * 1000.0 / total_time
+    };
+}
+
 BenchmarkResult benchmark_coroutine_scheduling(int iterations) {
     Timer timer;
     schedule_counter = 0;
@@ -268,6 +343,14 @@ int main() {
         // when_any测试
         auto result6 = benchmark_when_any(small_iterations / 10);
         result6.print();
+        
+        // 无锁队列测试
+        auto result7 = benchmark_lockfree_queue(iterations);
+        result7.print();
+        
+        // 协程池测试
+        auto result8 = benchmark_coroutine_pool(small_iterations);
+        result8.print();
         
         print_footer();
         

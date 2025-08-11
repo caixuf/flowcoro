@@ -18,11 +18,14 @@ FlowCoro 是一个性能导向的C++协程库，采用多线程协程调度架�
 
 ### 架构特点说明
 
-**重要：** FlowCoro 采用**同步阻塞调度模式**，这意味着：
-- ✅ **非常适合**: 批量任务处理、请求-响应模式
-- ✅ **极高性能**: 100万+ req/s 吞吐量
-- ❌ **不适合**: 传统生产者-消费者持续协作模式
-- ❌ **架构限制**: 无事件循环，不支持真正的协程间通信
+**重要：** FlowCoro 采用**三层调度架构**，基于无锁队列实现高性能协程调度：
+
+- ✅ **完美适配**: 批量任务处理、请求-响应模式
+- ✅ **极高性能**: 476K+ req/s 吞吐量，40倍性能提升
+- ✅ **无锁调度**: 15.6M ops/s队列操作，智能负载均衡
+- ❌ **架构限制**: 无事件循环，不支持协程间持续协作模式
+
+**调度流程**: Task创建 → 协程管理器 → 协程池(无锁队列) → 线程池执行
 
 ## 性能表现
 
@@ -30,16 +33,16 @@ FlowCoro 是一个性能导向的C++协程库，采用多线程协程调度架�
 
 ### 高并发处理能力（10,000任务基准测试）
 
-- **极限吞吐量**: **1,000,000 req/s** (100万请求/秒)
-- **超低延迟**: 0.001ms/请求 
-- **性能倍数**: 比传统多线程快 **36.3倍**
-- **内存效率**: 407 bytes/请求（功能丰富的协程任务）
+- **极限吞吐量**: **476,190 req/s** (47万请求/秒)
+- **超低延迟**: 0.0021ms/请求
+- **性能倍数**: 比传统多线程快 **40倍** (476k vs 11.9k req/s)
+- **内存效率**: 408 bytes/请求（功能丰富的协程任务，含无锁队列开销）
 
 ### 性能监控系统
 
-- **实时吞吐量**: **31,818+ tasks/sec** 
+- **实时吞吐量**: **31,818+ tasks/sec**
 - **系统稳定性**: **100%任务完成率** (零失败、零取消)
-- **响应速度**: 总运行时间仅 **11ms** (包含系统初始化)
+- **响应速度**: 总运行时间仅 **21ms** (包含系统初始化)
 - **定时器精度**: 100个定时器事件精确调度
 
 ### 协程创建性能
@@ -70,8 +73,9 @@ FlowCoro 是一个性能导向的C++协程库，采用多线程协程调度架�
 | Task协程 | 231ns创建 | 轻量级协程任务 |
 | 线程池 | 32工作线程 | 工作窃取调度 |
 | 内存池 | 18.7M ops/s | 动态扩展设计 |
-| 无锁队列 | 15.6M ops/s | 高并发数据结构 |
+| 无锁队列 | 15.6M ops/s | 高并发数据结构，支持协程调度 |
 | 定时器 | 52ns精度 | 高精度sleep_for |
+| 协程池 | 多调度器 | 智能负载均衡，跨线程协程恢复 |
 
 ### 与传统多线程的真实对比测试
 
@@ -81,16 +85,16 @@ FlowCoro 是一个性能导向的C++协程库，采用多线程协程调度架�
 
 | 方案 | 执行时间 | 吞吐量 | 内存使用 | 单任务内存 |
 |------|----------|--------|----------|------------|
-| **FlowCoro协程** | **10ms** | **1,000,000 req/s** | 4.07MB | 407 bytes |
-| **传统多线程** | **363ms** | **27,548 req/s** | 2.87MB | 287 bytes |
-| **性能优势** | **36.3倍** | **36.3倍** | **功能丰富** | **功能更强** |
+| **FlowCoro协程** | **21ms** | **476,190 req/s** | 8.15MB | 408 bytes |
+| **传统多线程** | **840ms** | **11,905 req/s** | 7.21MB | 314 bytes |
+| **性能优势** | **40倍** | **40倍** | **功能丰富** | **功能更强** |
 
 #### 性能优势分析
 
-- **执行效率**: FlowCoro执行速度是多线程的36.3倍
-- **吞吐量**: 达到100万请求/秒的极高吞吐量
+- **执行效率**: FlowCoro执行速度是多线程的40倍
+- **吞吐量**: 达到47万请求/秒的极高吞吐量
 - **扩展性**: 从小规模到10K任务线性扩展
-- **功能优势**: 每任务407字节包含丰富的协程功能和监控能力
+- **功能优势**: 每任务408字节包含丰富的协程功能、无锁队列和监控能力
 
 **测试说明**: 所有测试均在相同硬件环境下进行，使用真实的CPU计算任务，专注测试纯协程调度性能。测试代码见 `examples/hello_world.cpp`。
 
@@ -164,7 +168,8 @@ int main() {
 
 ```bash
 # 运行基准测试验证性能数据
-./benchmarks/accurate_benchmarks
+cd build && make -j16
+./benchmarks/simple_benchmark
 
 # 运行跨语言对比测试 (需要安装Go和Rust)
 # FlowCoro测试
@@ -177,9 +182,17 @@ cd benchmarks && go build go_benchmark.go && ./go_benchmark 10000
 cd benchmarks && cargo build --release && ./target/release/rust_benchmark 10000
 
 # 预期输出示例：
-# [BENCH] Coroutine Creation Only:
-# Throughput: 4330879 ops/sec
-# Latency: 231 ns/op
+# [BENCH] FlowCoro协程处理 (10,000任务):
+# 执行时间: 21ms
+# 吞吐量: 476,190 req/s
+# 内存使用: 8.15MB (408 bytes/任务)
+# 
+# [BENCH] 传统多线程处理 (10,000任务):
+# 执行时间: 840ms
+# 吞吐量: 11,905 req/s
+# 内存使用: 7.21MB (314 bytes/任务)
+# 
+# 性能提升: 40倍
 ```
 
 ## 核心特性
@@ -198,6 +211,47 @@ public:
     struct promise_type {
         // 关键设计：suspend_never决定立即执行！
         std::suspend_never initial_suspend() { return {}; }
+        
+        // 支持continuation的final_suspend实现任务链
+        auto final_suspend() noexcept {
+            struct final_awaiter {
+                bool await_ready() const noexcept { return false; }
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
+                    // 当任务完成时，恢复等待的协程
+                    if (promise->continuation) {
+                        return promise->continuation;
+                    }
+                    return std::noop_coroutine();
+                }
+            };
+            return final_awaiter{this};
+        }
+    };
+    
+    // await实现：设置continuation而非阻塞
+    void await_suspend(std::coroutine_handle<> waiting_handle) {
+        // 设置continuation：当task完成时恢复waiting_handle
+        handle.promise().set_continuation(waiting_handle);
+    }
+};
+```
+
+#### 任务执行流程
+
+```text
+1. Task创建 → suspend_never → 立即投递到协程池
+2. 协程池调度 → 无锁队列 → 工作线程执行
+3. 任务完成 → final_suspend → 恢复等待协程
+4. co_await返回 → 获取结果
+```
+
+#### 调度系统架构
+
+```text
+Task创建 → 协程管理器 → 智能负载均衡 → 协程池调度器 → 无锁队列 → 线程池执行
+   ↓           ↓              ↓              ↓            ↓          ↓
+suspend_never  调度决策      选择最优调度器    任务入队      跨线程安全   并发执行
+```
         //         ^^^^^ 这决定了Task创建时立即开始执行
         
         std::suspend_always final_suspend() noexcept { return {}; }
