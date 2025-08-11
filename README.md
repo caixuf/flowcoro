@@ -6,7 +6,7 @@ English | [中文](README_zh.md)
 
 ## Features
 
-- **High Performance**: 1.9M req/s throughput, 137x faster than traditional threading
+- **High Performance**: 2.1M req/s throughput, 144x faster than traditional threading
 - **Lock-free Architecture**: 45.5M ops/s queue operations with smart load balancing
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
 - **Batch Processing**: Optimized for large-scale concurrent task execution
@@ -16,8 +16,8 @@ English | [中文](README_zh.md)
 
 | Test Scale | Throughput | Latency | vs Threads |
 |------------|------------|---------|------------|
-| 100K tasks | 1.89M req/s | 0.53μs | 137x faster |
-| 10K tasks | 476K req/s | 2.1ms | 40x faster |
+| 100K tasks | 2.08M req/s | 0.48μs | 144.6x faster |
+| 10K tasks | 1.67M req/s | 0.6μs | 123.5x faster |
 
 ## Quick Start
 
