@@ -105,49 +105,6 @@ Task<void> test_channel_close() {
     co_return;
 }
 
-// 基于Channel的生产者-消费者测试（FlowCoro推荐模式）
-Task<void> test_producer_consumer() {
-    std::cout << "测试: Channel生产者-消费者模式..." << std::endl;
-    
-    constexpr int item_count = 10;
-    auto channel = make_channel<int>(3);  // 使用Channel作为缓冲区
-    
-    std::atomic<int> produced{0};
-    std::atomic<int> consumed{0};
-    
-    auto producer = [&]() -> Task<void> {
-        for (int i = 0; i < item_count; ++i) {
-            co_await channel->send(i);
-            produced.fetch_add(1);
-            co_await sleep_for(std::chrono::milliseconds(1));
-        }
-        channel->close();  // 关闭channel表示生产完成
-        co_return;
-    };
-    
-    auto consumer = [&]() -> Task<void> {
-        while (true) {
-            auto item = co_await channel->recv();
-            if (!item.has_value()) break;  // channel已关闭且为空
-            consumed.fetch_add(1);
-            co_await sleep_for(std::chrono::milliseconds(1));
-        }
-        co_return;
-    };
-    
-    auto producer_task = producer();
-    auto consumer_task = consumer();
-    
-    co_await producer_task;
-    co_await consumer_task;
-    
-    ASSERT_EQ(produced.load(), item_count, "应该生产所有物品");
-    ASSERT_EQ(consumed.load(), item_count, "应该消费所有物品");
-    
-    std::cout << "✓ Channel生产者-消费者测试通过" << std::endl;
-    co_return;
-}
-
 // 简化版性能测试
 Task<void> test_performance() {
     std::cout << "测试: 新功能性能表现..." << std::endl;
@@ -205,7 +162,6 @@ Task<void> run_all_tests() {
         co_await test_channel_basic();
         co_await test_channel_buffered();
         co_await test_channel_close();
-        // co_await test_producer_consumer();
         co_await test_performance();
         
         std::cout << std::endl;

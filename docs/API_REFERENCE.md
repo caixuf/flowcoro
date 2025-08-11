@@ -1,111 +1,455 @@
-# FlowCoro v4.0.0 API 参考手册
+# FlowCoro API 参考手册
 
-## v4.0.0 高性能优化版
+**基于同步阻塞调度架构的高性能批量任务处理库**
 
-### 重大性能突破
+## 核心架构说明
 
-- **Task启动并发**: 任务创建时立即在多线程中开始执行，支持10000+并发任务
-- **sleep_for升级**: 协程友好的定时器系统，真正的异步非阻塞等待
-- **内存优化**: 单任务内存占用降至94-130字节
-- **超高吞吐量**: 71万+请求/秒的处理能力
+FlowCoro 采用**同步阻塞调度模式**，专门优化批量任务处理和请求-响应模式：
 
-### 核心性能指标
+- **调度方式**: `sync_wait()` → `Task::get()` → `handle.resume()` (阻塞调用)
+- **适用场景**: 批量并发任务、Web API服务、独立任务处理
+- **不适用**: 协程间持续协作、生产者-消费者模式、事件驱动系统
 
-基于优化架构的实测性能数据：
+## 性能表现
 
-| 并发任务数 | 总耗时 | 吞吐量 | 内存使用 | 单任务内存 |
-|-----------|--------|--------|----------|------------|
-| 5000 | 8ms | 625K/s | 636KB | 130 bytes |
-| 10000 | 14ms | 714K/s | 920KB | 94 bytes |
+### 批量任务处理性能
 
-- **协程创建**: 微秒级轻量级协程任务创建
-- **内存管理**: 高效的多线程并发内存优化
-- **并发调度**: 32-128个工作线程的并发调度系统
-- **多线程安全**: SafeCoroutineHandle确保跨线程协程恢复安全
+基于真实基准测试：
 
-### 基础使用示例
+| 任务数量 | 执行时间 | 吞吐量 | 内存使用 |
+|----------|----------|--------|----------|
+| 1,000 | 2ms | 500K req/s | 256KB |
+| 10,000 | 10ms | 1M req/s | 4.07MB |
+
+### 性能优势
+
+- **vs 传统多线程**: 36.3倍速度提升
+- **内存效率**: 407 bytes/task (功能丰富)
+- **超低延迟**: 0.002ms/请求
+
+## 目录
+
+### 核心概念
+- [并发机制](#并发机制) - Task创建时并发，co_await只是等待
+- [架构限制](#架构限制) - 不支持的使用模式
+- [适用场景](#适用场景) - 推荐和不推荐的用法
+
+### API参考
+- [1. Task<T>](#1-taskt) - 协程任务接口
+- [2. sync_wait()](#2-sync_wait) - 同步等待
+- [3. when_all()](#3-when_all) - 批量等待语法糖
+- [4. sleep_for()](#4-sleep_for) - 协程友好的延时
+- [5. 线程池](#5-线程池) - 后台任务处理
+- [6. 内存管理](#6-内存管理) - 内存池和对象池
+
+---
+
+## 并发机制
+
+### 唯一的并发方式
+
+FlowCoro 只有**一种**并发方式：**Task创建时立即并发执行**
+
+```cpp
+Task<void> concurrent_processing() {
+    // ✅ 正确：任务创建时立即开始并发执行
+    auto task1 = async_compute(1);  // 立即开始执行
+    auto task2 = async_compute(2);  // 立即开始执行
+    auto task3 = async_compute(3);  // 立即开始执行
+    
+    // co_await 只是等待结果，不影响并发
+    auto r1 = co_await task1;  // 等待结果
+    auto r2 = co_await task2;  // 等待结果（可能已完成）
+    auto r3 = co_await task3;  // 等待结果（可能已完成）
+    
+    co_return;
+}
+```
+
+### when_all 语法糖
+
+`when_all` 不是独立的并发机制，只是便利的语法糖：
+
+```cpp
+// when_all 的实际实现
+template<typename... Tasks>
+Task<std::tuple<...>> when_all(Tasks&&... tasks) {
+    std::tuple<...> results;
+    // 内部仍是顺序 co_await！
+    ((std::get<Is>(results) = co_await std::forward<Ts>(ts)), ...);
+    co_return std::move(results);
+}
+
+// 使用示例
+Task<void> batch_processing() {
+    auto task1 = async_compute(1);  // 立即开始执行
+    auto task2 = async_compute(2);  // 立即开始执行
+    auto task3 = async_compute(3);  // 立即开始执行
+    
+    // 语法糖：简化结果获取
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1), std::move(task2), std::move(task3)
+    );
+    
+    co_return;
+}
+```
+
+## 架构限制
+
+### ❌ 不支持的模式
+
+**生产者-消费者协作:**
+
+```cpp
+// ❌ 错误：不支持协程间持续协作
+Task<void> producer_consumer() {
+    auto producer_task = producer();
+    auto consumer_task = consumer();
+    
+    // 问题：这会顺序执行，不是并发
+    co_await producer_task;  // 阻塞等待生产者完成
+    co_await consumer_task;  // 然后执行消费者
+}
+```
+
+**协程通信管道:**
+
+```cpp
+// ❌ 错误：Channel 不适合此架构
+Task<void> pipeline() {
+    auto channel = make_channel<int>(10);
+    auto stage1 = process_stage1(channel);
+    auto stage2 = process_stage2(channel);
+    
+    // 问题：无法实现真正的流水线协作
+}
+```
+
+### ✅ 推荐的模式
+
+**批量任务处理:**
+
+```cpp
+// ✅ 正确：批量处理模式
+Task<void> batch_requests() {
+    std::vector<Task<Response>> tasks;
+    
+    // 批量创建任务（立即开始并发执行）
+    for (const auto& req : requests) {
+        tasks.push_back(handle_request(req));
+    }
+    
+    // 批量等待结果
+    std::vector<Response> responses;
+    for (auto& task : tasks) {
+        responses.push_back(co_await task);
+    }
+    
+    co_return;
+}
+```
+
+## 适用场景
+
+### 🚀 强烈推荐
+
+- **Web API服务器**: 每个请求独立处理
+- **批量数据处理**: 批量查询、文件处理
+- **压力测试工具**: 大量并发请求
+- **爬虫系统**: 并发网页抓取
+
+### ⚠️ 不适合
+
+- **实时系统**: 需要协程间持续通信
+- **流处理**: 需要协程链式协作
+- **事件驱动**: 需要协程间消息传递
+
+---
+    
+    ---
+
+## 1. Task&lt;T&gt;
+
+FlowCoro 的核心协程任务类，封装协程的生命周期管理。
+
+### 基本用法
 
 ```cpp
 #include "flowcoro.hpp"
+using namespace flowcoro;
 
-// 创建协程任务（在多线程环境中执行）
-flowcoro::Task<int> calculate(int x) {
-    // 协程友好的异步等待 - 使用定时器系统，不阻塞工作线程
-    co_await flowcoro::sleep_for(std::chrono::milliseconds(10));
+// 定义协程函数
+Task<int> compute_value(int x) {
+    co_await sleep_for(std::chrono::milliseconds(10));
     co_return x * x;
 }
 
-// 并发执行多个协程
-flowcoro::Task<void> concurrent_example() {
-    // 创建多个协程任务
-    auto task1 = calculate(5);
-    auto task2 = calculate(10);
-    auto task3 = calculate(15);
+// 使用协程
+Task<void> example() {
+    auto task = compute_value(5);  // 创建时立即开始执行
+    int result = co_await task;    // 等待结果
+    std::cout << "Result: " << result << std::endl;
+    co_return;
+}
+```
+
+### 主要方法
+
+#### `T get()`
+
+同步获取协程结果，会阻塞当前线程。
+
+```cpp
+Task<int> compute() {
+    co_return 42;
+}
+
+int main() {
+    auto task = compute();
+    int result = task.get();  // 阻塞等待
+    std::cout << result << std::endl;
+    return 0;
+}
+```
+
+#### `bool done() const`
+
+检查协程是否已完成。
+
+```cpp
+auto task = compute_value(10);
+if (task.done()) {
+    std::cout << "Already completed" << std::endl;
+}
+```
+
+### 生命周期
+
+- **创建**: Task创建时协程立即开始执行
+- **执行**: 在多线程环境中异步执行
+- **等待**: 通过 `co_await` 或 `get()` 获取结果
+- **销毁**: RAII自动管理资源
+
+## 2. sync_wait()
+
+同步等待协程完成的阻塞函数。
+
+### 函数签名
+
+```cpp
+template<typename T>
+T sync_wait(Task<T>&& task);
+
+void sync_wait(Task<void>&& task);
+```
+
+### 基本用法
+
+```cpp
+Task<std::string> async_work() {
+    co_await sleep_for(std::chrono::milliseconds(100));
+    co_return "Work completed";
+}
+
+int main() {
+    auto task = async_work();
     
-    // 并发执行（在不同线程中）
-    auto [r1, r2, r3] = co_await flowcoro::when_all(
+    // 同步等待完成
+    std::string result = sync_wait(std::move(task));
+    std::cout << result << std::endl;
+    
+    return 0;
+}
+```
+
+### 注意事项
+
+- `sync_wait` 是**同步阻塞**函数，会暂停当前线程执行
+- 通常用于主函数或测试代码中
+- 不要在协程内部使用，会导致死锁
+
+## 3. when_all()
+
+批量等待多个协程完成的语法糖函数。
+
+### 函数签名
+
+```cpp
+template<typename... Tasks>
+Task<std::tuple<decltype(tasks.get())...>> when_all(Tasks&&... tasks);
+```
+
+### 基本用法
+
+```cpp
+Task<int> compute1() { 
+    co_await sleep_for(std::chrono::milliseconds(50));
+    co_return 1; 
+}
+
+Task<int> compute2() { 
+    co_await sleep_for(std::chrono::milliseconds(100));
+    co_return 2; 
+}
+
+Task<int> compute3() { 
+    co_await sleep_for(std::chrono::milliseconds(75));
+    co_return 3; 
+}
+
+Task<void> batch_example() {
+    auto task1 = compute1();  // 立即开始执行
+    auto task2 = compute2();  // 立即开始执行  
+    auto task3 = compute3();  // 立即开始执行
+    
+    // 批量等待所有结果
+    auto [r1, r2, r3] = co_await when_all(
         std::move(task1),
         std::move(task2), 
         std::move(task3)
     );
     
-    std::cout << "结果: " << r1 << ", " << r2 << ", " << r3 << std::endl;
-}
-
-// 同步等待协程完成
-int main() {
-    // 启用多线程协程系统
-    flowcoro::enable_v2_features();
-    
-    auto result = flowcoro::sync_wait(concurrent_example());
-    return 0;
+    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
 }
 ```
 
-## 目录
+### 适用场景
 
-### 并发机制澄清
-- [唯一并发方式：co_await](#唯一并发方式co_await) - 任务启动即并发，co_await只是等待
-- [when_all 语法糖](#when_all-语法糖) - 简化多任务等待的便利封装
+- **固定数量任务**: 2-10个已知的协程任务
+- **结果解构**: 需要分别获取每个任务的结果
+- **代码简洁**: 避免多个 `co_await` 调用
 
-### 核心模块
-- [1. 协程核心 (core.h)](#1-协程核心-coreh) - Task接口、when_all语法糖、协程管理、同步等待
-- [2. 线程池 (thread_pool.h)](#2-线程池-thread_poolh) - 高性能线程池实现
-- [3. 内存管理 (memory.h)](#3-内存管理-memoryh) - 内存池、对象池
-- [4. 无锁数据结构 (lockfree.h)](#4-无锁数据结构-lockfreeh) - 无锁队列、栈
+### 大量任务的替代方案
 
-### 系统模块
-- [5. 协程池](#5-协程池) - 协程调度和管理
-- [6. 全局配置](#6-全局配置) - 系统配置和初始化
-
-## 概述
-
-FlowCoro v4.0.0 是一个精简的现代C++20协程库，专注于提供高效的协程核心功能。本版本移除了网络、数据库、RPC等复杂组件，专注于协程任务管理、内存管理、线程池和无锁数据结构等核心特性。
-
----
-
-## 并发机制澄清
-
-FlowCoro只有一种并发方式：**任务启动时的自动并发**，`co_await`和`when_all`都只是等待机制。
-
-### 唯一并发方式：co_await
-
-**核心原理：** 任务启动即并发，co_await 只是等待结果
+对于大量任务，推荐使用循环方式：
 
 ```cpp
-Task<void> real_concurrency_demo() {
-    // 1. 任务启动：立即开始并发执行
-    auto task1 = async_compute(1);  // 任务1立即启动并发执行
-    auto task2 = async_compute(2);  // 任务2立即启动并发执行
-    auto task3 = async_compute(3);  // 任务3立即启动并发执行
+Task<void> many_tasks() {
+    std::vector<Task<int>> tasks;
     
-    // 2. 结果等待：任务已在后台并发运行
-    auto r1 = co_await task1;  // 等待任务1结果
-    auto r2 = co_await task2;  // 等待任务2结果（可能已完成）
-    auto r3 = co_await task3;  // 等待任务3结果（可能已完成）
+    // 创建大量任务
+    for (int i = 0; i < 1000; ++i) {
+        tasks.push_back(compute_value(i));
+    }
+    
+    // 逐个等待结果
+    std::vector<int> results;
+    for (auto& task : tasks) {
+        results.push_back(co_await task);
+    }
     
     co_return;
 }
+```
+
+## 4. sleep_for()
+
+协程友好的延时函数，不会阻塞工作线程。
+
+### 函数签名
+
+```cpp
+Task<void> sleep_for(std::chrono::duration auto duration);
+```
+
+### 基本用法
+
+```cpp
+Task<void> delayed_work() {
+    std::cout << "Start work" << std::endl;
+    
+    // 协程友好的延时，不阻塞线程
+    co_await sleep_for(std::chrono::seconds(1));
+    
+    std::cout << "Work completed after 1 second" << std::endl;
+    co_return;
+}
+```
+
+### 精度示例
+
+```cpp
+Task<void> precise_timing() {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    co_await sleep_for(std::chrono::milliseconds(100));
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    
+    std::cout << "Actual delay: " << duration.count() << "ms" << std::endl;
+    co_return;
+}
+```
+
+### 与 std::this_thread::sleep_for 的区别
+
+```cpp
+// ❌ 错误：阻塞工作线程
+Task<void> blocking_sleep() {
+    std::this_thread::sleep_for(std::chrono::seconds(1));  // 阻塞！
+    co_return;
+}
+
+// ✅ 正确：非阻塞协程延时
+Task<void> non_blocking_sleep() {
+    co_await sleep_for(std::chrono::seconds(1));  // 非阻塞
+    co_return;
+}
+```
+
+## 5. 线程池
+
+FlowCoro 内置高性能线程池，自动处理协程调度。
+
+### 配置
+
+```cpp
+// 线程池会根据 CPU 核心数自动配置
+// 通常为 32-128 个工作线程
+
+// 手动启用系统（可选）
+enable_v2_features();
+```
+
+### 性能特点
+
+- **智能调度**: 自动负载均衡
+- **工作窃取**: 高效的任务分发
+- **跨线程安全**: 协程可在任意线程恢复
+
+## 6. 内存管理
+
+### 动态内存池
+
+```cpp
+#include "flowcoro/memory_pool.h"
+
+// 创建内存池
+MemoryPool pool(64, 100);  // 64字节块，初始100个
+pool.set_expansion_factor(2.0);  // 扩展倍数
+
+// 分配内存
+void* ptr = pool.allocate();  // 保证成功
+pool.deallocate(ptr);         // 释放内存
+```
+
+### 对象池
+
+```cpp
+#include "flowcoro/object_pool.h"
+
+// 创建对象池
+ObjectPool<MyClass> obj_pool(50);  // 初始50个对象
+
+// 获取对象
+auto obj = obj_pool.acquire();  // 智能指针包装
+// 对象在智能指针销毁时自动归还池中
+```
+
+---
 ```
 
 **适用场景：**

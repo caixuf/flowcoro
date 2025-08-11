@@ -1,103 +1,366 @@
-# Flowcoro 使用指南
-## 最新更新 (v4.0)
+# FlowCoro 使用指南
 
-### when_all 重大改进
+**专为批量任务处理优化的C++20协程库**
 
-- **优化的顺序执行**：新实现使用索引化顺序执行，避免了参数包展开的并发问题
-- **内存优化**：单请求内存使用降至94-130 bytes/请求
-- **极高性能**：支持10000+并发任务，吞吐量达71万+请求/秒
-- **稳定性提升**：完全支持跨线程协程恢复，提供安全的多线程调度机制
+## 核心架构说明
 
-###  sleep_for 协程友好设计
+FlowCoro 采用**同步阻塞调度架构**，专门优化以下场景：
 
-- **真正协程友好**：使用CoroutineManager的定时器系统，不阻塞线程
-- **非阻塞实现**：通过 `await_suspend` 挂起协程，等待定时器恢复
-- **单线程定时器**：定时器管理在单独线程中，避免复杂的多线程同步
+### ✅ 完美适配场景
+- **批量并发任务处理**: Web API 服务、数据处理管道
+- **请求-响应模式**: HTTP 服务器、RPC 服务、代理网关
+- **独立任务并发**: 爬虫系统、测试工具、文件处理
 
-## 快速开始
+### ❌ 架构限制场景
+- **协程间持续协作**: 生产者-消费者模式
+- **实时事件处理**: 需要协程间通信的系统
+- **流水线处理**: 需要协程链式协作
 
-FlowCoro是一个现代的C++20协程库，提供简单易用的异步编程接口。**协程池是自动管理的，无需手动创建！**
+## 并发机制详解
 
-## 最新更新 (v4.0)
+### 唯一的并发方式
 
-### Task 创建时并发改进
-- **真正的并发执行**：Task创建时立即在多线程环境中开始执行，充分利用多核CPU  
-- **内存优化**：单请求内存使用407 bytes/请求（功能丰富的协程任务）
-- **极高性能**：支持10000+并发任务，吞吐量达100万请求/秒
-- **稳定性提升**：多线程安全的协程调度，支持跨线程协程恢复，100%任务完成率
-
-### 性能监控系统
-- **实时统计**：系统运行时间、任务完成率、吞吐量监控
-- **资源追踪**：任务创建/完成/失败/取消的完整生命周期监控  
-- **性能分析**：31,818+ tasks/sec实时吞吐量测量
-- **定时器监控**：精确定时器事件调度和性能统计
-
-### sleep_for 真正机制
-
-- **协程友好实现**：使用定时器系统，不阻塞工作线程
-- **真正的异步等待**：协程挂起后定时器负责恢复
-- **线程安全设计**：定时器队列使用互斥锁保护，支持多线程安全访问
-
-## 基本使用方式
-
-### 并发机制澄清
-
-FlowCoro只有一种并发方式：**任务启动时的自动并发**
-
-#### 核心原理（基于真实代码实现）
+FlowCoro 只有**一种**并发方式：**Task创建时立即并发执行**
 
 ```cpp
-// FlowCoro的真实实现：Task立即执行设计（来自 include/flowcoro/core.h）
-template<typename T>
-class Task {
-public:
-    struct promise_type {
-        // 关键设计：suspend_never = 立即执行！
-        std::suspend_never initial_suspend() { return {}; }
-        //         ^^^^^ 这决定了Task创建时立即开始执行
-        
-        std::suspend_always final_suspend() noexcept { return {}; }
-        
-        Task get_return_object() {
-            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
-        }
-    };
+#include "flowcoro.hpp"
+using namespace flowcoro;
+
+Task<int> compute_task(int x) {
+    // 模拟计算工作
+    co_await sleep_for(std::chrono::milliseconds(100));
+    co_return x * x;
+}
+
+Task<void> batch_processing() {
+    // ✅ 正确：任务创建时立即开始并发执行
+    auto task1 = compute_task(1);  // 立即开始执行
+    auto task2 = compute_task(2);  // 立即开始执行  
+    auto task3 = compute_task(3);  // 立即开始执行
     
-    // Task创建时，由于initial_suspend()返回suspend_never，
-    // 协程立即开始执行，实现真正的并发
+    // co_await 只是等待结果，不影响并发
+    auto r1 = co_await task1;      // 等待结果
+    auto r2 = co_await task2;      // 等待结果（可能已完成）
+    auto r3 = co_await task3;      // 等待结果（可能已完成）
+    
+    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+```
+
+### when_all 语法糖
+
+`when_all` 不是独立的并发机制，只是简化多任务等待的语法糖：
+
+```cpp
+Task<void> batch_with_when_all() {
+    auto task1 = compute_task(1);  // 立即开始执行
+    auto task2 = compute_task(2);  // 立即开始执行
+    auto task3 = compute_task(3);  // 立即开始执行
+    
+    // 语法糖：简化结果获取
+    auto [r1, r2, r3] = co_await when_all(
+        std::move(task1),
+        std::move(task2), 
+        std::move(task3)
+    );
+    
+    // 等价于上面的手动 co_await 方式
+    std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
+    co_return;
+}
+```
+
+## 实用模式和示例
+
+### 1. Web API 服务器模式
+
+```cpp
+struct Request {
+    int user_id;
+    std::string action;
 };
 
-// 实际使用：任务创建时的并发机制
-Task<void> real_concurrency() {
-    // 1. 这三个Task创建时立即开始执行（suspend_never机制）
-    auto task1 = async_compute(1);    // 立即启动！
-    auto task2 = async_compute(2);    // 立即启动！
-    auto task3 = async_compute(3);    // 立即启动！
+struct Response {
+    int status;
+    std::string data;
+};
+
+Task<Response> handle_request(const Request& req) {
+    // 模拟数据库查询
+    co_await sleep_for(std::chrono::milliseconds(50));
     
-    // 2. co_await只是等待结果，任务已在并发执行
-    auto result1 = co_await task1;    // 等待结果
-    auto result2 = co_await task2;    // 等待结果（可能已完成）
-    auto result3 = co_await task3;    // 等待结果（可能已完成）
+    Response resp;
+    resp.status = 200;
+    resp.data = "User " + std::to_string(req.user_id) + " processed";
+    co_return resp;
+}
+
+Task<void> web_server_simulation() {
+    std::vector<Request> requests = {
+        {1, "GET"}, {2, "POST"}, {3, "PUT"}, {4, "DELETE"}
+    };
+    
+    std::vector<Task<Response>> tasks;
+    
+    // 批量创建任务（立即开始并发执行）
+    for (const auto& req : requests) {
+        tasks.push_back(handle_request(req));
+    }
+    
+    // 批量等待结果
+    for (auto& task : tasks) {
+        auto response = co_await task;
+        std::cout << "Status: " << response.status 
+                  << ", Data: " << response.data << std::endl;
+    }
     
     co_return;
 }
 ```
 
-#### when_all 语法糖（基于真实代码实现）
-
-when_all 不是独立的并发机制，只是简化语法的便利封装（实现见 `include/flowcoro/core.h`）：
+### 2. 数据批量处理模式
 
 ```cpp
-// when_all 的真实内部实现（来自 include/flowcoro/core.h）
-template<typename... Tasks>
-Task<std::tuple<typename Tasks::value_type...>> when_all(Tasks&&... tasks) {
-    return [](Tasks... ts) -> Task<std::tuple<typename Tasks::value_type...>> {
-        std::tuple<typename Tasks::value_type...> results;
+Task<std::string> process_data(int id) {
+    // 模拟数据处理
+    co_await sleep_for(std::chrono::milliseconds(20));
+    return "Processed data " + std::to_string(id);
+}
+
+Task<void> batch_data_processing() {
+    const int batch_size = 100;
+    std::vector<Task<std::string>> tasks;
+    
+    // 创建批量任务
+    for (int i = 0; i < batch_size; ++i) {
+        tasks.push_back(process_data(i));
+    }
+    
+    // 处理结果
+    std::vector<std::string> results;
+    results.reserve(batch_size);
+    
+    for (auto& task : tasks) {
+        results.push_back(co_await task);
+    }
+    
+    std::cout << "Processed " << results.size() << " items" << std::endl;
+    co_return;
+}
+```
+
+### 3. 爬虫系统模式
+
+```cpp
+struct WebPage {
+    std::string url;
+    std::string content;
+    int status_code;
+};
+
+Task<WebPage> fetch_page(const std::string& url) {
+    // 模拟网络请求
+    co_await sleep_for(std::chrono::milliseconds(200));
+    
+    WebPage page;
+    page.url = url;
+    page.content = "Content from " + url;
+    page.status_code = 200;
+    co_return page;
+}
+
+Task<void> web_crawler() {
+    std::vector<std::string> urls = {
+        "https://example1.com",
+        "https://example2.com", 
+        "https://example3.com",
+        "https://example4.com"
+    };
+    
+    std::vector<Task<WebPage>> tasks;
+    
+    // 并发抓取所有页面
+    for (const auto& url : urls) {
+        tasks.push_back(fetch_page(url));
+    }
+    
+    // 处理抓取结果
+    for (auto& task : tasks) {
+        auto page = co_await task;
+        std::cout << "Fetched: " << page.url 
+                  << " (Status: " << page.status_code << ")" << std::endl;
+    }
+    
+    co_return;
+}
+```
+
+## 错误的使用模式
+
+### ❌ 不要尝试生产者-消费者模式
+
+```cpp
+// ❌ 错误：FlowCoro 不支持协程间持续协作
+Task<void> wrong_producer_consumer() {
+    auto producer_task = producer();
+    auto consumer_task = consumer();
+    
+    // 问题：这会变成顺序执行，而不是并发
+    co_await producer_task;  // 阻塞等待生产者完成
+    co_await consumer_task;  // 然后执行消费者
+}
+```
+
+### ❌ 不要在协程内使用 sync_wait
+
+```cpp
+// ❌ 错误：会导致死锁
+Task<void> wrong_sync_usage() {
+    auto task = compute_task(42);
+    
+    // 危险：在协程内使用 sync_wait 会死锁
+    auto result = sync_wait(std::move(task));  // 死锁！
+    
+    co_return;
+}
+```
+
+## 高级用法
+
+### 错误处理
+
+```cpp
+Task<int> risky_operation(int x) {
+    if (x < 0) {
+        throw std::invalid_argument("Negative input");
+    }
+    
+    co_await sleep_for(std::chrono::milliseconds(10));
+    co_return x * 2;
+}
+
+Task<void> error_handling_example() {
+    try {
+        auto task1 = risky_operation(5);   // 成功
+        auto task2 = risky_operation(-1);  // 失败
         
-        // 关键：内部仍然是顺序co_await！
-        auto process = [&]<std::size_t... Is>(std::index_sequence<Is...>) -> Task<void> {
-            ((std::get<Is>(results) = co_await std::forward<Tasks>(ts)), ...);
-            co_return;
+        auto r1 = co_await task1;  // 正常
+        auto r2 = co_await task2;  // 抛出异常
+        
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << std::endl;
+    }
+    
+    co_return;
+}
+```
+
+### 条件处理
+
+```cpp
+Task<std::optional<int>> conditional_task(bool should_process) {
+    if (!should_process) {
+        co_return std::nullopt;
+    }
+    
+    co_await sleep_for(std::chrono::milliseconds(50));
+    co_return 42;
+}
+
+Task<void> conditional_example() {
+    auto task1 = conditional_task(true);
+    auto task2 = conditional_task(false);
+    
+    auto result1 = co_await task1;
+    auto result2 = co_await task2;
+    
+    if (result1) {
+        std::cout << "Task1 result: " << *result1 << std::endl;
+    }
+    
+    if (!result2) {
+        std::cout << "Task2 was skipped" << std::endl;
+    }
+    
+    co_return;
+}
+```
+
+## 性能最佳实践
+
+### 1. 预分配容器
+
+```cpp
+Task<void> optimized_batch() {
+    const int task_count = 1000;
+    std::vector<Task<int>> tasks;
+    tasks.reserve(task_count);  // 预分配避免重新分配
+    
+    for (int i = 0; i < task_count; ++i) {
+        tasks.push_back(compute_task(i));
+    }
+    
+    std::vector<int> results;
+    results.reserve(task_count);  // 预分配结果容器
+    
+    for (auto& task : tasks) {
+        results.push_back(co_await task);
+    }
+    
+    co_return;
+}
+```
+
+### 2. 批量大小优化
+
+```cpp
+Task<void> chunked_processing() {
+    const int total_items = 10000;
+    const int chunk_size = 100;  // 分批处理避免过度并发
+    
+    for (int start = 0; start < total_items; start += chunk_size) {
+        std::vector<Task<int>> chunk_tasks;
+        
+        for (int i = start; i < std::min(start + chunk_size, total_items); ++i) {
+            chunk_tasks.push_back(compute_task(i));
+        }
+        
+        // 处理当前批次
+        for (auto& task : chunk_tasks) {
+            co_await task;
+        }
+    }
+    
+    co_return;
+}
+```
+
+## 运行示例
+
+```cpp
+int main() {
+    try {
+        // 简单示例
+        sync_wait(batch_processing());
+        
+        // Web 服务器模拟
+        sync_wait(web_server_simulation());
+        
+        // 批量数据处理
+        sync_wait(batch_data_processing());
+        
+        // 爬虫系统
+        sync_wait(web_crawler());
+        
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
+```
         };
         
         co_await process(std::index_sequence_for<Tasks...>{});
