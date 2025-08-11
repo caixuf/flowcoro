@@ -64,12 +64,6 @@ TEST_CASE(sequential_sleep_for) {
 int main() {
     std::cout << "=== FlowCoro sleep_for 专项测试 ===" << std::endl;
     
-    // 启动协程管理器
-    // start_coroutine_manager();
-    
-    // 等待协程管理器初始化
-    // std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
     try {
         // 运行所有测试
         std::cout << "\n1. 基本功能测试" << std::endl;

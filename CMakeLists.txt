@@ -160,6 +160,11 @@ target_link_libraries(flowcoro_net PUBLIC
     cjson
 )
 
+# 添加项目路径宏定义
+target_compile_definitions(flowcoro_net PUBLIC
+    "PROJECT_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\""
+)
+
 # 协程支持
 target_compile_options(flowcoro INTERFACE
     $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>

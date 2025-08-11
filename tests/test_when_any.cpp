@@ -11,34 +11,28 @@ using namespace flowcoro;
 using namespace flowcoro::test;
 using namespace std::chrono;
 
-// 测试任务：不同计算强度的协程
+// 测试任务：使用sleep_for的协程
 Task<int> fast_task() {
-    // 模拟轻量计算
-    volatile int sum = 0;
-    for (int i = 0; i < 100000; ++i) {
-        sum += i;
-    }
-    std::cout << "快速任务完成！计算结果: " << sum << "\n";
+    // 使用sleep_for进行异步等待
+    std::cout << "快速任务开始睡眠...\n";
+    co_await sleep_for(std::chrono::milliseconds(50));
+    std::cout << "快速任务完成！\n";
     co_return 42;
 }
 
 Task<std::string> slow_task() {
-    // 模拟重量计算
-    volatile int sum = 0;
-    for (int i = 0; i < 10000000; ++i) {
-        sum += i;
-    }
-    std::cout << "慢速任务完成！计算结果: " << sum << "\n";
+    // 使用sleep_for进行异步等待
+    std::cout << "慢速任务开始睡眠...\n";
+    co_await sleep_for(std::chrono::milliseconds(500));
+    std::cout << "慢速任务完成！\n";
     co_return std::string("slow_result");
 }
 
 Task<double> medium_task() {
-    // 模拟中等计算
-    volatile int sum = 0;
-    for (int i = 0; i < 2000000; ++i) {
-        sum += i;
-    }
-    std::cout << "中速任务完成！计算结果: " << sum << "\n";
+    // 使用sleep_for进行异步等待
+    std::cout << "中速任务开始睡眠...\n";
+    co_await sleep_for(std::chrono::milliseconds(200));
+    std::cout << "中速任务完成！\n";
     co_return 3.14;
 }
 
@@ -68,8 +62,8 @@ TEST_CASE(when_any_basic) {
             TEST_EXPECT_EQ(value, 42);
         }
         
-        // 验证时间大致正确（快速任务计算量小，应该很快完成）
-        TEST_EXPECT_TRUE(duration.count() < 1000); // 增加时间阈值
+        // 验证时间大致正确（快速任务应该在50ms左右完成）
+        TEST_EXPECT_TRUE(duration.count() < 150); // 给一些余量
         
         std::cout << "✅ when_any基本测试完成\n";
     }();

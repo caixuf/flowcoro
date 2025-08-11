@@ -109,7 +109,7 @@ public:
                 }
             } else if (output == LogOutput::FILE) {
                 // 如果要求文件输出但没有提供文件名，使用项目根目录的默认文件名
-                log_file_path_ = "/home/caixuf/my_code/cpp_code/FlowCoro/flowcoro.log";
+                log_file_path_ = "flowcoro.log";
                 file_stream_ = std::make_unique<std::ofstream>(log_file_path_, std::ios::app);
                 if (!file_stream_->is_open()) {
                     std::cerr << "Failed to open default log file: " << log_file_path_ << std::endl;
@@ -339,13 +339,13 @@ public:
         std::call_once(init_flag_, []() {
             instance_ = std::make_unique<Logger>();
             // 默认输出到项目根目录的日志文件
-            instance_->initialize("/home/caixuf/my_code/cpp_code/FlowCoro/flowcoro.log", LogLevel::LOG_INFO, LogOutput::FILE);
+            instance_->initialize(PROJECT_SOURCE_DIR "/flowcoro.log", LogLevel::LOG_INFO, LogOutput::FILE);
         });
         return *instance_;
     }
 
     // 重新初始化日志系统
-    static bool reinitialize(const std::string& filename = "/home/caixuf/my_code/cpp_code/FlowCoro/flowcoro.log",
+    static bool reinitialize(const std::string& filename = PROJECT_SOURCE_DIR "/flowcoro.log",
                             LogLevel min_level = LogLevel::LOG_INFO,
                             LogOutput output = LogOutput::FILE) {
         if (instance_) {
@@ -361,13 +361,13 @@ public:
     }
 
     // 便捷方法：设置为文件输出（项目根目录）
-    static bool set_file_output(const std::string& filename = "/home/caixuf/my_code/cpp_code/FlowCoro/flowcoro.log",
+    static bool set_file_output(const std::string& filename = PROJECT_SOURCE_DIR "/flowcoro.log",
                                LogLevel min_level = LogLevel::LOG_INFO) {
         return reinitialize(filename, min_level, LogOutput::FILE);
     }
 
     // 便捷方法：设置为同时输出（项目根目录）
-    static bool set_both_output(const std::string& filename = "/home/caixuf/my_code/cpp_code/FlowCoro/flowcoro.log",
+    static bool set_both_output(const std::string& filename = PROJECT_SOURCE_DIR "/flowcoro.log",
                                LogLevel min_level = LogLevel::LOG_INFO) {
         return reinitialize(filename, min_level, LogOutput::BOTH);
     }
