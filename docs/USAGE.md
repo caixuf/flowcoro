@@ -6,13 +6,13 @@
 
 FlowCoro 采用**三层调度架构**，结合无锁队列和智能负载均衡，专门优化以下场景：
 
-### ✅ 完美适配场景
+###  完美适配场景
 - **批量并发任务处理**: Web API 服务、数据处理管道 (189万req/s峰值吞吐量)
 - **请求-响应模式**: HTTP 服务器、RPC 服务、代理网关
 - **独立任务并发**: 爬虫系统、测试工具、文件处理
 - **高性能计算**: 大规模并行计算任务 (137倍性能提升)
 
-### ❌ 架构限制场景
+###  架构限制场景
 - **协程间持续协作**: 生产者-消费者模式
 - **实时事件处理**: 需要协程间通信的系统
 - **流水线处理**: 需要协程链式协作
@@ -47,7 +47,7 @@ Task<int> compute_task(int x) {
 }
 
 Task<void> high_performance_batch() {
-    // ✅ 高性能并发：所有任务立即投递到调度系统
+    //  高性能并发：所有任务立即投递到调度系统
     auto task1 = compute_task(1);  // → 协程池调度器1
     auto task2 = compute_task(2);  // → 协程池调度器2  
     auto task3 = compute_task(3);  // → 协程池调度器3
@@ -212,10 +212,10 @@ Task<void> web_crawler() {
 
 ## 错误的使用模式
 
-### ❌ 不要尝试生产者-消费者模式
+###  不要尝试生产者-消费者模式
 
 ```cpp
-// ❌ 错误：FlowCoro 不支持协程间持续协作
+//  错误：FlowCoro 不支持协程间持续协作
 Task<void> wrong_producer_consumer() {
     auto producer_task = producer();
     auto consumer_task = consumer();
@@ -226,10 +226,10 @@ Task<void> wrong_producer_consumer() {
 }
 ```
 
-### ❌ 不要在协程内使用 sync_wait
+###  不要在协程内使用 sync_wait
 
 ```cpp
-// ❌ 错误：会导致死锁
+//  错误：会导致死锁
 Task<void> wrong_sync_usage() {
     auto task = compute_task(42);
     

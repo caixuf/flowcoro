@@ -65,7 +65,7 @@ TEST_CASE(when_any_basic) {
         // 验证时间大致正确（快速任务应该在50ms左右完成）
         TEST_EXPECT_TRUE(duration.count() < 150); // 给一些余量
         
-        std::cout << "✅ when_any基本测试完成\n";
+        std::cout << " when_any基本测试完成\n";
     }();
     
     sync_wait(std::move(test_coro));
@@ -106,7 +106,7 @@ TEST_CASE(when_any_race) {
         TEST_EXPECT_EQ(result.first, 0);
         TEST_EXPECT_EQ(std::any_cast<int>(result.second), 1);
         
-        std::cout << "✅ 竞争测试完成\n";
+        std::cout << " 竞争测试完成\n";
     }();
     
     sync_wait(std::move(test_coro));
@@ -161,7 +161,7 @@ TEST_CASE(when_any_type_safety) {
             TEST_EXPECT_EQ(value, true);
         }
         
-        std::cout << "✅ 类型安全测试完成\n";
+        std::cout << " 类型安全测试完成\n";
     }();
     
     sync_wait(std::move(test_coro));

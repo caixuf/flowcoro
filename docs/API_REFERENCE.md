@@ -55,7 +55,7 @@ FlowCoro 只有**一种**并发方式：**Task创建时立即并发执行**
 
 ```cpp
 Task<void> concurrent_processing() {
-    // ✅ 正确：任务创建时立即开始并发执行
+    //  正确：任务创建时立即开始并发执行
     auto task1 = async_compute(1);  // 立即开始执行
     auto task2 = async_compute(2);  // 立即开始执行
     auto task3 = async_compute(3);  // 立即开始执行
@@ -100,12 +100,12 @@ Task<void> batch_processing() {
 
 ## 架构限制
 
-### ❌ 不支持的模式
+###  不支持的模式
 
 **生产者-消费者协作:**
 
 ```cpp
-// ❌ 错误：不支持协程间持续协作
+//  错误：不支持协程间持续协作
 Task<void> producer_consumer() {
     auto producer_task = producer();
     auto consumer_task = consumer();
@@ -119,7 +119,7 @@ Task<void> producer_consumer() {
 **协程通信管道:**
 
 ```cpp
-// ❌ 错误：Channel 不适合此架构
+//  错误：Channel 不适合此架构
 Task<void> pipeline() {
     auto channel = make_channel<int>(10);
     auto stage1 = process_stage1(channel);
@@ -129,12 +129,12 @@ Task<void> pipeline() {
 }
 ```
 
-### ✅ 推荐的模式
+###  推荐的模式
 
 **批量任务处理:**
 
 ```cpp
-// ✅ 正确：批量处理模式
+//  正确：批量处理模式
 Task<void> batch_requests() {
     std::vector<Task<Response>> tasks;
     
@@ -155,14 +155,14 @@ Task<void> batch_requests() {
 
 ## 适用场景
 
-### 🚀 强烈推荐
+### 强烈推荐
 
 - **Web API服务器**: 每个请求独立处理
 - **批量数据处理**: 批量查询、文件处理
 - **压力测试工具**: 大量并发请求
 - **爬虫系统**: 并发网页抓取
 
-### ⚠️ 不适合
+###  不适合
 
 - **实时系统**: 需要协程间持续通信
 - **流处理**: 需要协程链式协作
@@ -390,13 +390,13 @@ Task<void> precise_timing() {
 ### 与 std::this_thread::sleep_for 的区别
 
 ```cpp
-// ❌ 错误：阻塞工作线程
+//  错误：阻塞工作线程
 Task<void> blocking_sleep() {
     std::this_thread::sleep_for(std::chrono::seconds(1));  // 阻塞！
     co_return;
 }
 
-// ✅ 正确：非阻塞协程延时
+//  正确：非阻塞协程延时
 Task<void> non_blocking_sleep() {
     co_await sleep_for(std::chrono::seconds(1));  // 非阻塞
     co_return;
