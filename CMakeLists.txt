@@ -17,6 +17,39 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 
+# PGO (Profile-Guided Optimization) 自动支持
+option(FLOWCORO_ENABLE_PGO "Enable Profile-Guided Optimization" ON)
+option(FLOWCORO_PGO_GENERATE "Generate PGO profile data" OFF)
+
+# 自动检测并启用PGO优化
+if(FLOWCORO_ENABLE_PGO)
+    if(FLOWCORO_PGO_GENERATE)
+        message(STATUS "Enabling PGO profile generation")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fprofile-generate")
+        set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -fprofile-generate")
+        set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -fprofile-generate")
+    else()
+        # 查找已存在的profile数据
+        file(GLOB_RECURSE GCDA_FILES 
+             "${CMAKE_CURRENT_SOURCE_DIR}/pgo_profiles/*.gcda")
+             
+        if(GCDA_FILES)
+            list(LENGTH GCDA_FILES PROFILE_COUNT)
+            message(STATUS "Found ${PROFILE_COUNT} PGO profile files, enabling PGO optimization")
+            
+            # 复制profile到构建目录
+            file(COPY ${GCDA_FILES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+            
+            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fprofile-use -fprofile-correction")
+            set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -fprofile-use")
+            set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -fprofile-use")
+        else()
+            message(STATUS "No PGO profile data found. Build without PGO optimization.")
+            message(STATUS "To enable PGO: First build with -DFLOWCORO_PGO_GENERATE=ON, run workloads, then rebuild normally")
+        endif()
+    endif()
+endif()
+
 # 设置默认构建类型
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)

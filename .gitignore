@@ -2,7 +2,32 @@
 
 # 构建目录
 build/
+build_*/
+cmake-build-*/
 target/
+
+# CMake 生成的文件
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CTestTestfile.cmake
+*Config.cmake
+*ConfigVersion.cmake
+*Targets.cmake
+
+# 可执行文件
+*.exe
+*.out
+test_*
+hello_world
+hello_world_concurrent
+performance_monitor_demo
+professional_flowcoro_benchmark
+simple_benchmark
 
 # 编译产物
 *.o
@@ -10,7 +35,10 @@ target/
 *.so
 *.dylib
 *.dll
-*.exe
+
+# PGO profile 数据 (构建过程中生成的临时文件)
+*.gcda
+*.gcno
 
 # Go编译产物
 go_benchmark
@@ -21,17 +49,25 @@ go_benchmark
 Cargo.lock
 rust_benchmark
 
-# CMake生成文件
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CPackConfig.cmake
-CPackSourceConfig.cmake
-CTestTestfile.cmake
-Makefile
-*.cmake
-!CMakeLists.txt
-!cmake/
+# 日志文件
+*.log
+flowcoro.log
+
+# JSON 结果文件
+*_result.json
+benchmark_results.json
+coroutine_result.json
+thread_result.json
+
+# 测试文件
+Testing/
+
+# 备份文件
+*_backup
+build_original/
+build_test_pgo/
+build_pgo/
+build_pgo_*
 
 # IDE文件
 .vscode/

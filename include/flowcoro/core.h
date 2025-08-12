@@ -21,6 +21,7 @@
 #include "result.h"
 #include "error_handling.h"
 #include "lockfree.h"
+#include "memory_pool.h"
 #include "thread_pool.h"
 #include "buffer.h"
 #include "logger.h"

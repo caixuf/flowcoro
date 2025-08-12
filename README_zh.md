@@ -41,9 +41,11 @@
 git clone https://github.com/caixuf/flowcord.git
 cd flowcord
 mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
+
+**注意**: 如果系统中存在PGO优化配置文件，CMake会自动检测并应用Profile-Guided Optimization以获得最佳性能。
 
 ### 基本用法
 
@@ -160,7 +162,7 @@ suspend_never  负载均衡  无锁队列  执行
 - [API参考](docs/API_REFERENCE.md)
 - [协程调度器](docs/COROUTINE_SCHEDULER.md)
 - [使用指南](docs/USAGE.md)
-- [任务执行流程](docs/TASK_EXECUTION_FLOW.md)
+- [PGO优化指南](docs/PGO_GUIDE.md)
 
 ## 许可证
 

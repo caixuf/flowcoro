@@ -66,16 +66,22 @@ public:
             return; // 队列已析构，丢弃任务
         }
 
-        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
-        new(new_node) Node(); // placement new
+        // 优化：一次分配包含Node和数据的内存块
+        struct NodeWithData {
+            Node node;
+            alignas(T) char data_storage[sizeof(T)];
+        };
         
-        T* data_ptr = static_cast<T*>(pool_malloc(sizeof(T))); // 使用内存池
-        new(data_ptr) T(std::move(item)); // placement new
-        new_node->data.store(data_ptr);
+        NodeWithData* block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
+        new(&block->node) Node(); // placement new for Node
+        
+        T* data_ptr = reinterpret_cast<T*>(block->data_storage);
+        new(data_ptr) T(std::move(item)); // placement new for data
+        block->node.data.store(data_ptr);
 
-        Node* prev_tail = tail.exchange(new_node);
+        Node* prev_tail = tail.exchange(&block->node);
         if (prev_tail) {
-            prev_tail->next.store(new_node);
+            prev_tail->next.store(&block->node);
         }
     }
 
@@ -106,13 +112,20 @@ private:
 
         result = *data_ptr;
         data_ptr->~T(); // 显式调用析构函数
-        pool_free(data_ptr); // 使用内存池释放
 
         // 尝试更新head，如果失败也不要紧，下次调用会重试
         Node* expected = head_node;
         if (head.compare_exchange_weak(expected, next)) {
             head_node->~Node(); // 显式调用析构函数
-            pool_free(head_node); // 使用内存池释放
+            
+            // 计算包含Node的完整块地址并释放
+            struct NodeWithData {
+                Node node;
+                alignas(T) char data_storage[sizeof(T)];
+            };
+            NodeWithData* block = reinterpret_cast<NodeWithData*>(
+                reinterpret_cast<char*>(head_node) - offsetof(NodeWithData, node));
+            pool_free(block); // 释放整个块
         }
 
         return true;
