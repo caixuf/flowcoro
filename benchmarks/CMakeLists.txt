@@ -7,13 +7,13 @@ if(PkgConfig_FOUND)
 endif()
 
 if(NOT BENCHMARK_FOUND)
-    message(STATUS "Google Benchmark not found, building simple benchmarks")
+    message(STATUS "Google Benchmark not found, building professional benchmarks")
 
-    # 添加简单基准测试 - 核心功能性能测试
-    add_executable(simple_benchmark simple_benchmark.cpp)
-    target_link_libraries(simple_benchmark flowcoro_net pthread)
-    target_include_directories(simple_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    target_compile_features(simple_benchmark PRIVATE cxx_std_20)
+    # 添加专业基准测试 - 核心功能性能测试
+    add_executable(professional_flowcoro_benchmark professional_flowcoro_benchmark.cpp)
+    target_link_libraries(professional_flowcoro_benchmark flowcoro_net pthread)
+    target_include_directories(professional_flowcoro_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_features(professional_flowcoro_benchmark PRIVATE cxx_std_20)
 
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
