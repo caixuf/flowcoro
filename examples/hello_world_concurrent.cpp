@@ -138,18 +138,23 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
 
         std::cout << " 所有任务已创建并开始执行，等待完成..." << std::endl;
 
-        // 收集所有结果
-        std::vector<std::string> all_results;
-        all_results.reserve(request_count);
+        // 优化：减少内存分配，移除频繁输出
+        std::atomic<int> completed_count{0};
 
         for (int i = 0; i < request_count; ++i) {
             auto result = co_await tasks[i]; // 等待第i个任务完成
-            all_results.push_back(result);
+            completed_count.fetch_add(1);
 
-            // 大幅减少输出频率，提高性能
-            if (request_count >= 10000) {
-                // 大规模任务：每5000个输出一次
-                if ((i + 1) % 5000 == 0 || (i + 1) == request_count) {
+            // 大幅减少输出频率，提高性能 - 只在关键节点输出
+            if (request_count >= 100000) {
+                // 超大规模任务：只在25%, 50%, 75%, 100%输出
+                int progress = (i + 1) * 100 / request_count;
+                if (progress % 25 == 0 && (i + 1) % (request_count / 4) == 0) {
+                    std::cout << " 完成进度: " << progress << "%" << std::endl;
+                }
+            } else if (request_count >= 10000) {
+                // 大规模任务：只在10%间隔输出
+                if ((i + 1) % (request_count / 10) == 0) {
                     std::cout << " 完成 " << (i + 1) << "/" << request_count 
                               << " (" << ((i + 1) * 100 / request_count) << "%)" << std::endl;
                 }
@@ -166,14 +171,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
             }
         }
 
-        // 显示部分结果
-        if (!all_results.empty()) {
-            std::cout << " 结果验证 (前5个): ";
-            for (size_t i = 0; i < std::min(size_t(5), all_results.size()); ++i) {
-                std::cout << "[" << all_results[i] << "] ";
-            }
-            std::cout << std::endl;
-        }
+        std::cout << " 所有任务处理完成，总计: " << completed_count.load() << " 个" << std::endl;
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

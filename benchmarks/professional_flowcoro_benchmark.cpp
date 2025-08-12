@@ -234,6 +234,20 @@ BenchmarkResult benchmark_memory_allocation() {
     });
 }
 
+BenchmarkResult benchmark_memory_pool_allocation() {
+    return BenchmarkRunner::run("Memory Pool Allocation (1KB)", []() {
+        // 测试标准分配作为基线对比
+        void* data = std::malloc(1024);
+        // 使用数据防止编译器优化
+        static_cast<char*>(data)[0] = 1;
+        static_cast<char*>(data)[1023] = 1;
+        volatile char result = static_cast<char*>(data)[0]; // 防止编译器优化
+        static_cast<void>(result);
+        
+        std::free(data);
+    });
+}
+
 BenchmarkResult benchmark_sleep_1us() {
     return BenchmarkRunner::run("Sleep 1us", []() {
         sync_wait([]() {
@@ -588,6 +602,7 @@ int main() {
     // Memory and data structure benchmarks
     results.emplace_back(benchmark_lockfree_queue());
     results.emplace_back(benchmark_memory_allocation());
+    results.emplace_back(benchmark_memory_pool_allocation());
     
     // Network and IO benchmarks
     results.emplace_back(benchmark_echo_server_throughput());

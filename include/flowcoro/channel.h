@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core.h"
+#include "memory_pool.h"
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -30,7 +31,8 @@ private:
 
 public:
     explicit Channel(size_t capacity = 0) 
-        : state_(std::make_shared<ChannelState>(capacity)) {}
+        : state_(std::allocate_shared<ChannelState>(
+            flowcoro::PoolAllocator<ChannelState>{}, capacity)) {}
 
     // 发送数据
     Task<bool> send(T value) {
@@ -175,10 +177,11 @@ public:
     }
 };
 
-// 便利函数
+// 便利函数 - 使用内存池优化
 template<typename T>
 auto make_channel(size_t capacity = 0) {
-    return std::make_shared<Channel<T>>(capacity);
+    return std::allocate_shared<Channel<T>>(
+        flowcoro::PoolAllocator<Channel<T>>{}, capacity);
 }
 
 } // namespace flowcoro

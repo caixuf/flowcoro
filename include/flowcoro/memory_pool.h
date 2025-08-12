@@ -1,172 +1,221 @@
 #pragma once
-#include <cstddef>
-#include <vector>
-#include <mutex>
+
+#include <atomic>
 #include <memory>
-#include <list>
+#include <array>
+#include <cstdlib>
+#include <cstddef>
+#include <new>
 
 namespace flowcoro {
 
-class MemoryPool {
+// 基于Redis zmalloc和Nginx内存池设计的轻量级内存池
+// 专门为lockfree队列和栈的Node分配优化
+class SimpleMemoryPool {
+private:
+    // 内存块结构，类似Redis的方式
+    struct MemoryBlock {
+        MemoryBlock* next;
+        size_t size;
+        alignas(std::max_align_t) char data[];
+    };
+
+    // 线程本地自由列表，借鉴Nginx的设计思路
+    struct FreeList {
+        std::atomic<MemoryBlock*> head{nullptr};
+        std::atomic<size_t> count{0};
+        static constexpr size_t MAX_CACHED = 64; // 限制缓存数量避免内存泄漏
+    };
+
+    // 支持多种常见大小，覆盖Node等小对象
+    static constexpr size_t SIZE_CLASSES[] = {32, 64, 128, 256, 512, 1024};
+    static constexpr size_t NUM_SIZE_CLASSES = sizeof(SIZE_CLASSES) / sizeof(SIZE_CLASSES[0]);
+    
+    std::array<FreeList, NUM_SIZE_CLASSES> free_lists;
+    
+    // 统计信息，类似Redis的memory tracking
+    std::atomic<size_t> total_allocated{0};
+    std::atomic<size_t> total_freed{0};
+
+    // 获取大小对应的索引
+    size_t get_size_class_index(size_t size) const noexcept {
+        for (size_t i = 0; i < NUM_SIZE_CLASSES; ++i) {
+            if (size <= SIZE_CLASSES[i]) {
+                return i;
+            }
+        }
+        return NUM_SIZE_CLASSES; // 超出范围，使用系统分配
+    }
+
+    // 原子操作的栈操作，借鉴lockfree设计
+    MemoryBlock* pop_from_freelist(FreeList& list) noexcept {
+        MemoryBlock* head = list.head.load(std::memory_order_acquire);
+        while (head != nullptr) {
+            if (list.head.compare_exchange_weak(head, head->next, 
+                                              std::memory_order_release, 
+                                              std::memory_order_acquire)) {
+                list.count.fetch_sub(1, std::memory_order_relaxed);
+                return head;
+            }
+        }
+        return nullptr;
+    }
+
+    void push_to_freelist(FreeList& list, MemoryBlock* block) noexcept {
+        // 限制缓存大小，避免内存无限增长
+        if (list.count.load(std::memory_order_relaxed) >= FreeList::MAX_CACHED) {
+            // 直接释放到系统
+            std::free(block);
+            total_freed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        MemoryBlock* head = list.head.load(std::memory_order_acquire);
+        do {
+            block->next = head;
+        } while (!list.head.compare_exchange_weak(head, block,
+                                                std::memory_order_release,
+                                                std::memory_order_acquire));
+        list.count.fetch_add(1, std::memory_order_relaxed);
+    }
+
 public:
-    explicit MemoryPool(size_t block_size = 4096, size_t initial_block_count = 128)
-        : block_size_(block_size),
-          initial_block_count_(initial_block_count),
-          expansion_factor_(2.0), // 每次扩展为当前大小的2倍
-          max_total_blocks_(initial_block_count * 32) { // 最大扩展限制
-
-        expand_pool(initial_block_count);
+    SimpleMemoryPool() = default;
+    
+    // 向后兼容的构造函数
+    SimpleMemoryPool(size_t block_size, size_t initial_count) : SimpleMemoryPool() {
+        // 新设计中这些参数不再需要，但为了兼容性保留接口
+        (void)block_size;
+        (void)initial_count;
     }
-
-    ~MemoryPool() {
-        // unique_ptr会自动清理所有内存块
-    }
-
-    void* allocate() {
-        std::lock_guard<std::mutex> lock(mtx_);
-
-        if (free_blocks_.empty()) {
-            // 动态扩展池
-            size_t current_total = total_allocated_blocks_;
-            size_t expand_size = std::max(
-                static_cast<size_t>(current_total * (expansion_factor_ - 1.0)),
-                initial_block_count_ / 4 // 最小扩展数量
-            );
-
-            // 检查是否超过最大限制
-            if (current_total + expand_size > max_total_blocks_) {
-                expand_size = max_total_blocks_ - current_total;
-            }
-
-            if (expand_size > 0) {
-                expand_pool(expand_size);
+    
+    ~SimpleMemoryPool() {
+        // 清理所有缓存的内存块
+        for (auto& list : free_lists) {
+            MemoryBlock* block = list.head.load();
+            while (block) {
+                MemoryBlock* next = block->next;
+                std::free(block);
+                block = next;
             }
         }
-
-        if (free_blocks_.empty()) {
-            // 如果还是没有可用块，说明已经达到最大限制
-            // 这时我们可以选择降低扩展因子继续尝试，或者抛出异常
-            // 这里我们尝试小幅扩展
-            if (total_allocated_blocks_ < max_total_blocks_) {
-                expand_pool(1); // 至少分配一个块
-            }
-        }
-
-        if (free_blocks_.empty()) {
-            throw std::bad_alloc(); // 真的无法分配时抛出异常
-        }
-
-        void* ptr = free_blocks_.back();
-        free_blocks_.pop_back();
-        allocated_count_++;
-        return ptr;
     }
 
-    void deallocate(void* ptr) {
+    // 禁止拷贝和移动
+    SimpleMemoryPool(const SimpleMemoryPool&) = delete;
+    SimpleMemoryPool& operator=(const SimpleMemoryPool&) = delete;
+
+    // 向后兼容的无参数allocate方法
+    void* allocate() noexcept {
+        return allocate(64); // 默认64字节，对应大多数Node大小
+    }
+
+    void* allocate(size_t size) noexcept {
+        size_t index = get_size_class_index(size);
+        
+        if (index >= NUM_SIZE_CLASSES) {
+            // 大对象直接使用系统分配
+            MemoryBlock* block = static_cast<MemoryBlock*>(
+                std::malloc(sizeof(MemoryBlock) + size));
+            if (!block) return nullptr;
+            
+            block->size = size;
+            total_allocated.fetch_add(1, std::memory_order_relaxed);
+            return block->data;
+        }
+
+        // 尝试从自由列表获取
+        FreeList& list = free_lists[index];
+        MemoryBlock* block = pop_from_freelist(list);
+        
+        if (!block) {
+            // 分配新块
+            size_t actual_size = SIZE_CLASSES[index];
+            block = static_cast<MemoryBlock*>(
+                std::malloc(sizeof(MemoryBlock) + actual_size));
+            if (!block) return nullptr;
+            
+            block->size = actual_size;
+            total_allocated.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return block->data;
+    }
+
+    void deallocate(void* ptr) noexcept {
         if (!ptr) return;
 
-        std::lock_guard<std::mutex> lock(mtx_);
+        // 通过指针算术获取MemoryBlock
+        MemoryBlock* block = reinterpret_cast<MemoryBlock*>(
+            static_cast<char*>(ptr) - offsetof(MemoryBlock, data));
 
-        // 检查指针是否来自我们的池
-        if (!is_from_pool(ptr)) {
-            // 不是来自池的内存，抛出异常而不是静默忽略
-            throw std::invalid_argument("Attempting to deallocate pointer not from this pool");
+        size_t index = get_size_class_index(block->size);
+        
+        if (index >= NUM_SIZE_CLASSES) {
+            // 大对象直接释放
+            std::free(block);
+            total_freed.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
 
-        free_blocks_.push_back(ptr);
-        allocated_count_--;
+        // 放回自由列表
+        FreeList& list = free_lists[index];
+        push_to_freelist(list, block);
     }
 
-    // 配置接口
-    void set_expansion_factor(double factor) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        expansion_factor_ = std::max(1.1, std::min(factor, 5.0)); // 限制在合理范围
+    // 获取统计信息
+    size_t get_allocated_count() const noexcept {
+        return total_allocated.load(std::memory_order_relaxed);
     }
 
-    void set_max_total_blocks(size_t max_blocks) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        max_total_blocks_ = std::max(max_blocks, initial_block_count_);
+    size_t get_freed_count() const noexcept {
+        return total_freed.load(std::memory_order_relaxed);
     }
 
-    // 统计信息
-    struct PoolStats {
-        size_t block_size;
-        size_t total_blocks;
-        size_t free_blocks;
-        size_t allocated_blocks;
-        size_t memory_chunks;
-        size_t total_memory_bytes;
-    };
-
-    PoolStats get_stats() const {
-        std::lock_guard<std::mutex> lock(mtx_);
-        return {
-            block_size_,
-            total_allocated_blocks_,
-            free_blocks_.size(),
-            allocated_count_,
-            memory_chunks_.size(),
-            total_allocated_blocks_ * block_size_
-        };
+    // 全局单例，类似Redis的全局内存管理
+    static SimpleMemoryPool& instance() noexcept {
+        static SimpleMemoryPool pool;
+        return pool;
     }
-
-    size_t block_size() const { return block_size_; }
-    size_t available_blocks() const {
-        std::lock_guard<std::mutex> lock(mtx_);
-        return free_blocks_.size();
-    }
-
-private:
-    struct MemoryChunk {
-        std::unique_ptr<char[]> memory;
-        char* start;
-        char* end;
-        size_t block_count;
-
-        MemoryChunk(size_t block_size, size_t count)
-            : memory(std::make_unique<char[]>(block_size * count)),
-              start(memory.get()),
-              end(start + (block_size * count)),
-              block_count(count) {}
-    };
-
-    bool is_from_pool(void* ptr) const {
-        char* char_ptr = static_cast<char*>(ptr);
-        for (const auto& chunk : memory_chunks_) {
-            if (char_ptr >= chunk->start && char_ptr < chunk->end) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void expand_pool(size_t additional_blocks) {
-        if (additional_blocks == 0) return;
-
-        // 创建新的内存块
-        auto chunk = std::make_unique<MemoryChunk>(block_size_, additional_blocks);
-        char* memory_start = chunk->start;
-
-        // 将新内存切分成小块加入空闲列表
-        for (size_t i = 0; i < additional_blocks; ++i) {
-            void* block = memory_start + (i * block_size_);
-            free_blocks_.push_back(block);
-        }
-
-        total_allocated_blocks_ += additional_blocks;
-        memory_chunks_.push_back(std::move(chunk));
-    }
-
-    size_t block_size_;
-    size_t initial_block_count_;
-    double expansion_factor_;
-    size_t max_total_blocks_;
-    size_t total_allocated_blocks_ = 0;
-    size_t allocated_count_ = 0;
-
-    std::list<std::unique_ptr<MemoryChunk>> memory_chunks_; // 所有内存块
-    std::vector<void*> free_blocks_; // 空闲块列表
-    mutable std::mutex mtx_; // 线程安全
 };
+
+// 便利函数，类似Redis的zmalloc/zfree
+inline void* pool_malloc(size_t size) noexcept {
+    return SimpleMemoryPool::instance().allocate(size);
+}
+
+inline void pool_free(void* ptr) noexcept {
+    SimpleMemoryPool::instance().deallocate(ptr);
+}
+
+// RAII包装器，用于自动内存管理
+template<typename T>
+class PoolAllocator {
+public:
+    using value_type = T;
+
+    PoolAllocator() = default;
+    template<typename U>
+    PoolAllocator(const PoolAllocator<U>&) noexcept {}
+
+    T* allocate(size_t n) {
+        void* ptr = pool_malloc(n * sizeof(T));
+        if (!ptr) throw std::bad_alloc();
+        return static_cast<T*>(ptr);
+    }
+
+    void deallocate(T* ptr, size_t) noexcept {
+        pool_free(ptr);
+    }
+
+    template<typename U>
+    bool operator==(const PoolAllocator<U>&) const noexcept { return true; }
+    
+    template<typename U>
+    bool operator!=(const PoolAllocator<U>&) const noexcept { return false; }
+};
+
+// 向后兼容的MemoryPool类型别名
+using MemoryPool = SimpleMemoryPool;
 
 } // namespace flowcoro

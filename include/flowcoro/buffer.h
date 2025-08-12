@@ -5,17 +5,26 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include "memory_pool.h"
 
 namespace flowcoro {
 
 // 缓存行大小常量
 static constexpr size_t CACHE_LINE_SIZE = 64;
 
-// 内存对齐分配器
+// 内存对齐分配器 - 使用内存池优化
 template<size_t Alignment = CACHE_LINE_SIZE>
 class AlignedAllocator {
 public:
     static void* allocate(size_t size) {
+        // 对于小对象（<= 1024字节）使用内存池
+        if (size <= 1024) {
+            void* ptr = pool_malloc(size);
+            if (!ptr) throw std::bad_alloc();
+            return ptr;
+        }
+        
+        // 大对象使用对齐分配
         void* ptr = nullptr;
         if (posix_memalign(&ptr, Alignment, size) != 0) {
             throw std::bad_alloc();
@@ -24,7 +33,8 @@ public:
     }
 
     static void deallocate(void* ptr) {
-        std::free(ptr);
+        // 内存池会自动处理，如果不是内存池分配的会fallback到系统释放
+        pool_free(ptr);
     }
 };
 

@@ -2,10 +2,15 @@
 #include <atomic>
 #include <memory>
 #include <type_traits>
+#include "memory_pool.h"
 
 namespace lockfree {
 
-// 无锁队列实现 (简化版本，更安全)
+// 使用flowcoro内存池的便利函数
+using flowcoro::pool_malloc;
+using flowcoro::pool_free;
+
+// 无锁队列实现
 template<typename T>
 class Queue {
 private:
@@ -17,7 +22,8 @@ private:
         ~Node() {
             T* data_ptr = data.load();
             if (data_ptr) {
-                delete data_ptr;
+                data_ptr->~T(); // 显式调用析构函数
+                pool_free(data_ptr); // 使用内存池释放
             }
         }
     };
@@ -28,7 +34,8 @@ private:
 
 public:
     Queue() {
-        Node* dummy = new Node;
+        Node* dummy = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
+        new(dummy) Node(); // placement new
         head.store(dummy);
         tail.store(dummy);
         destroyed.store(false);
@@ -48,7 +55,8 @@ public:
         Node* current = head.load();
         while (current) {
             Node* next = current->next.load();
-            delete current;
+            current->~Node(); // 显式调用析构函数
+            pool_free(current); // 使用内存池释放
             current = next;
         }
     }
@@ -58,8 +66,11 @@ public:
             return; // 队列已析构，丢弃任务
         }
 
-        Node* new_node = new Node;
-        T* data_ptr = new T(std::move(item));
+        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
+        new(new_node) Node(); // placement new
+        
+        T* data_ptr = static_cast<T*>(pool_malloc(sizeof(T))); // 使用内存池
+        new(data_ptr) T(std::move(item)); // placement new
         new_node->data.store(data_ptr);
 
         Node* prev_tail = tail.exchange(new_node);
@@ -94,12 +105,14 @@ private:
         }
 
         result = *data_ptr;
-        delete data_ptr;
+        data_ptr->~T(); // 显式调用析构函数
+        pool_free(data_ptr); // 使用内存池释放
 
         // 尝试更新head，如果失败也不要紧，下次调用会重试
         Node* expected = head_node;
         if (head.compare_exchange_weak(expected, next)) {
-            delete head_node;
+            head_node->~Node(); // 显式调用析构函数
+            pool_free(head_node); // 使用内存池释放
         }
 
         return true;
@@ -131,7 +144,7 @@ public:
     }
 };
 
-// 无锁栈实现 (Treiber Stack)
+// 无锁栈实现 (Treiber Stack) - 优化内存分配
 template<typename T>
 class Stack {
 private:
@@ -148,12 +161,14 @@ public:
     ~Stack() {
         while (Node* old_head = head.load()) {
             head.store(old_head->next);
-            delete old_head;
+            old_head->~Node(); // 显式调用析构函数
+            pool_free(old_head); // 使用内存池释放
         }
     }
 
     void push(T item) {
-        Node* new_node = new Node(std::move(item));
+        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
+        new(new_node) Node(std::move(item)); // placement new
         new_node->next = head.load();
 
         while (!head.compare_exchange_weak(new_node->next, new_node)) {
@@ -170,7 +185,8 @@ public:
 
         if (old_head) {
             result = std::move(old_head->data);
-            delete old_head;
+            old_head->~Node(); // 显式调用析构函数
+            pool_free(old_head); // 使用内存池释放
             return true;
         }
 
@@ -266,4 +282,5 @@ public:
     }
 };
 
+// 静态成员定义
 } // namespace lockfree
