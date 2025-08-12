@@ -234,6 +234,37 @@ public:
             queue_loads_[scheduler_id].fetch_sub(1, std::memory_order_relaxed);
         }
     }
+    
+    // 记录任务完成 - 添加缺失的方法
+    void on_task_completed(size_t scheduler_id) noexcept {
+        // 简单实现：减少负载计数
+        decrement_load(scheduler_id);
+    }
+    
+    // 获取负载统计 - 添加缺失的方法
+    struct LoadStats {
+        size_t scheduler_id;
+        size_t queue_load;
+        size_t total_processed;
+        double load_score;
+    };
+    
+    std::vector<LoadStats> get_load_stats() const {
+        std::vector<LoadStats> stats;
+        size_t count = scheduler_count_.load(std::memory_order_acquire);
+        
+        for (size_t i = 0; i < count; ++i) {
+            size_t queue_load = queue_loads_[i].load(std::memory_order_relaxed);
+            stats.push_back({
+                .scheduler_id = i,
+                .queue_load = queue_load,
+                .total_processed = 0, // 简化实现，暂不跟踪处理总数
+                .load_score = static_cast<double>(queue_load)
+            });
+        }
+        
+        return stats;
+    }
 };
 
 // 前向声明

@@ -111,6 +111,24 @@ public:
         Node* head_node = head.load();
         return head_node->next.load() == nullptr;
     }
+
+    // 估算队列大小（注意：这只是估计值，可能不准确）
+    size_t size_estimate() const {
+        if (destroyed.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        
+        size_t count = 0;
+        Node* current = head.load();
+        if (current) {
+            current = current->next.load(); // 跳过虚拟头节点
+            while (current && count < 10000) { // 限制最大计数以避免长时间循环
+                current = current->next.load();
+                count++;
+            }
+        }
+        return count;
+    }
 };
 
 // 无锁栈实现 (Treiber Stack)

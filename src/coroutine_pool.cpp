@@ -8,6 +8,14 @@
 #include <vector>
 #include <random>
 #include <mutex>
+#include <condition_variable>
+#include <limits>
+
+// CPU亲和性支持
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 namespace flowcoro {
 
@@ -24,18 +32,44 @@ private:
     // 无锁协程队列 - 高性能无锁实现
     lockfree::Queue<std::coroutine_handle<>> coroutine_queue_;
     
+    // 精确的队列长度统计
+    std::atomic<size_t> queue_size_{0};
+    
     // 统计信息
     std::atomic<size_t> total_coroutines_{0};
     std::atomic<size_t> completed_coroutines_{0};
     std::chrono::steady_clock::time_point start_time_;
+    
+    // 条件变量用于高效等待
+    mutable std::mutex cv_mutex_;
+    mutable std::condition_variable cv_;
+    
+    // CPU亲和性设置
+    void set_cpu_affinity() {
+#ifdef __linux__
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        // 将调度器绑定到特定CPU核心，避免线程迁移
+        CPU_SET(scheduler_id_ % std::thread::hardware_concurrency(), &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
+    }
 
     void worker_loop() {
+        // 设置CPU亲和性优化多核性能
+        set_cpu_affinity();
+        
         const size_t BATCH_SIZE = 128; // 增加批处理大小，进一步减少竞争
         std::vector<std::coroutine_handle<>> batch;
         batch.reserve(BATCH_SIZE);
         
         auto& manager = flowcoro::CoroutineManager::get_instance();
         auto& load_balancer = manager.get_load_balancer();
+        
+        // 自适应等待策略
+        auto wait_duration = std::chrono::microseconds(10);
+        constexpr auto max_wait = std::chrono::milliseconds(1);
+        size_t empty_iterations = 0;
         
         while (!stop_flag_.load()) {
             batch.clear();
@@ -44,21 +78,60 @@ private:
             std::coroutine_handle<> handle;
             while (batch.size() < BATCH_SIZE && coroutine_queue_.dequeue(handle)) {
                 batch.push_back(handle);
+                queue_size_.fetch_sub(1, std::memory_order_relaxed);
             }
             
-            // 如果没有任务，短暂休眠
+            // 如果没有任务，使用自适应等待策略
             if (batch.empty()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                empty_iterations++;
+                
+                // 自适应等待：开始时快速轮询，然后逐渐增加等待时间
+                if (empty_iterations < 100) {
+                    // 快速轮询阶段：检查是否有新任务
+                    std::this_thread::yield();
+                } else if (empty_iterations < 1000) {
+                    // 短暂休眠
+                    std::this_thread::sleep_for(wait_duration);
+                } else {
+                    // 使用条件变量等待，避免CPU浪费
+                    std::unique_lock<std::mutex> lock(cv_mutex_);
+                    cv_.wait_for(lock, max_wait, [this] { 
+                        return stop_flag_.load() || queue_size_.load() > 0; 
+                    });
+                }
                 continue;
             }
             
-            // 批量执行协程 - 移除异常处理以提高性能
+            // 重置等待策略
+            empty_iterations = 0;
+            wait_duration = std::chrono::microseconds(10);
+            
+            // 批量执行协程 - 添加适当的异常处理
             for (auto handle : batch) {
                 if (handle && !handle.done() && !stop_flag_.load()) {
-                    handle.resume();
-                    completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                    try {
+                        handle.resume();
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        
+                        // 通知负载均衡器任务完成
+                        load_balancer.on_task_completed(scheduler_id_);
+                    } catch (const std::exception& e) {
+                        // 记录异常但不退出线程，确保线程池稳定性
+                        std::cerr << "协程执行异常 (调度器 " << scheduler_id_ << "): " 
+                                  << e.what() << std::endl;
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        load_balancer.on_task_completed(scheduler_id_);
+                    } catch (...) {
+                        // 处理未知异常
+                        std::cerr << "协程执行未知异常 (调度器 " << scheduler_id_ << ")" << std::endl;
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        load_balancer.on_task_completed(scheduler_id_);
+                    }
                 }
             }
+            
+            // 实时更新负载均衡器
+            load_balancer.update_load(scheduler_id_, queue_size_.load());
         }
     }
 
@@ -74,6 +147,9 @@ public:
     
     void stop() {
         if (!stop_flag_.exchange(true)) {
+            // 唤醒等待的worker线程
+            cv_.notify_all();
+            
             if (worker_thread_.joinable()) {
                 worker_thread_.join();
             }
@@ -82,8 +158,13 @@ public:
             std::coroutine_handle<> handle;
             while (coroutine_queue_.dequeue(handle)) {
                 if (handle && !handle.done()) {
-                    handle.destroy();
+                    try {
+                        handle.destroy();
+                    } catch (...) {
+                        // 忽略销毁时的异常
+                    }
                 }
+                queue_size_.fetch_sub(1, std::memory_order_relaxed);
             }
         }
     }
@@ -96,15 +177,23 @@ public:
         // 使用无锁队列添加协程
         coroutine_queue_.enqueue(handle);
         
-        // 更新负载均衡器的队列大小信息（估算值）
+        // 精确更新队列大小
+        queue_size_.fetch_add(1, std::memory_order_relaxed);
+        
+        // 唤醒等待的worker线程
+        {
+            std::lock_guard<std::mutex> lock(cv_mutex_);
+        }
+        cv_.notify_one();
+        
+        // 实时更新负载均衡器的队列大小信息
         auto& manager = flowcoro::CoroutineManager::get_instance();
         auto& load_balancer = manager.get_load_balancer();
-        load_balancer.update_load(scheduler_id_, 1); // 简化的负载更新
+        load_balancer.update_load(scheduler_id_, queue_size_.load());
     }
     
     size_t get_queue_size() const {
-        // 无锁队列不支持直接获取size，返回估算值
-        return 0; // 或者维护一个原子计数器
+        return queue_size_.load(std::memory_order_relaxed);
     }
     
     size_t get_total_coroutines() const { return total_coroutines_.load(); }
@@ -221,23 +310,28 @@ public:
         
         size_t scheduler_index = load_balancer.select_scheduler();
         
-        // 增加选中调度器的负载计数
-        load_balancer.increment_load(scheduler_index);
-        
         // 分配给对应的调度器
         schedulers_[scheduler_index]->schedule_coroutine(handle);
     }
 
-    // CPU密集型任务 - 提交到后台线程池 (优化版：无异常处理)
+    // CPU密集型任务 - 提交到后台线程池 (增强异常处理)
     void schedule_task(std::function<void()> task) {
         if (stop_flag_.load()) return;
 
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
 
-        // 将任务提交到后台线程池执行 - 移除异常处理提高性能
+        // 将任务提交到后台线程池执行 - 增强异常处理
         thread_pool_->enqueue([this, task = std::move(task)]() {
-            task(); // 直接执行，不捕获异常
-            completed_tasks_.fetch_add(1, std::memory_order_relaxed);
+            try {
+                task();
+                completed_tasks_.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::exception& e) {
+                std::cerr << "任务执行异常: " << e.what() << std::endl;
+                completed_tasks_.fetch_add(1, std::memory_order_relaxed);
+            } catch (...) {
+                std::cerr << "任务执行未知异常" << std::endl;
+                completed_tasks_.fetch_add(1, std::memory_order_relaxed);
+            }
         });
     }
 
@@ -327,6 +421,21 @@ public:
                           << ", 运行时间: " << scheduler->get_uptime().count() << "ms" << std::endl;
             }
         }
+        
+        // 显示负载均衡统计
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        auto& load_balancer = manager.get_load_balancer();
+        auto load_stats = load_balancer.get_load_stats();
+        
+        std::cout << "\n--- 负载均衡详情 ---" << std::endl;
+        for (const auto& stat : load_stats) {
+            std::cout << "调度器 #" << stat.scheduler_id 
+                      << " - 当前队列: " << stat.queue_load
+                      << ", 历史处理: " << stat.total_processed
+                      << ", 负载评分: " << std::fixed << std::setprecision(2) << stat.load_score
+                      << std::endl;
+        }
+        
         std::cout << "===============================" << std::endl;
     }
 };
@@ -363,26 +472,52 @@ void shutdown_coroutine_pool() {
     CoroutinePool::shutdown();
 }
 
-// 运行协程直到完成的高性能实现 - 移除异常处理
+// 运行协程直到完成的高性能实现 - 改进版本，减少CPU浪费
 void run_until_complete(Task<void>& task) {
     std::atomic<bool> completed{false};
 
     // 获取协程管理器
     auto& manager = CoroutineManager::get_instance();
 
-    // 创建完成回调 - 简化版本，无异常处理
+    // 创建完成回调 - 改进版本，添加异常处理
     auto completion_task = [&]() -> Task<void> {
-        co_await task;
-        completed.store(true, std::memory_order_release);
+        try {
+            co_await task;
+            completed.store(true, std::memory_order_release);
+        } catch (const std::exception& e) {
+            std::cerr << "协程执行异常: " << e.what() << std::endl;
+            completed.store(true, std::memory_order_release);
+        } catch (...) {
+            std::cerr << "协程执行未知异常" << std::endl;
+            completed.store(true, std::memory_order_release);
+        }
     }();
 
     // 启动任务
     manager.schedule_resume(completion_task.handle);
 
-    // 等待完成并持续驱动协程管理器 - 优化轮询间隔
+    // 使用自适应等待策略，减少CPU浪费
+    auto wait_duration = std::chrono::microseconds(1);
+    constexpr auto max_wait = std::chrono::milliseconds(1);
+    size_t iterations = 0;
+    
     while (!completed.load(std::memory_order_acquire)) {
         manager.drive(); // 驱动协程调度
-        std::this_thread::sleep_for(std::chrono::microseconds(100)); // 减少睡眠时间提高响应性
+        
+        iterations++;
+        
+        // 自适应等待策略
+        if (iterations < 100) {
+            // 前100次快速轮询
+            std::this_thread::yield();
+        } else if (iterations < 1000) {
+            // 中等等待
+            std::this_thread::sleep_for(wait_duration);
+            wait_duration = std::min(wait_duration * 2, std::chrono::microseconds(100));
+        } else {
+            // 长时间等待，减少CPU使用
+            std::this_thread::sleep_for(max_wait);
+        }
     }
 
     // 最终清理
@@ -396,19 +531,45 @@ void run_until_complete(Task<T>& task) {
     // 获取协程管理器
     auto& manager = CoroutineManager::get_instance();
 
-    // 创建完成回调 - 简化版本，无异常处理
+    // 创建完成回调 - 改进版本，添加异常处理
     auto completion_task = [&]() -> Task<void> {
-        co_await task;
-        completed.store(true, std::memory_order_release);
+        try {
+            co_await task;
+            completed.store(true, std::memory_order_release);
+        } catch (const std::exception& e) {
+            std::cerr << "协程执行异常: " << e.what() << std::endl;
+            completed.store(true, std::memory_order_release);
+        } catch (...) {
+            std::cerr << "协程执行未知异常" << std::endl;
+            completed.store(true, std::memory_order_release);
+        }
     }();
 
     // 启动任务
     manager.schedule_resume(completion_task.handle);
 
-    // 等待完成并持续驱动协程管理器 - 优化轮询间隔
+    // 使用自适应等待策略，减少CPU浪费
+    auto wait_duration = std::chrono::microseconds(1);
+    constexpr auto max_wait = std::chrono::milliseconds(1);
+    size_t iterations = 0;
+    
     while (!completed.load(std::memory_order_acquire)) {
         manager.drive(); // 驱动协程调度
-        std::this_thread::sleep_for(std::chrono::microseconds(100)); // 减少睡眠时间提高响应性
+        
+        iterations++;
+        
+        // 自适应等待策略
+        if (iterations < 100) {
+            // 前100次快速轮询
+            std::this_thread::yield();
+        } else if (iterations < 1000) {
+            // 中等等待
+            std::this_thread::sleep_for(wait_duration);
+            wait_duration = std::min(wait_duration * 2, std::chrono::microseconds(100));
+        } else {
+            // 长时间等待，减少CPU使用
+            std::this_thread::sleep_for(max_wait);
+        }
     }
 
     // 最终清理

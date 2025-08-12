@@ -32,29 +32,56 @@ public:
         // 设置析构标志，避免新任务入队
         stop_.store(true, std::memory_order_release);
 
-        // 给工作线程更多时间完成当前任务
+        // 改进的关闭逻辑：给工作线程更多时间完成当前任务
         auto start_time = std::chrono::steady_clock::now();
-        auto timeout = std::chrono::milliseconds(500); // 增加超时时间
+        auto timeout = std::chrono::milliseconds(1000); // 增加超时时间到1秒
 
-        // 等待活跃线程数降为0或超时
+        // 更智能的等待策略：等待活跃线程数降为0或超时
+        bool graceful_shutdown = false;
         while (active_threads_.load(std::memory_order_acquire) > 0) {
             auto current_time = std::chrono::steady_clock::now();
             if (current_time - start_time > timeout) {
+                std::cout << "ThreadPool destructor timeout, forcing shutdown" << std::endl;
                 break; // 超时，停止等待
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 增加sleep时间
+            
+            // 使用更短的睡眠间隔来更频繁检查线程状态
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        // 如果线程数降为0，表示优雅关闭成功
+        if (active_threads_.load(std::memory_order_acquire) == 0) {
+            graceful_shutdown = true;
+            std::cout << "ThreadPool graceful shutdown completed" << std::endl;
         }
 
         // 尝试 join 所有线程
         for (auto& worker : workers_) {
             if (worker.joinable()) {
-                // 给每个线程一个更长的join机会
                 try {
-                    worker.join();
+                    if (graceful_shutdown) {
+                        worker.join(); // 优雅关闭时应该能够快速join
+                    } else {
+                        // 强制关闭时使用超时join
+                        auto join_future = std::async(std::launch::async, [&worker]() {
+                            worker.join();
+                        });
+                        
+                        auto join_status = join_future.wait_for(std::chrono::milliseconds(100));
+                        
+                        if (join_status == std::future_status::timeout) {
+                            std::cout << "Worker thread join timeout, detaching..." << std::endl;
+                            if (worker.joinable()) {
+                                worker.detach();
+                            }
+                        }
+                    }
                 } catch (...) {
                     // 如果join失败，使用detach
                     try {
-                        worker.detach();
+                        if (worker.joinable()) {
+                            worker.detach();
+                        }
                     } catch (...) {
                         // 忽略detach异常
                     }
@@ -64,10 +91,15 @@ public:
 
         workers_.clear();
 
-        // 清空任务队列
+        // 清空任务队列，避免析构时访问已失效的对象
         std::function<void()> unused_task;
+        size_t remaining_tasks = 0;
         while (task_queue_.dequeue(unused_task)) {
-            // 清空队列，避免析构时访问已失效的对象
+            remaining_tasks++;
+        }
+        
+        if (remaining_tasks > 0) {
+            std::cout << "ThreadPool dropped " << remaining_tasks << " unprocessed tasks" << std::endl;
         }
     }
 
@@ -128,20 +160,58 @@ public:
         return stop_.load(std::memory_order_acquire);
     }
 
+    // 新增：获取队列中任务数量的估计
+    size_t estimated_queue_size() const {
+        // 注意：这只是一个估计值，无锁队列很难精确计算
+        return task_queue_.size_estimate();
+    }
+
+    // 新增：检查线程池健康状态
+    void print_status() const {
+        std::cout << "ThreadPool Status:" << std::endl;
+        std::cout << "  Active threads: " << active_thread_count() << std::endl;
+        std::cout << "  Is stopped: " << (is_stopped() ? "true" : "false") << std::endl;
+        std::cout << "  Estimated queue size: " << estimated_queue_size() << std::endl;
+    }
+
 private:
     void worker_loop() {
         std::function<void()> task;
+        
+        // 自适应等待策略，减少CPU浪费
+        auto wait_duration = std::chrono::microseconds(100);
+        constexpr auto max_wait = std::chrono::milliseconds(10);
+        size_t empty_iterations = 0;
 
         while (!stop_.load(std::memory_order_acquire)) {
             if (task_queue_.dequeue(task)) {
+                // 有任务：重置等待策略并执行
+                empty_iterations = 0;
+                wait_duration = std::chrono::microseconds(100);
+                
                 try {
                     task();
                 } catch (const std::exception& e) {
-                    // 异常处理，但不中断工作线程
+                    // 改进的异常处理：记录但不中断线程
+                    std::cerr << "ThreadPool worker caught exception: " << e.what() << std::endl;
+                } catch (...) {
+                    std::cerr << "ThreadPool worker caught unknown exception" << std::endl;
                 }
             } else {
-                // 没有任务时短暂休眠，避免忙等待
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                // 无任务：使用自适应等待策略，避免CPU忙等待
+                empty_iterations++;
+                
+                if (empty_iterations < 10) {
+                    // 短期内没任务，快速检查
+                    std::this_thread::yield();
+                } else if (empty_iterations < 100) {
+                    // 中期没任务，短暂休眠
+                    std::this_thread::sleep_for(wait_duration);
+                    wait_duration = std::min(wait_duration * 2, std::chrono::microseconds(1000));
+                } else {
+                    // 长期没任务，较长休眠
+                    std::this_thread::sleep_for(max_wait);
+                }
             }
         }
 
