@@ -194,11 +194,16 @@ impl BenchmarkRunner {
 
 // Benchmark functions
 
-async fn benchmark_task_creation() -> BenchmarkResult {
+async fn benchmark_task_creation_and_execution() -> BenchmarkResult {
     let runner = BenchmarkRunner::new();
-    runner.run("Task Creation", || async {
+    runner.run("Task Creation & Execution", || async {
         let handle = tokio::spawn(async {
-            42
+            // 模拟任务执行中的一些计算
+            let mut sum = 0;
+            for i in 0..10 {
+                sum += i;
+            }
+            sum
         });
         let _ = handle.await.unwrap();
     }).await
@@ -394,7 +399,7 @@ async fn main() {
     let mut results = Vec::new();
 
     // Core Rust benchmarks
-    results.push(benchmark_task_creation().await);
+    results.push(benchmark_task_creation_and_execution().await);
     results.push(benchmark_channel_ops().await);
     results.push(benchmark_simple_computation());
 

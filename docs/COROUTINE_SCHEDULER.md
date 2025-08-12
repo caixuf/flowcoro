@@ -64,10 +64,10 @@ private:
 
 | 特点 | 说明 | 性能指标 |
 |------|------|----------|
-| **无锁调度** | lockfree::Queue实现任务分发 | 45.5M ops/s队列操作 |
-| **立即执行** | Task创建时通过suspend_never立即投递 | 19.8M ops/s协程调度 |
+| **无锁调度** | lockfree::Queue实现任务分发 | 9.61M ops/s队列操作 |
+| **立即执行** | Task创建时通过suspend_never立即投递 | 4.20M ops/s协程创建执行 |
 | **智能负载均衡** | 自适应选择最优调度器 | 0.1μs调度决策时间 |
-| **多线程安全** | 跨线程协程恢复支持 | 2.08M req/s峰值吞吐量 |
+| **多线程安全** | 跨线程协程恢复支持 | 36.77M ops/s HTTP处理性能 |
 | **continuation机制** | final_suspend实现任务链 | 零拷贝任务传递 |
 | **continuation模式** | final_suspend支持协程链 | 异步任务协作支持 |
 

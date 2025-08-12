@@ -145,15 +145,20 @@ func (br *BenchmarkRunner) Run(name string, benchmarkFunc func()) BenchmarkResul
 	return result
 }
 
-// Goroutine creation benchmark
-func benchmarkGoroutineCreation() BenchmarkResult {
+// Goroutine creation and execution benchmark
+func benchmarkGoroutineCreationAndExecution() BenchmarkResult {
 	runner := NewBenchmarkRunner()
-	return runner.Run("Goroutine Creation", func() {
-		done := make(chan bool)
+	return runner.Run("Goroutine Creation & Execution", func() {
+		done := make(chan int)
 		go func() {
-			done <- true
+			// 模拟协程执行中的一些计算
+			sum := 0
+			for i := 0; i < 10; i++ {
+				sum += i
+			}
+			done <- sum
 		}()
-		<-done
+		_ = <-done
 	})
 }
 
@@ -368,7 +373,7 @@ func main() {
 	var results []BenchmarkResult
 
 	// Core Go benchmarks
-	results = append(results, benchmarkGoroutineCreation())
+	results = append(results, benchmarkGoroutineCreationAndExecution())
 	results = append(results, benchmarkChannelOps())
 	results = append(results, benchmarkSimpleComputation())
 

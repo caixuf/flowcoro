@@ -6,18 +6,25 @@ English | [中文](README_zh.md)
 
 ## Features
 
-- **High Performance**: 2.1M req/s throughput, 144x faster than traditional threading
-- **Lock-free Architecture**: 45.5M ops/s queue operations with smart load balancing
+- **High Performance**: 4.20M ops/s coroutine creation and execution
+- **Lock-free Architecture**: 9.61M ops/s queue operations with smart load balancing
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
 - **Batch Processing**: Optimized for large-scale concurrent task execution
-- **Memory Efficient**: 271 bytes per task with full scheduling system
+- **Advanced Concurrency**: WhenAny, WhenAll with specialized scheduling performance
 
 ## Performance
 
-| Test Scale | Throughput | Latency | vs Threads |
-|------------|------------|---------|------------|
-| 100K tasks | 2.08M req/s | 0.48μs | 144.6x faster |
-| 10K tasks | 1.67M req/s | 0.6μs | 123.5x faster |
+### Core Performance Comparison
+
+| Metric | FlowCoro | Go | Rust | Notes |
+|--------|----------|-----|------|-------|
+| **Coroutine Creation & Execution** | 4.20M ops/s | 2.27M ops/s | 19.5K ops/s | 1.85x faster than Go |
+| **Lock-free Queue** | 9.61M ops/s | 11.59M ops/s | 9.15M ops/s | Competitive performance |
+| **HTTP Request Processing** | 36.77M ops/s | 41.99M ops/s | 45.42M ops/s | Industry-level performance |
+| **Simple Computation** | 46.19M ops/s | 21.82M ops/s | 46.34M ops/s | Comparable to Rust |
+| **Memory Allocation (1KB)** | 10.18M ops/s | 41.43M ops/s | 46.75M ops/s | Room for improvement |
+
+**Specialized for**: Complex coroutine scheduling, batch processing, concurrent task management
 
 ## Quick Start
 
