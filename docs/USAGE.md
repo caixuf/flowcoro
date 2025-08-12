@@ -6,16 +6,18 @@
 
 FlowCoro 采用**三层调度架构**，结合无锁队列和智能负载均衡，专门优化以下场景：
 
-###  完美适配场景
+### 完美适配场景
 - **批量并发任务处理**: Web API 服务、数据处理管道 (420万ops/s协程处理能力)
 - **请求-响应模式**: HTTP 服务器、RPC 服务、代理网关 (3677万ops/s HTTP处理)
 - **独立任务并发**: 爬虫系统、测试工具、文件处理
 - **高性能计算**: 大规模并行计算任务 (4619万ops/s计算性能)
+- **生产者-消费者模式**: 通过Channel实现协程间通信
+- **数据流水线**: 多阶段数据处理管道
 
-###  架构限制场景
-- **协程间持续协作**: 生产者-消费者模式
-- **实时事件处理**: 需要协程间通信的系统
-- **流水线处理**: 需要协程链式协作
+### 已解决的场景 (通过Channel)
+- **协程间持续协作**: 现在支持通过Channel进行协程通信
+- **实时事件处理**: 可以实现事件驱动的协程系统
+- **流水线处理**: 支持协程链式协作和数据传递
 
 ## 调度机制详解
 
@@ -210,23 +212,197 @@ Task<void> web_crawler() {
 }
 ```
 
-## 错误的使用模式
-
-###  不要尝试生产者-消费者模式
+### 4. Channel生产者-消费者模式
 
 ```cpp
-//  错误：FlowCoro 不支持协程间持续协作
-Task<void> wrong_producer_consumer() {
-    auto producer_task = producer();
-    auto consumer_task = consumer();
+#include <flowcoro.hpp>
+
+Task<void> producer_consumer_pipeline() {
+    // 创建有缓冲的通道
+    auto raw_data_channel = make_channel<std::string>(10);
+    auto processed_data_channel = make_channel<int>(10);
     
-    // 问题：这会变成顺序执行，而不是并发
-    co_await producer_task;  // 阻塞等待生产者完成
-    co_await consumer_task;  // 然后执行消费者
+    // 数据生产者
+    auto producer = [raw_data_channel]() -> Task<void> {
+        for (int i = 0; i < 20; ++i) {
+            std::string data = "data_" + std::to_string(i);
+            bool sent = co_await raw_data_channel->send(data);
+            if (!sent) break; // 通道已关闭
+            
+            std::cout << "生产数据: " << data << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(50));
+        }
+        raw_data_channel->close();
+        std::cout << "生产者完成" << std::endl;
+    };
+    
+    // 数据处理器（消费原始数据，生产处理后数据）
+    auto processor = [raw_data_channel, processed_data_channel]() -> Task<void> {
+        while (true) {
+            auto raw_data = co_await raw_data_channel->recv();
+            if (!raw_data.has_value()) break; // 通道已关闭
+            
+            // 处理数据（提取数字部分）
+            std::string data = raw_data.value();
+            int processed = std::stoi(data.substr(5)); // "data_5" -> 5
+            
+            bool sent = co_await processed_data_channel->send(processed);
+            if (!sent) break;
+            
+            std::cout << "处理数据: " << data << " -> " << processed << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(30));
+        }
+        processed_data_channel->close();
+        std::cout << "处理器完成" << std::endl;
+    };
+    
+    // 最终消费者
+    auto consumer = [processed_data_channel]() -> Task<void> {
+        int total = 0;
+        int count = 0;
+        
+        while (true) {
+            auto data = co_await processed_data_channel->recv();
+            if (!data.has_value()) break; // 通道已关闭
+            
+            int value = data.value();
+            total += value;
+            count++;
+            
+            std::cout << "消费数据: " << value << " (累计: " << total << ")" << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(20));
+        }
+        
+        std::cout << "消费者完成，总计: " << total << ", 数量: " << count << std::endl;
+    };
+    
+    // 启动所有协程
+    auto prod_task = producer();
+    auto proc_task = processor();
+    auto cons_task = consumer();
+    
+    // 等待流水线完成
+    co_await prod_task;
+    co_await proc_task;
+    co_await cons_task;
+    
+    std::cout << "流水线处理完成" << std::endl;
+    co_return;
 }
 ```
 
-###  不要在协程内使用 sync_wait
+### 5. 多生产者多消费者模式
+
+```cpp
+Task<void> multi_producer_consumer() {
+    auto channel = make_channel<WorkItem>(50);
+    std::atomic<int> total_produced{0};
+    std::atomic<int> total_consumed{0};
+    
+    std::vector<Task<void>> tasks;
+    
+    // 创建3个生产者
+    for (int producer_id = 0; producer_id < 3; ++producer_id) {
+        auto producer = [channel, producer_id, &total_produced]() -> Task<void> {
+            for (int i = 0; i < 10; ++i) {
+                WorkItem item{producer_id, i, "task_" + std::to_string(i)};
+                
+                bool sent = co_await channel->send(item);
+                if (!sent) break;
+                
+                total_produced.fetch_add(1);
+                std::cout << "生产者 " << producer_id << " 产生任务: " << item.name << std::endl;
+                co_await sleep_for(std::chrono::milliseconds(100));
+            }
+        };
+        tasks.push_back(producer());
+    }
+    
+    // 创建2个消费者
+    for (int consumer_id = 0; consumer_id < 2; ++consumer_id) {
+        auto consumer = [channel, consumer_id, &total_consumed]() -> Task<void> {
+            while (true) {
+                auto item = co_await channel->recv();
+                if (!item.has_value()) break;
+                
+                // 处理工作项
+                WorkItem work = item.value();
+                co_await sleep_for(std::chrono::milliseconds(150)); // 模拟处理时间
+                
+                total_consumed.fetch_add(1);
+                std::cout << "消费者 " << consumer_id << " 处理任务: " << work.name 
+                         << " (来自生产者 " << work.producer_id << ")" << std::endl;
+            }
+        };
+        tasks.push_back(consumer());
+    }
+    
+    // 监控协程：当所有生产者完成时关闭通道
+    auto monitor = [channel, &total_produced, &total_consumed]() -> Task<void> {
+        int expected_total = 30; // 3个生产者 * 10个任务
+        
+        while (total_produced.load() < expected_total) {
+            co_await sleep_for(std::chrono::milliseconds(200));
+            std::cout << "监控: 已生产 " << total_produced.load() << "/" << expected_total 
+                     << ", 已消费 " << total_consumed.load() << std::endl;
+        }
+        
+        // 等待消费者处理完成
+        while (total_consumed.load() < total_produced.load()) {
+            co_await sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        channel->close();
+        std::cout << "监控: 所有任务完成，关闭通道" << std::endl;
+    };
+    tasks.push_back(monitor());
+    
+    // 等待所有协程完成
+    for (auto& task : tasks) {
+        co_await task;
+    }
+    
+    std::cout << "多生产者多消费者完成: 生产 " << total_produced.load() 
+             << ", 消费 " << total_consumed.load() << std::endl;
+    co_return;
+}
+```
+
+## 错误的使用模式和解决方案
+
+### ✅ 已解决：生产者-消费者模式
+
+**注意：此限制已通过Channel完全解决！**
+
+```cpp
+// ✓ 现在支持：使用Channel实现生产者-消费者
+Task<void> correct_producer_consumer() {
+    auto channel = make_channel<int>(10);
+    
+    auto producer_task = [channel]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            co_await channel->send(i);
+        }
+        channel->close();
+    };
+    
+    auto consumer_task = [channel]() -> Task<void> {
+        while (true) {
+            auto value = co_await channel->recv();
+            if (!value.has_value()) break;
+            process(value.value());
+        }
+    };
+    
+    auto prod = producer_task();
+    auto cons = consumer_task();
+    
+    co_await prod;
+    co_await cons;
+}
+```
+
+### ❌ 仍然错误：在协程内使用 sync_wait
 
 ```cpp
 //  错误：会导致死锁

@@ -469,32 +469,212 @@ Task<void> web_crawler() {
 }
 ```
 
-###  不适合的场景
-
-**1. 生产者-消费者模式**
+**4. 生产者-消费者模式（通过Channel实现）**
 ```cpp
-//  问题：无法实现真正的协程间协作
-Task<void> producer_consumer() {
-    auto producer_task = producer();
-    auto consumer_task = consumer();
+Task<void> channel_producer_consumer() {
+    auto channel = make_channel<WorkItem>(10);
     
-    // 变成顺序执行，失去并发意义
-    co_await producer_task;  // 阻塞等待生产者
-    co_await consumer_task;  // 然后执行消费者
+    auto producer_task = [channel]() -> Task<void> {
+        for (int i = 0; i < 100; ++i) {
+            WorkItem item = create_work_item(i);
+            co_await channel->send(item);
+        }
+        channel->close();
+    };
+    
+    auto consumer_task = [channel]() -> Task<void> {
+        while (true) {
+            auto item = co_await channel->recv();
+            if (!item.has_value()) break;
+            process_work_item(item.value());
+        }
+    };
+    
+    auto prod = producer_task();
+    auto cons = consumer_task();
+    
+    co_await prod;
+    co_await cons;
 }
 ```
 
-**2. 实时事件处理**
+### ✅ 已解决的场景（通过Channel）
+
+**1. 生产者-消费者模式**
 ```cpp
-//  问题：缺乏事件循环机制
-// FlowCoro 无法处理需要持续监听的事件
+// ✓ 现在支持：使用Channel实现协程间通信
+Task<void> producer_consumer() {
+    auto channel = make_channel<Data>(20);
+    
+    auto producer_task = [channel]() -> Task<void> {
+        for (int i = 0; i < 100; ++i) {
+            co_await channel->send(Data{i});
+        }
+        channel->close();
+    };
+    
+    auto consumer_task = [channel]() -> Task<void> {
+        while (true) {
+            auto data = co_await channel->recv();
+            if (!data.has_value()) break;
+            process_data(data.value());
+        }
+    };
+    
+    auto prod = producer_task();
+    auto cons = consumer_task();
+    
+    co_await prod;
+    co_await cons;
+}
+```
+
+**2. 事件驱动处理**
+```cpp
+// ✓ 现在支持：基于Channel的事件系统
+Task<void> event_driven_system() {
+    auto event_channel = make_channel<Event>(50);
+    
+    // 事件监听协程
+    auto listener = [event_channel]() -> Task<void> {
+        while (true) {
+            auto event = get_next_event(); // 从外部获取事件
+            if (!event.has_value()) break;
+            co_await event_channel->send(event.value());
+        }
+        event_channel->close();
+    };
+    
+    // 事件处理协程
+    auto processor = [event_channel]() -> Task<void> {
+        while (true) {
+            auto event = co_await event_channel->recv();
+            if (!event.has_value()) break;
+            handle_event(event.value());
+        }
+    };
+    
+    auto listen_task = listener();
+    auto process_task = processor();
+    
+    co_await listen_task;
+    co_await process_task;
+}
 ```
 
 **3. 流水线协作**
 ```cpp
-//  问题：协程间无法形成处理链
-// 每个协程都是独立执行，无法形成数据流水线
+// ✓ 现在支持：多阶段数据处理流水线
+Task<void> data_pipeline() {
+    auto raw_channel = make_channel<RawData>(10);
+    auto processed_channel = make_channel<ProcessedData>(10);
+    auto final_channel = make_channel<FinalData>(10);
+    
+    // 第一阶段：数据采集
+    auto collector = [raw_channel]() -> Task<void> {
+        for (int i = 0; i < 100; ++i) {
+            RawData data = collect_raw_data(i);
+            co_await raw_channel->send(data);
+        }
+        raw_channel->close();
+    };
+    
+    // 第二阶段：数据处理
+    auto processor = [raw_channel, processed_channel]() -> Task<void> {
+        while (true) {
+            auto raw = co_await raw_channel->recv();
+            if (!raw.has_value()) break;
+            
+            ProcessedData processed = process_data(raw.value());
+            co_await processed_channel->send(processed);
+        }
+        processed_channel->close();
+    };
+    
+    // 第三阶段：数据输出
+    auto outputer = [processed_channel, final_channel]() -> Task<void> {
+        while (true) {
+            auto processed = co_await processed_channel->recv();
+            if (!processed.has_value()) break;
+            
+            FinalData final = finalize_data(processed.value());
+            co_await final_channel->send(final);
+        }
+        final_channel->close();
+    };
+    
+    // 启动流水线
+    auto collect_task = collector();
+    auto process_task = processor();
+    auto output_task = outputer();
+    
+    co_await collect_task;
+    co_await process_task;
+    co_await output_task;
+}
 ```
+
+### ❌ 仍然不适合的场景
+
+**极低延迟系统**: 微秒级延迟要求的高频交易等场景
+
+## Channel 架构集成
+
+Channel 功能与 FlowCoro 的三层调度架构完美集成：
+
+### Channel 在调度系统中的位置
+
+```text
+应用协程 (Producer/Consumer Tasks)
+    ↓ Channel.send() / Channel.recv()
+Channel 缓冲区 (线程安全队列)
+    ↓ 协程挂起/恢复机制
+协程管理器 (等待队列管理)
+    ↓ schedule_resume()
+协程池 (多调度器处理)
+    ↓ 无锁任务分发
+线程池 (工作线程执行)
+```
+
+### Channel 协程调度机制
+
+```cpp
+// Channel send 操作的调度流程
+Task<bool> Channel<T>::send(T value) {
+    // 1. 检查缓冲区空间
+    if (buffer_.size() < capacity_) {
+        buffer_.push(std::move(value));
+        notify_waiting_receivers(); // 唤醒等待的接收协程
+        co_return true;
+    }
+    
+    // 2. 缓冲区满，挂起发送协程
+    co_await SenderAwaiter{this, std::move(value)};
+    co_return true;
+}
+
+// Channel recv 操作的调度流程  
+Task<std::optional<T>> Channel<T>::recv() {
+    // 1. 检查缓冲区数据
+    if (!buffer_.empty()) {
+        T value = std::move(buffer_.front());
+        buffer_.pop();
+        notify_waiting_senders(); // 唤醒等待的发送协程
+        co_return value;
+    }
+    
+    // 2. 缓冲区空，挂起接收协程
+    auto result = co_await ReceiverAwaiter{this};
+    co_return result;
+}
+```
+
+### Channel 性能特点
+
+- **线程安全**: 所有操作都通过原子操作和锁保护
+- **协程友好**: 使用协程挂起而非阻塞线程
+- **缓冲优化**: 有界缓冲区避免内存无限增长
+- **调度集成**: 完全集成到 FlowCoro 的调度系统中
 
 ## 性能调优指南
 
@@ -872,5 +1052,15 @@ FlowCoro 的协程调度系统通过以下方式实现高效并发：
 2. **安全的资源管理**: 通过原子操作和RAII确保线程安全
 3. **灵活的调度策略**: 支持从小规模到大规模的并发场景
 4. **优化的性能**: 减少线程创建开销，提高资源利用率
+5. **协程间通信**: 通过Channel实现安全的异步消息传递
+6. **生产者-消费者支持**: 完整支持复杂的协程协作模式
 
-该系统特别适合IO密集型和高并发场景，能够以较低的资源消耗处理大量并发任务。
+### 核心优势
+
+- **高性能调度**: 420万次/秒协程创建和执行
+- **无锁队列**: 961万次/秒的高效任务分发
+- **智能负载均衡**: 自适应调度器选择
+- **Channel通信**: 线程安全的协程间数据传递
+- **流水线处理**: 支持多阶段数据处理工作流
+
+该系统既适合IO密集型和高并发场景，也能处理复杂的生产者-消费者模式和事件驱动应用，以较低的资源消耗实现大量并发任务处理。

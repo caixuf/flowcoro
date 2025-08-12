@@ -41,12 +41,13 @@ FlowCoro 采用**三层调度架构**，结合无锁队列和智能负载均衡�
 - [适用场景](#适用场景) - 推荐和不推荐的用法
 
 ### API参考
-- [1. Task<T>](#1-taskt) - 协程任务接口
+- [1. Task&lt;T&gt;](#1-taskt) - 协程任务接口
 - [2. sync_wait()](#2-sync_wait) - 同步等待
 - [3. when_all()](#3-when_all) - 批量等待语法糖
 - [4. sleep_for()](#4-sleep_for) - 协程友好的延时
-- [5. 线程池](#5-线程池) - 后台任务处理
-- [6. 内存管理](#6-内存管理) - 内存池和对象池
+- [5. Channel&lt;T&gt;](#5-channelt) - 协程间通信通道
+- [6. 线程池](#6-threadpool) - 后台任务处理
+- [7. 内存管理](#7-memory) - 内存池和对象池
 
 ---
 
@@ -103,32 +104,51 @@ Task<void> batch_processing() {
 
 ## 架构限制
 
-###  不支持的模式
+### 已解决的模式 (通过Channel)
 
 **生产者-消费者协作:**
 
 ```cpp
-//  错误：不支持协程间持续协作
+// ✓ 正确：现在支持协程间通信
 Task<void> producer_consumer() {
-    auto producer_task = producer();
-    auto consumer_task = consumer();
+    auto channel = make_channel<int>(10);
     
-    // 问题：这会顺序执行，不是并发
-    co_await producer_task;  // 阻塞等待生产者完成
-    co_await consumer_task;  // 然后执行消费者
+    auto producer_task = [channel]() -> Task<void> {
+        for (int i = 0; i < 10; ++i) {
+            co_await channel->send(i);
+        }
+        channel->close();
+    };
+    
+    auto consumer_task = [channel]() -> Task<void> {
+        while (true) {
+            auto value = co_await channel->recv();
+            if (!value.has_value()) break;
+            process(value.value());
+        }
+    };
+    
+    auto prod = producer_task();
+    auto cons = consumer_task();
+    
+    co_await prod;
+    co_await cons;
 }
 ```
 
 **协程通信管道:**
 
 ```cpp
-//  错误：Channel 不适合此架构
+// ✓ 正确：Channel 支持流水线处理
 Task<void> pipeline() {
-    auto channel = make_channel<int>(10);
-    auto stage1 = process_stage1(channel);
-    auto stage2 = process_stage2(channel);
+    auto channel1 = make_channel<RawData>(5);
+    auto channel2 = make_channel<ProcessedData>(5);
     
-    // 问题：无法实现真正的流水线协作
+    auto stage1 = process_stage1(channel1, channel2);
+    auto stage2 = process_stage2(channel2);
+    
+    co_await stage1;
+    co_await stage2;
 }
 ```
 
@@ -406,7 +426,175 @@ Task<void> non_blocking_sleep() {
 }
 ```
 
-## 5. 线程池
+## 5. Channel&lt;T&gt;
+
+协程间通信通道，支持异步发送和接收消息，是实现生产者-消费者模式的核心组件。
+
+### 函数签名
+
+```cpp
+template<typename T>
+class Channel {
+public:
+    explicit Channel(size_t capacity = 0);
+    
+    Task<bool> send(T value);
+    Task<std::optional<T>> recv();
+    void close();
+    bool is_closed() const;
+};
+
+template<typename T>
+auto make_channel(size_t capacity = 0) -> std::shared_ptr<Channel<T>>;
+```
+
+### 基本用法
+
+```cpp
+Task<void> basic_channel_usage() {
+    auto channel = make_channel<int>(5); // 缓冲区大小为5
+    
+    // 发送数据
+    bool success = co_await channel->send(42);
+    if (success) {
+        std::cout << "Message sent successfully" << std::endl;
+    }
+    
+    // 接收数据
+    auto result = co_await channel->recv();
+    if (result.has_value()) {
+        std::cout << "Received: " << result.value() << std::endl;
+    }
+    
+    channel->close();
+    co_return;
+}
+```
+
+### 生产者-消费者模式
+
+```cpp
+Task<void> producer_consumer_example() {
+    auto channel = make_channel<std::string>(10);
+    
+    // 生产者协程
+    auto producer = [channel]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            std::string message = "message_" + std::to_string(i);
+            bool sent = co_await channel->send(message);
+            if (!sent) {
+                std::cout << "Channel closed, stop producing" << std::endl;
+                break;
+            }
+            std::cout << "Produced: " << message << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(100));
+        }
+        channel->close();
+    };
+    
+    // 消费者协程
+    auto consumer = [channel]() -> Task<void> {
+        while (true) {
+            auto message = co_await channel->recv();
+            if (!message.has_value()) {
+                std::cout << "Channel closed, stop consuming" << std::endl;
+                break;
+            }
+            std::cout << "Consumed: " << message.value() << std::endl;
+        }
+    };
+    
+    auto prod_task = producer();
+    auto cons_task = consumer();
+    
+    co_await prod_task;
+    co_await cons_task;
+    co_return;
+}
+```
+
+### 多生产者多消费者
+
+```cpp
+Task<void> multi_producer_consumer() {
+    auto channel = make_channel<int>(20);
+    std::vector<Task<void>> tasks;
+    
+    // 创建多个生产者
+    for (int producer_id = 0; producer_id < 3; ++producer_id) {
+        auto producer = [channel, producer_id]() -> Task<void> {
+            for (int i = 0; i < 10; ++i) {
+                int value = producer_id * 100 + i;
+                bool sent = co_await channel->send(value);
+                if (!sent) break;
+                std::cout << "Producer " << producer_id << " sent: " << value << std::endl;
+                co_await sleep_for(std::chrono::milliseconds(50));
+            }
+        };
+        tasks.push_back(producer());
+    }
+    
+    // 创建多个消费者
+    std::atomic<int> total_consumed{0};
+    for (int consumer_id = 0; consumer_id < 2; ++consumer_id) {
+        auto consumer = [channel, consumer_id, &total_consumed]() -> Task<void> {
+            while (true) {
+                auto value = co_await channel->recv();
+                if (!value.has_value()) break;
+                total_consumed.fetch_add(1);
+                std::cout << "Consumer " << consumer_id << " got: " << value.value() << std::endl;
+            }
+        };
+        tasks.push_back(consumer());
+    }
+    
+    // 监控协程：当生产完成时关闭通道
+    auto monitor = [channel]() -> Task<void> {
+        co_await sleep_for(std::chrono::seconds(2)); // 等待生产完成
+        channel->close();
+    };
+    tasks.push_back(monitor());
+    
+    // 等待所有任务完成
+    for (auto& task : tasks) {
+        co_await task;
+    }
+    
+    std::cout << "Total consumed: " << total_consumed.load() << std::endl;
+    co_return;
+}
+```
+
+### 性能特点
+
+- **缓冲机制**: 支持有界缓冲区，避免过度内存使用
+- **线程安全**: 完全线程安全，支持跨线程协程通信
+- **零拷贝**: 内部使用移动语义，避免不必要的数据拷贝
+- **背压控制**: 当缓冲区满时，发送操作会挂起协程
+
+### 适用场景
+
+- 协程间数据传递
+- 生产者-消费者模式
+- 数据流水线处理
+- 事件驱动架构
+- 限流和背压控制
+
+### 注意事项
+
+```cpp
+// ✓ 正确：及时关闭通道
+auto channel = make_channel<int>(10);
+// ... 使用通道
+channel->close(); // 通知接收者不再有数据
+
+// ✗ 错误：忘记关闭可能导致接收者永久等待
+auto channel = make_channel<int>(10);
+// ... 发送完数据后忘记关闭
+// 接收者的 recv() 可能永久挂起
+```
+
+## 6. 线程池
 
 FlowCoro 内置高性能线程池，自动处理协程调度。
 

@@ -11,6 +11,7 @@ English | [中文](README_zh.md)
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
 - **Batch Processing**: Optimized for large-scale concurrent task execution
 - **Advanced Concurrency**: WhenAny, WhenAll with specialized scheduling performance
+- **Channel Communication**: Thread-safe async channels for producer-consumer patterns
 
 ## Performance
 
@@ -73,8 +74,39 @@ Task<void> example() {
     co_return;
 }
 
+// Producer-Consumer with Channel
+Task<void> channel_example() {
+    auto channel = make_channel<int>(10); // Buffer size: 10
+    
+    // Producer
+    auto producer = [channel]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            co_await channel->send(i);
+            std::cout << "Produced: " << i << std::endl;
+        }
+        channel->close();
+    };
+    
+    // Consumer
+    auto consumer = [channel]() -> Task<void> {
+        while (true) {
+            auto value = co_await channel->recv();
+            if (!value.has_value()) break; // Channel closed
+            std::cout << "Consumed: " << value.value() << std::endl;
+        }
+    };
+    
+    auto prod_task = producer();
+    auto cons_task = consumer();
+    
+    co_await prod_task;
+    co_await cons_task;
+    co_return;
+}
+
 int main() {
     sync_wait(example());
+    sync_wait(channel_example());
     return 0;
 }
 ```
@@ -102,11 +134,15 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 - Batch data processing
 - High-frequency trading systems
 - Microservice gateways
+- Producer-consumer pipelines
+- Multi-stage data processing workflows
 
-**Not suitable for:**
+**Enhanced with Channels:**
 
-- Producer-consumer patterns requiring inter-coroutine communication
-- Event-driven real-time systems
+- Inter-coroutine communication
+- Buffered message passing
+- Async data pipelines
+- Coordinated multi-producer/multi-consumer systems
 
 ## Benchmarks
 

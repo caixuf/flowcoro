@@ -11,6 +11,7 @@
 - **C++20协程**: 基于现代协程的任务调度
 - **批量处理**: 针对大规模并发任务执行优化
 - **高级并发**: WhenAny、WhenAll等专业调度特性
+- **Channel通信**: 线程安全的异步通道，支持生产者-消费者模式
 
 ## 性能表现
 
@@ -73,8 +74,39 @@ Task<void> example() {
     co_return;
 }
 
+// 使用Channel的生产者-消费者模式
+Task<void> channel_example() {
+    auto channel = make_channel<int>(10); // 缓冲区大小: 10
+    
+    // 生产者
+    auto producer = [channel]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            co_await channel->send(i);
+            std::cout << "生产: " << i << std::endl;
+        }
+        channel->close();
+    };
+    
+    // 消费者
+    auto consumer = [channel]() -> Task<void> {
+        while (true) {
+            auto value = co_await channel->recv();
+            if (!value.has_value()) break; // Channel已关闭
+            std::cout << "消费: " << value.value() << std::endl;
+        }
+    };
+    
+    auto prod_task = producer();
+    auto cons_task = consumer();
+    
+    co_await prod_task;
+    co_await cons_task;
+    co_return;
+}
+
 int main() {
     sync_wait(example());
+    sync_wait(channel_example());
     return 0;
 }
 ```
@@ -102,11 +134,15 @@ suspend_never  负载均衡  无锁队列  执行
 - 批量数据处理
 - 高频交易系统
 - 微服务网关
+- 生产者-消费者管道
+- 多阶段数据处理工作流
 
-**不适用于:**
+**Channel增强特性:**
 
-- 需要协程间通信的生产者-消费者模式
-- 事件驱动的实时系统
+- 协程间通信
+- 缓冲消息传递
+- 异步数据管道
+- 协调多生产者/多消费者系统
 
 ## 性能测试
 
