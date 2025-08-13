@@ -2,36 +2,15 @@
 
 **基于无锁队列的高性能协程调度系统**
 
+>  **性能数据**: 详细性能指标和基准测试结果请参考 [性能数据参考](PERFORMANCE_DATA.md)
+
 ## 核心架构说明
 
 FlowCoro 采用**三层调度架构**，结合无锁队列和智能负载均衡，专门优化高吞吐量批量任务处理：
 
 - **调度方式**: suspend_never立即执行 → 协程池调度 → 无锁队列分发 → 线程池执行
 - **适用场景**: 批量并发任务、Web API服务、独立任务处理
-- **核心特性**: 420万次/秒协程创建执行、专业并发控制、智能负载均衡
-
-## 性能表现
-
-### 核心性能指标 (专业基准测试)
-
-基于最新专业基准测试数据：
-
-| 性能指标 | FlowCoro | Go | Rust | 相对表现 |
-|----------|----------|-----|------|----------|
-| **协程创建和执行** | 4.20M ops/s | 2.27M ops/s | 19.5K ops/s | 比Go快1.85倍，比Rust快215倍 |
-| **通道/队列操作** | 9.61M ops/s | 11.59M ops/s | 9.15M ops/s | 与Go差17%，比Rust快5% |
-| **HTTP请求处理** | 36.77M ops/s | 41.99M ops/s | 45.42M ops/s | 达到行业水平 |
-| **WhenAny(2任务)** | 536K ops/s | - | - | 专业并发控制 |
-| **WhenAny(4任务)** | 328K ops/s | - | - | 复杂调度能力 |
-| **简单计算** | 46.19M ops/s | 21.82M ops/s | 46.34M ops/s | 与Rust相当 |
-| **内存分配(1KB)** | 10.18M ops/s | 41.43M ops/s | 46.75M ops/s | 有改进空间 |
-
-### 关键特性
-
-- **协程调度优势**: 在协程创建和执行方面表现优秀
-- **专业并发控制**: 独有的WhenAny/WhenAll高级调度特性
-- **行业级HTTP性能**: 达到3677万操作/秒的处理能力
-- **智能负载均衡**: 16个调度器+32个工作线程的优化架构
+- **核心特性**: 高性能协程创建执行、专业并发控制、智能负载均衡
 
 ## 目录
 
@@ -893,10 +872,10 @@ Task<void> example_same_types() {
 - **批量操作**: 并行执行固定数量的相似操作
 
 **不适合 when_all 的场景:**
-- **大量任务**: 超过 100+ 个任务（推荐使用协程池）
+- **大量任务**: 超过百个任务（推荐使用协程池）
 - **动态任务**: 运行时确定任务数量
 - **流式处理**: 需要处理任务完成顺序的场景
-- **高并发场景**: 5000+ 任务必须使用协程池管理
+- **高并发场景**: 大量任务必须使用协程池管理
 
 #### 性能特点
 
@@ -1520,6 +1499,198 @@ int main() {
     producer.join();
     consumer.join();
     return 0;
+}
+```
+
+---
+
+## 实用模式和最佳实践
+
+### Web API 服务器模式
+
+```cpp
+struct Request {
+    int user_id;
+    std::string action;
+};
+
+struct Response {
+    int status;
+    std::string data;
+};
+
+Task<Response> handle_request(const Request& req) {
+    // 模拟数据库查询
+    co_await sleep_for(std::chrono::milliseconds(50));
+    
+    Response resp;
+    resp.status = 200;
+    resp.data = "User " + std::to_string(req.user_id) + " processed";
+    co_return resp;
+}
+
+Task<void> web_server_simulation() {
+    std::vector<Request> requests = {
+        {1, "GET"}, {2, "POST"}, {3, "PUT"}, {4, "DELETE"}
+    };
+    
+    std::vector<Task<Response>> tasks;
+    
+    // 批量创建任务（立即开始并发执行）
+    for (const auto& req : requests) {
+        tasks.push_back(handle_request(req));
+    }
+    
+    // 批量等待结果
+    for (auto& task : tasks) {
+        auto response = co_await task;
+        std::cout << "Status: " << response.status 
+                  << ", Data: " << response.data << std::endl;
+    }
+    
+    co_return;
+}
+```
+
+### 数据批量处理模式
+
+```cpp
+Task<std::string> process_data(int id) {
+    // 模拟数据处理
+    co_await sleep_for(std::chrono::milliseconds(20));
+    return "Processed data " + std::to_string(id);
+}
+
+Task<void> batch_data_processing() {
+    const int batch_size = 100;
+    std::vector<Task<std::string>> tasks;
+    
+    // 创建批量任务
+    for (int i = 0; i < batch_size; ++i) {
+        tasks.push_back(process_data(i));
+    }
+    
+    // 处理结果
+    std::vector<std::string> results;
+    results.reserve(batch_size);
+    
+    for (auto& task : tasks) {
+        results.push_back(co_await task);
+    }
+    
+    std::cout << "Processed " << results.size() << " items" << std::endl;
+    co_return;
+}
+```
+
+### Channel流水线处理
+
+```cpp
+Task<void> producer_consumer_pipeline() {
+    // 创建有缓冲的通道
+    auto raw_data_channel = make_channel<std::string>(10);
+    auto processed_data_channel = make_channel<int>(10);
+    
+    // 数据生产者
+    auto producer = [raw_data_channel]() -> Task<void> {
+        for (int i = 0; i < 20; ++i) {
+            std::string data = "data_" + std::to_string(i);
+            bool sent = co_await raw_data_channel->send(data);
+            if (!sent) break; // 通道已关闭
+            
+            std::cout << "生产数据: " << data << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(50));
+        }
+        raw_data_channel->close();
+        std::cout << "生产者完成" << std::endl;
+    };
+    
+    // 数据处理器
+    auto processor = [raw_data_channel, processed_data_channel]() -> Task<void> {
+        while (true) {
+            auto raw_data = co_await raw_data_channel->recv();
+            if (!raw_data.has_value()) break; // 通道已关闭
+            
+            // 处理数据
+            std::string data = raw_data.value();
+            int processed = std::stoi(data.substr(5)); // "data_5" -> 5
+            
+            bool sent = co_await processed_data_channel->send(processed);
+            if (!sent) break;
+            
+            std::cout << "处理数据: " << data << " -> " << processed << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(30));
+        }
+        processed_data_channel->close();
+        std::cout << "处理器完成" << std::endl;
+    };
+    
+    // 最终消费者
+    auto consumer = [processed_data_channel]() -> Task<void> {
+        int total = 0;
+        int count = 0;
+        
+        while (true) {
+            auto data = co_await processed_data_channel->recv();
+            if (!data.has_value()) break; // 通道已关闭
+            
+            int value = data.value();
+            total += value;
+            count++;
+            
+            std::cout << "消费数据: " << value << " (累计: " << total << ")" << std::endl;
+            co_await sleep_for(std::chrono::milliseconds(20));
+        }
+        
+        std::cout << "消费者完成，总计: " << total << ", 数量: " << count << std::endl;
+    };
+    
+    // 启动所有协程
+    auto prod_task = producer();
+    auto proc_task = processor();
+    auto cons_task = consumer();
+    
+    // 等待流水线完成
+    co_await prod_task;
+    co_await proc_task;
+    co_await cons_task;
+    
+    std::cout << "流水线处理完成" << std::endl;
+    co_return;
+}
+```
+
+### 性能最佳实践
+
+1. **预分配容器**
+```cpp
+// 好的做法
+std::vector<Task<int>> tasks;
+tasks.reserve(expected_size);  // 预分配避免重复分配
+```
+
+2. **批量操作**
+```cpp
+// 批量创建后批量等待，而不是交替创建和等待
+for (int i = 0; i < N; ++i) {
+    tasks.push_back(async_operation(i));
+}
+for (auto& task : tasks) {
+    results.push_back(co_await task);
+}
+```
+
+3. **避免在协程内使用sync_wait**
+```cpp
+// 错误：在协程内调用sync_wait
+Task<void> bad_example() {
+    auto task = some_async_operation();
+    sync_wait(task);  // 这会阻塞协程调度
+}
+
+// 正确：直接使用co_await
+Task<void> good_example() {
+    auto result = co_await some_async_operation();  // 非阻塞等待
 }
 ```
 

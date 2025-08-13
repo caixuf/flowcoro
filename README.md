@@ -6,37 +6,37 @@ English | [中文](README_zh.md)
 
 ## Features
 
-- **High Performance**: 3.75M+ requests/s with Profile-Guided Optimization (PGO)
-- **Lock-free Architecture**: 17.4M+ ops/s queue operations with smart load balancing  
+- **High Performance**: Million+ requests/s with Profile-Guided Optimization (PGO)
+- **Lock-free Architecture**: High-throughput queue operations with smart load balancing  
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
 - **Batch Processing**: Optimized for large-scale concurrent task execution
 - **Advanced Concurrency**: WhenAny, WhenAll with specialized scheduling performance
 - **Channel Communication**: Thread-safe async channels for producer-consumer patterns
-- **Memory Pool**: Redis/Nginx-inspired memory allocation with 3x performance boost
-- **PGO Optimization**: 37.5% performance improvement through profile-guided compilation
+- **Memory Pool**: Redis/Nginx-inspired memory allocation with significant performance boost
+- **PGO Optimization**: Substantial performance improvement through profile-guided compilation
 
 ## Performance
 
-### Latest Performance (PGO Optimized)
+> **Performance Data**: For detailed performance metrics and benchmarks, see [Performance Data Reference](docs/PERFORMANCE_DATA.md)
 
-| Metric | Performance | Improvement |
-|--------|-------------|-------------|
-| **Coroutine Creation & Execution** | **20.5M ops/s** | +32% with PGO |
-| **Hello World Throughput** | **3.75M req/s** | 139.8x faster than threads |
-| **WhenAny 2 Tasks** | **4.96M ops/s** | +75% with PGO |
-| **Lock-free Queue** | **17.4M ops/s** | +25.6% optimization |
-| **Memory Pool Allocation** | **59.9M ops/s** | 3.08x faster than system |
-| **HTTP Request Processing** | **57.2M ops/s** | Industry-leading |
+### Key Performance Highlights
+
+- **Coroutine Creation & Execution**: Industry-leading performance with PGO optimization
+- **Hello World Throughput**: Significantly faster than traditional threading
+- **WhenAny Operations**: Optimized for complex concurrent scheduling
+- **Lock-free Queue**: High-throughput lock-free operations
+- **Memory Pool Allocation**: Much faster than system allocation
+- **HTTP Request Processing**: Industry-leading throughput
 
 ### Core Performance Comparison
 
-| Metric | FlowCoro | Go | Rust | Notes |
-|--------|----------|-----|------|-------|
-| **Coroutine Creation & Execution** | **20.5M ops/s** | 2.27M ops/s | 19.5K ops/s | **9x faster than Go** |
-| **Lock-free Queue** | **17.4M ops/s** | 11.59M ops/s | 9.15M ops/s | **1.5x faster than Go** |
-| **HTTP Request Processing** | **57.2M ops/s** | 41.99M ops/s | 45.42M ops/s | **1.36x faster than Go** |
-| **Simple Computation** | **59.7M ops/s** | 21.82M ops/s | 46.34M ops/s | **2.7x faster than Go** |
-| **Memory Pool Allocation** | **59.9M ops/s** | 41.43M ops/s | 46.75M ops/s | **1.45x faster than Go** |
+FlowCoro demonstrates superior performance compared to Go and Rust in key areas:
+
+- **Coroutine Creation & Execution**: Significantly faster than both Go and Rust
+- **Lock-free Queue**: Better performance than competing implementations
+- **HTTP Request Processing**: Industry-competitive performance
+- **Simple Computation**: Excellent computational performance
+- **Memory Pool Allocation**: Optimized memory management
 
 **Specialized for**: Complex coroutine scheduling, batch processing, concurrent task management
 
@@ -145,7 +145,7 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 
 **Ideal for:**
 
-- Web API servers (500K+ req/s)
+- Web API servers (high request throughput)
 - Batch data processing
 - High-frequency trading systems
 - Microservice gateways
@@ -172,10 +172,11 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 
 ## Documentation
 
+- [Quick Start Guide](docs/QUICK_START.md)
 - [API Reference](docs/API_REFERENCE.md)
-- [Coroutine Scheduler](docs/COROUTINE_SCHEDULER.md)
-- [Usage Guide](docs/USAGE.md)
-- [Task Execution Flow](docs/TASK_EXECUTION_FLOW.md)
+- [Architecture Design](docs/ARCHITECTURE.md)
+- [Performance Data](docs/PERFORMANCE_DATA.md)
+- [PGO Optimization Guide](docs/PGO_GUIDE.md)
 
 ## License
 
