@@ -754,7 +754,9 @@ public:
     // 恢复协程执行
     void resume() {
         if (valid() && !handle_.done()) {
-            handle_.resume();
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_);
         }
     }
 
@@ -1227,9 +1229,16 @@ struct Task {
             }
         }
 
-        // 安全恢复协程
+        // 安全恢复协程 - 统一使用协程管理器调度
         if (!handle.done() && !handle.promise().is_cancelled()) {
-            handle.resume();
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
+            
+            // 等待协程完成（同步等待）
+            while (!handle.done() && !handle.promise().is_cancelled()) {
+                manager.drive(); // 驱动协程池执行
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
         }
 
         // 检查是否有错误
@@ -1544,15 +1553,10 @@ struct Task<Result<T, E>> {
 
     void await_suspend(std::coroutine_handle<> waiting_handle) {
         if (handle && !handle.done()) {
-            // 在线程池中运行
-            GlobalThreadPool::get().enqueue_void([h = handle, waiting_handle]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
+            manager.schedule_resume(waiting_handle);
         }
     }
 
@@ -1759,10 +1763,10 @@ struct Task<void> {
             // 获取协程管理器实例
             auto& manager = CoroutineManager::get_instance();
             
-            // 启动协程（如果尚未开始）
+            // 启动协程（如果尚未开始）- 使用协程管理器调度
             try {
                 if (!handle.done()) {
-                    handle.resume();
+                    manager.schedule_resume(handle);
                 }
                 
                 // 驱动事件循环直到协程完成
@@ -1866,11 +1870,9 @@ public:
         // 在锁外调度协程以避免死锁
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -1887,11 +1889,9 @@ public:
 
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise exception");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -1906,11 +1906,8 @@ public:
         // 在锁保护下检查是否已经有值
         if (state_->ready_.load(std::memory_order_acquire)) {
             // 如果已经ready，立即调度
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
             return;
         }
 
@@ -1921,11 +1918,8 @@ public:
         } else {
             // 如果设置句柄失败，说明已经有其他协程在等待
             // 这种情况下直接调度当前协程
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
         }
     }
 
@@ -1969,11 +1963,9 @@ public:
         // 在锁外调度协程以避免死锁
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise<void>");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -1990,11 +1982,9 @@ public:
 
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise<void> exception");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -2006,11 +1996,8 @@ public:
         std::lock_guard<std::mutex> lock(state_->mutex_);
 
         if (state_->ready_.load(std::memory_order_acquire)) {
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
             return;
         }
 
@@ -2019,11 +2006,8 @@ public:
             // 成功设置句柄
         } else {
             // 如果设置句柄失败，直接调度当前协程
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
         }
     }
 
@@ -2064,11 +2048,9 @@ public:
 
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise<unique_ptr>");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -2085,11 +2067,9 @@ public:
 
         if (handle_to_resume) {
             LOG_TRACE("Resuming waiting coroutine from AsyncPromise<unique_ptr> exception");
-            GlobalThreadPool::get().enqueue_void([handle_to_resume]() {
-                if (handle_to_resume && !handle_to_resume.done()) {
-                    handle_to_resume.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle_to_resume);
         }
     }
 
@@ -2101,11 +2081,8 @@ public:
         std::lock_guard<std::mutex> lock(state_->mutex_);
 
         if (state_->ready_.load(std::memory_order_acquire)) {
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
             return;
         }
 
@@ -2113,11 +2090,8 @@ public:
         if (state_->suspended_handle_.compare_exchange_strong(expected, h, std::memory_order_acq_rel)) {
             // 成功设置句柄
         } else {
-            GlobalThreadPool::get().enqueue_void([h]() {
-                if (h && !h.done()) {
-                    h.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(h);
         }
     }
 
@@ -2209,7 +2183,10 @@ struct Task<std::unique_ptr<T>> {
     }
 
     std::unique_ptr<T> get() {
-        if (handle && !handle.done()) handle.resume();
+        if (handle && !handle.done()) {
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
+        }
         if (handle.promise().exception) std::rethrow_exception(handle.promise().exception);
         return std::move(handle.promise().value);
     }
@@ -2221,20 +2198,13 @@ struct Task<std::unique_ptr<T>> {
 
     void await_suspend(std::coroutine_handle<> waiting_handle) {
         if (handle && !handle.done()) {
-            GlobalThreadPool::get().enqueue_void([task_handle = handle, waiting_handle]() {
-                if (task_handle && !task_handle.done()) {
-                    task_handle.resume();
-                }
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
+            // 使用协程管理器统一调度
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
+            manager.schedule_resume(waiting_handle);
         } else {
-            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
-                if (waiting_handle && !waiting_handle.done()) {
-                    waiting_handle.resume();
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(waiting_handle);
         }
     }
 
