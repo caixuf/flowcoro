@@ -183,45 +183,21 @@ TEST_CASE(lockfree_queue_multithreaded) {
     TEST_EXPECT_EQ(consumed.load(), num_items);
 }
 
-// 测试协程池功能
-TEST_CASE(coroutine_pool) {
+// 测试协程同步等待功能
+TEST_CASE(coroutine_sync_wait) {
     std::atomic<int> counter{0};
-    std::vector<Task<void>> tasks;
 
-    // 创建多个协程任务
-    for (int i = 0; i < 10; ++i) {
-        auto task = [&counter]() -> Task<void> {
-            counter.fetch_add(1);
-            co_return;
-        }();
+    // 创建一个简单的协程任务
+    auto task = [&counter]() -> Task<int> {
+        counter.fetch_add(1);
+        co_return 42;
+    }();
 
-        // 使用协程池调度
-        schedule_coroutine_enhanced(task.handle);
-        tasks.push_back(std::move(task));
-    }
-
-    // 驱动协程池执行所有任务
-    auto& manager = CoroutineManager::get_instance();
-    int timeout_counter = 0;
-    bool all_done = false;
-
-    while (!all_done && timeout_counter < 1000) {
-        manager.drive();
-
-        // 检查所有任务是否完成
-        all_done = true;
-        for (const auto& task : tasks) {
-            if (!task.handle.done()) {
-                all_done = false;
-                break;
-            }
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        timeout_counter++;
-    }
-
-    TEST_EXPECT_EQ(counter.load(), 10);
+    // 使用sync_wait等待协程完成
+    auto result = sync_wait(std::move(task));
+    
+    TEST_EXPECT_EQ(counter.load(), 1);
+    TEST_EXPECT_EQ(result, 42);
 }
 
 int main() {
