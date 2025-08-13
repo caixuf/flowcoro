@@ -109,6 +109,22 @@ private:
             // 批量执行协程 - 添加适当的异常处理
             for (auto handle : batch) {
                 if (handle && !handle.done() && !stop_flag_.load()) {
+                    // 增强的安全检查
+                    void* addr = handle.address();
+                    if (!addr) {
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        load_balancer.on_task_completed(scheduler_id_);
+                        continue;
+                    }
+                    
+                    // 检查地址合理性
+                    uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
+                    if (addr_val < 0x1000 || addr_val == 0xffffffffffffffff) {
+                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+                        load_balancer.on_task_completed(scheduler_id_);
+                        continue;
+                    }
+                    
                     try {
                         handle.resume();
                         completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
@@ -171,6 +187,16 @@ public:
     
     void schedule_coroutine(std::coroutine_handle<> handle) {
         if (!handle || handle.done() || stop_flag_.load()) return;
+        
+        // 增强的安全检查
+        void* addr = handle.address();
+        if (!addr) return;
+        
+        // 检查地址合理性
+        uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
+        if (addr_val < 0x1000 || addr_val == 0xffffffffffffffff) {
+            return;
+        }
         
         total_coroutines_.fetch_add(1, std::memory_order_relaxed);
         
