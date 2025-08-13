@@ -70,10 +70,8 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
     std::cout << " 开始时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
     std::cout << std::string(50, '-') << std::endl;
 
-    // 启用FlowCoro功能
-    std::cout << " 正在启用FlowCoro功能..." << std::endl;
-    enable_v2_features();
-    std::cout << " FlowCoro功能启用完成" << std::endl;
+    // FlowCoro功能现在默认启用，无需手动调用
+    std::cout << " FlowCoro功能已启用" << std::endl;
 
     // 定义单个请求处理函数 - 暂时去掉sleep_for，先确保when_all正常
     auto handle_single_request = [](int user_id) -> Task<std::string> {

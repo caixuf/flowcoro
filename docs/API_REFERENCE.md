@@ -583,8 +583,6 @@ FlowCoro 内置高性能线程池，自动处理协程调度。
 // 线程池会根据 CPU 核心数自动配置
 // 通常为 32-128 个工作线程
 
-// 手动启用系统（可选）
-enable_v2_features();
 ```
 
 ### 性能特点
@@ -767,7 +765,6 @@ T sync_wait(Task<T> task);
 ```cpp
 // 正确：在main函数中使用sync_wait
 int main() {
-    flowcoro::enable_v2_features();
     
     // 同步阻塞等待协程完成
     auto result = sync_wait(std::move(async_compute(21))); // 阻塞主线程
@@ -1355,8 +1352,6 @@ enum class LogLevel {
 // 设置日志级别
 void set_log_level(LogLevel level);
 
-// 启用FlowCoro v4.0增强功能
-void enable_v2_features();
 
 // 清理协程系统
 void cleanup_coroutine_system();
@@ -1433,9 +1428,6 @@ Task<int> complex_calculation() {
 }
 
 int main() {
-    // 启用FlowCoro增强功能
-    enable_v2_features();
-
     // 执行协程（注意：sync_wait需要move语义）
     auto task = complex_calculation();
     auto result = task.get(); // 或者使用 sync_wait(std::move(task))
