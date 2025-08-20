@@ -16,6 +16,7 @@
 
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -30,6 +31,8 @@
 #include <queue>
 #include <mutex>
 #include <atomic>
+#include <cstdint>
+#include <optional>
 
 #include "core.h"
 #include "lockfree.h"
@@ -67,8 +70,11 @@ struct IoEventHandler {
 class EventLoop {
 private:
     int epoll_fd_{-1};
+    int wakeup_fd_{-1};
     std::atomic<bool> running_{false};
     std::unordered_map<int, std::unique_ptr<IoEventHandler>> handlers_;
+    // 保护 handlers_ 的互斥锁，避免跨线程/回调重入导致的数据竞争与UAF
+    std::mutex handlers_mutex_;
     lockfree::Queue<std::function<void()>> pending_tasks_;
 
     // 定时器支持
@@ -82,6 +88,12 @@ private:
     std::priority_queue<TimerEvent> timer_queue_;
     std::mutex timer_mutex_;
 
+    // 事件循环线程
+    std::thread event_thread_;
+    
+    // 真正的事件循环执行函数
+    void run_loop();
+
 public:
     EventLoop();
     ~EventLoop();
@@ -91,15 +103,19 @@ public:
     EventLoop& operator=(const EventLoop&) = delete;
 
     /**
-     * @brief 启动事件循环
-     * @return 协程任务
+     * @brief 启动事件循环（在独立线程中）
      */
-    Task<void> run();
+    void start();
 
     /**
      * @brief 停止事件循环
      */
     void stop();
+    
+    /**
+     * @brief 等待事件循环停止
+     */
+    void wait_for_stop();
 
     /**
      * @brief 添加文件描述符到事件循环
@@ -272,6 +288,11 @@ private:
     std::unique_ptr<Socket> listen_socket_;
     std::function<Task<void>(std::unique_ptr<Socket>)> connection_handler_;
     std::atomic<bool> running_{false};
+    // 保持accept_loop任务的生命周期，防止listen返回后任务被析构
+    std::optional<Task<void>> accept_task_;
+    // 持有每个连接处理任务，避免其在返回后立刻析构
+    std::mutex active_tasks_mutex_;
+    std::vector<std::shared_ptr<Task<void>>> active_tasks_;
 
 public:
     explicit TcpServer(EventLoop* loop);
@@ -378,6 +399,7 @@ public:
     static void initialize() {
         std::call_once(init_flag_, []() {
             instance_ = std::make_unique<EventLoop>();
+            instance_->start(); // 自动启动事件循环线程
         });
     }
 
@@ -385,10 +407,11 @@ public:
         initialize();
         return *instance_;
     }
-
+    
     static void shutdown() {
         if (instance_) {
             instance_->stop();
+            instance_->wait_for_stop();
             instance_.reset();
         }
     }

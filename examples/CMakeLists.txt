@@ -17,4 +17,8 @@ target_link_libraries(hello_world_concurrent PRIVATE flowcoro_net)
 add_executable(performance_monitor_demo performance_monitor_demo.cpp)
 target_link_libraries(performance_monitor_demo PRIVATE flowcoro_net)
 
+# TCP Echo Server 示例 - 展示网络协程用法
+add_executable(echo_server echo_server.cpp)
+target_link_libraries(echo_server PRIVATE flowcoro_net)
+
 message(STATUS "FlowCoro examples configured successfully")

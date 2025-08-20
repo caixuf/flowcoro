@@ -43,6 +43,13 @@ add_executable(test_when_any test_when_any.cpp)
 # sleep_for专项测试
 add_executable(test_sleep_for test_sleep_for.cpp)
 
+# 网络模块专业测试套件
+add_executable(test_network_professional test_network_professional.cpp)
+
+# 网络集成测试
+add_executable(test_network_integration test_network_integration.cpp)
+target_link_libraries(test_network_integration flowcoro_net Threads::Threads)
+
 # 链接库
 target_link_libraries(test_core
     flowcoro_net
@@ -85,6 +92,12 @@ target_link_libraries(test_sleep_for
     Threads::Threads
 )
 
+# 网络模块专业测试链接库
+target_link_libraries(test_network_professional
+    flowcoro_net
+    Threads::Threads
+)
+
 # 添加测试
 add_test(NAME test_core COMMAND test_core)
 add_test(NAME test_new_features COMMAND test_new_features)
@@ -94,6 +107,7 @@ add_test(NAME test_rpc COMMAND test_rpc)
 add_test(NAME test_cross_thread COMMAND test_cross_thread)
 add_test(NAME test_when_any COMMAND test_when_any)
 add_test(NAME test_sleep_for COMMAND test_sleep_for)
+add_test(NAME test_network_professional COMMAND test_network_professional)
 
 # 设置测试属性
 set_tests_properties(test_core PROPERTIES
@@ -136,8 +150,13 @@ set_tests_properties(test_sleep_for PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_network_professional PROPERTIES
+    TIMEOUT 300
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_network_professional PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 

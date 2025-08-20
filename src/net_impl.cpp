@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cerrno>
+#include <sys/eventfd.h>
+#include <thread>
 
 namespace flowcoro::net {
 
@@ -23,18 +25,60 @@ EventLoop::EventLoop() {
     if (epoll_fd_ == -1) {
         throw std::runtime_error("Failed to create epoll fd: " + std::string(strerror(errno)));
     }
+
+    // 创建eventfd用于唤醒epoll_wait
+    wakeup_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (wakeup_fd_ == -1) {
+        throw std::runtime_error("Failed to create eventfd: " + std::string(strerror(errno)));
+    }
+
+    // 将wakeup_fd添加到epoll监听
+    epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.fd = wakeup_fd_;
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, wakeup_fd_, &ev) == -1) {
+        ::close(wakeup_fd_);
+        wakeup_fd_ = -1;
+        throw std::runtime_error("Failed to add eventfd to epoll: " + std::string(strerror(errno)));
+    }
 }
 
 EventLoop::~EventLoop() {
     stop();
+    wait_for_stop();
     if (epoll_fd_ != -1) {
         ::close(epoll_fd_);
     }
+    if (wakeup_fd_ != -1) {
+        ::close(wakeup_fd_);
+    }
 }
 
-Task<void> EventLoop::run() {
+void EventLoop::start() {
+    if (running_.load(std::memory_order_acquire)) {
+        return; // 已经在运行
+    }
+    
     running_.store(true, std::memory_order_release);
+    event_thread_ = std::thread(&EventLoop::run_loop, this);
+}
 
+void EventLoop::stop() {
+    running_.store(false, std::memory_order_release);
+    // 唤醒epoll_wait让它立即退出
+    if (wakeup_fd_ != -1) {
+        eventfd_t inc = 1;
+        (void)eventfd_write(wakeup_fd_, inc);
+    }
+}
+
+void EventLoop::wait_for_stop() {
+    if (event_thread_.joinable()) {
+        event_thread_.join();
+    }
+}
+
+void EventLoop::run_loop() {
     const int max_events = 1024;
     epoll_event events[max_events];
 
@@ -53,6 +97,10 @@ Task<void> EventLoop::run() {
             if (errno == EINTR) {
                 continue; // 被信号中断，继续循环
             }
+            // 如果不是在运行状态，正常退出
+            if (!running_.load(std::memory_order_acquire)) {
+                break;
+            }
             throw std::runtime_error("epoll_wait failed: " + std::string(strerror(errno)));
         }
 
@@ -61,45 +109,54 @@ Task<void> EventLoop::run() {
             const auto& event = events[i];
             int fd = event.data.fd;
 
-            auto handler_it = handlers_.find(fd);
-            if (handler_it == handlers_.end()) {
-                continue; // 处理器已被移除
+            // 处理唤醒事件：清空eventfd计数
+            if (fd == wakeup_fd_) {
+                eventfd_t val;
+                while (eventfd_read(wakeup_fd_, &val) == 0) {
+                    // 读取直到为空
+                }
+                continue;
             }
 
-            auto& handler = handler_it->second;
+            std::function<void()> on_read_cb;
+            std::function<void()> on_write_cb;
+            std::function<void()> on_error_cb;
+
+            {
+                std::lock_guard<std::mutex> lock(handlers_mutex_);
+                auto handler_it = handlers_.find(fd);
+                if (handler_it == handlers_.end()) {
+                    continue; // 处理器已被移除
+                }
+                // 复制回调，避免回调中修改handlers_引发悬垂
+                on_read_cb = handler_it->second->on_read;
+                on_write_cb = handler_it->second->on_write;
+                on_error_cb = handler_it->second->on_error;
+            }
 
             // 处理错误和挂断事件
             if (event.events & (EPOLLERR | EPOLLHUP)) {
-                if (handler->on_error) {
-                    handler->on_error();
+                if (on_error_cb) {
+                    on_error_cb();
                 }
                 continue;
             }
 
             // 处理读事件
             if (event.events & EPOLLIN) {
-                if (handler->on_read) {
-                    handler->on_read();
+                if (on_read_cb) {
+                    on_read_cb();
                 }
             }
 
             // 处理写事件
             if (event.events & EPOLLOUT) {
-                if (handler->on_write) {
-                    handler->on_write();
+                if (on_write_cb) {
+                    on_write_cb();
                 }
             }
         }
-
-        // 让出控制权给其他协程
-        co_await std::suspend_always{};
     }
-
-    co_return;
-}
-
-void EventLoop::stop() {
-    running_.store(false, std::memory_order_release);
 }
 
 void EventLoop::add_fd(int fd, uint32_t events, std::unique_ptr<IoEventHandler> handler) {
@@ -112,8 +169,11 @@ void EventLoop::add_fd(int fd, uint32_t events, std::unique_ptr<IoEventHandler> 
     }
 
     handler->fd = fd;
-    handler->events = events;
-    handlers_[fd] = std::move(handler);
+    handler->events = event.events;
+    {
+        std::lock_guard<std::mutex> lock(handlers_mutex_);
+        handlers_[fd] = std::move(handler);
+    }
 }
 
 void EventLoop::modify_fd(int fd, uint32_t events) {
@@ -125,9 +185,10 @@ void EventLoop::modify_fd(int fd, uint32_t events) {
         throw std::runtime_error("Failed to modify fd in epoll: " + std::string(strerror(errno)));
     }
 
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
     auto handler_it = handlers_.find(fd);
     if (handler_it != handlers_.end()) {
-        handler_it->second->events = events;
+        handler_it->second->events = event.events;
     }
 }
 
@@ -136,11 +197,17 @@ void EventLoop::remove_fd(int fd) {
         // 可能fd已经关闭，这里不抛异常
     }
 
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
     handlers_.erase(fd);
 }
 
 void EventLoop::post_task(std::function<void()> task) {
     pending_tasks_.enqueue(std::move(task));
+    // 唤醒epoll_wait
+    if (wakeup_fd_ != -1) {
+        eventfd_t inc = 1;
+        (void)eventfd_write(wakeup_fd_, inc);
+    }
 }
 
 void EventLoop::schedule_timer(std::chrono::milliseconds delay, std::function<void()> callback) {
@@ -148,6 +215,12 @@ void EventLoop::schedule_timer(std::chrono::milliseconds delay, std::function<vo
 
     std::lock_guard<std::mutex> lock(timer_mutex_);
     timer_queue_.push({when, std::move(callback)});
+    
+    // 唤醒epoll_wait，让它重新计算超时时间
+    if (wakeup_fd_ != -1) {
+        eventfd_t inc = 1;
+        (void)eventfd_write(wakeup_fd_, inc);
+    }
 }
 
 void EventLoop::process_pending_tasks() {
@@ -186,7 +259,7 @@ int EventLoop::get_next_timeout() {
     std::lock_guard<std::mutex> lock(timer_mutex_);
 
     if (timer_queue_.empty()) {
-        return 100; // 默认100ms超时
+    return 10; // 更低的默认超时提升响应性
     }
 
     auto now = std::chrono::steady_clock::now();
@@ -199,7 +272,7 @@ int EventLoop::get_next_timeout() {
     auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         next_timeout - now).count();
 
-    return std::min(static_cast<int>(timeout_ms), 100);
+    return std::min(static_cast<int>(timeout_ms), 10);
 }
 
 // ============================================================================
@@ -378,16 +451,34 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_read = [&read_promise, this, buffer, size]() {
-        ssize_t result = ::read(fd_, buffer, size);
-        if (result >= 0) {
-            read_promise.set_value(result);
-        } else {
+        ssize_t total = 0;
+        while (true) {
+            ssize_t n = ::read(fd_, buffer + total, size - total);
+            if (n > 0) {
+                total += n;
+                if (static_cast<size_t>(total) == size) {
+                    break; // 满了
+                }
+                // 边沿触发下继续尝试，水平触发下也可提前返回
+                continue;
+            }
+            if (n == 0) {
+                // EOF
+                break;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; // 暂无更多可读
+            }
+            // 错误
             read_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Read failed: " + std::string(strerror(errno)))
                 )
             );
+            loop_->remove_fd(fd_);
+            return;
         }
+        read_promise.set_value(total);
         loop_->remove_fd(fd_);
     };
 
@@ -419,16 +510,29 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_write = [&write_promise, this, data, size]() {
-        ssize_t result = ::write(fd_, data, size);
-        if (result >= 0) {
-            write_promise.set_value(result);
-        } else {
+        ssize_t total = 0;
+        while (true) {
+            ssize_t n = ::write(fd_, data + total, size - total);
+            if (n > 0) {
+                total += n;
+                if (static_cast<size_t>(total) == size) {
+                    break; // 全部写完
+                }
+                continue; // 边沿触发下继续写
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                break; // 暂时不可写
+            }
+            // 错误
             write_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Write failed: " + std::string(strerror(errno)))
                 )
             );
+            loop_->remove_fd(fd_);
+            return;
         }
+        write_promise.set_value(total);
         loop_->remove_fd(fd_);
     };
 
@@ -570,9 +674,18 @@ Task<void> TcpServer::listen(const std::string& host, uint16_t port) {
 
     running_.store(true, std::memory_order_release);
 
-    // 启动接受连接的协程
-    auto accept_task = accept_loop();
-    // Task会自己管理其执行
+    // 启动接受连接的协程并持有其生命周期
+    accept_task_ = accept_loop();
+    
+    // 启动accept_loop协程任务，让它在协程池中执行
+    auto& manager = flowcoro::CoroutineManager::get_instance();
+    if (accept_task_) {
+        // 获取协程handle并调度执行
+        auto handle = accept_task_->handle;
+        if (handle && !handle.done()) {
+            manager.schedule_resume(handle);
+        }
+    }
 
     co_return;
 }
@@ -582,6 +695,11 @@ void TcpServer::stop() {
     if (listen_socket_) {
         listen_socket_->close();
     }
+    // 释放连接处理任务
+    {
+        std::lock_guard<std::mutex> lk(active_tasks_mutex_);
+        active_tasks_.clear();
+    }
 }
 
 Task<void> TcpServer::accept_loop() {
@@ -590,9 +708,35 @@ Task<void> TcpServer::accept_loop() {
             auto client_socket = co_await listen_socket_->accept();
 
             if (connection_handler_) {
-                // 创建连接处理任务并立即启动
+                // 创建连接处理任务并保存，防止任务在临时对象析构时被销毁
                 auto task = connection_handler_(std::move(client_socket));
-                // Task会自己管理其执行
+                auto task_ptr = std::make_shared<Task<void>>(std::move(task));
+                
+                // 调度连接处理任务执行
+                auto& manager = flowcoro::CoroutineManager::get_instance();
+                auto handle = task_ptr->handle;
+                if (handle && !handle.done()) {
+                    manager.schedule_resume(handle);
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lk(active_tasks_mutex_);
+                    active_tasks_.push_back(task_ptr);
+                }
+
+                // 轻量清理：移除已完成/已取消的任务，避免容器无限增长
+                {
+                    std::lock_guard<std::mutex> lk(active_tasks_mutex_);
+                    auto it = active_tasks_.begin();
+                    while (it != active_tasks_.end()) {
+                        const auto& t = *it;
+                        if (!t || t->is_settled()) {
+                            it = active_tasks_.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
             }
         } catch (const std::exception& e) {
             if (running_.load(std::memory_order_acquire)) {
