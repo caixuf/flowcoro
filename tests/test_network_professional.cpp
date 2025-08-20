@@ -397,6 +397,9 @@ public:
 };
 
 int main(int argc, char* argv[]) {
+    // 忽略SIGPIPE信号，避免在socket关闭时程序崩溃
+    signal(SIGPIPE, SIG_IGN);
+    
     uint16_t port = 18888;
     if (argc >= 2) {
         port = static_cast<uint16_t>(std::stoi(argv[1]));
