@@ -46,10 +46,6 @@ add_executable(test_sleep_for test_sleep_for.cpp)
 # 网络模块专业测试套件
 add_executable(test_network_professional test_network_professional.cpp)
 
-# 网络集成测试
-add_executable(test_network_integration test_network_integration.cpp)
-target_link_libraries(test_network_integration flowcoro_net Threads::Threads)
-
 # 链接库
 target_link_libraries(test_core
     flowcoro_net

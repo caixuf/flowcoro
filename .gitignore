@@ -19,15 +19,27 @@ CTestTestfile.cmake
 *ConfigVersion.cmake
 *Targets.cmake
 
-# 可执行文件
+# 可执行文件（编译产物）
 *.exe
 *.out
-test_*
 hello_world
 hello_world_concurrent
 performance_monitor_demo
 professional_flowcoro_benchmark
 simple_benchmark
+echo_server
+
+# 测试可执行文件（构建产物，不包括源码）
+build/tests/test_*
+build/examples/*
+build_*/tests/test_*
+build_*/examples/*
+
+# 但允许跟踪测试源码文件
+!tests/*.cpp
+!tests/*.h
+!examples/*.cpp
+!examples/*.h
 
 # 编译产物
 *.o
