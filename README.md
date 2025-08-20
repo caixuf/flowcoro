@@ -6,14 +6,14 @@ English | [中文](README_zh.md)
 
 ## Features
 
-- **High Performance**: Million+ requests/s with Profile-Guided Optimization (PGO)
-- **Lock-free Architecture**: High-throughput queue operations with smart load balancing  
+- **High Performance**: Optimized for high-throughput scenarios with Profile-Guided Optimization (PGO)
+- **Lock-free Architecture**: Efficient queue operations with load balancing  
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
-- **Batch Processing**: Optimized for large-scale concurrent task execution
-- **Advanced Concurrency**: WhenAny, WhenAll with specialized scheduling performance
+- **Batch Processing**: Designed for concurrent task execution
+- **Advanced Concurrency**: WhenAny, WhenAll operations with optimized scheduling
 - **Channel Communication**: Thread-safe async channels for producer-consumer patterns
-- **Memory Pool**: Redis/Nginx-inspired memory allocation with significant performance boost
-- **PGO Optimization**: Substantial performance improvement through profile-guided compilation
+- **Memory Pool**: Custom memory allocation inspired by Redis/Nginx design
+- **PGO Optimization**: Performance improvements through profile-guided compilation
 
 ## Performance
 
@@ -21,24 +21,24 @@ English | [中文](README_zh.md)
 
 ### Key Performance Highlights
 
-- **Coroutine Creation & Execution**: Industry-leading performance with PGO optimization
-- **Hello World Throughput**: Significantly faster than traditional threading
-- **WhenAny Operations**: Optimized for complex concurrent scheduling
-- **Lock-free Queue**: High-throughput lock-free operations
-- **Memory Pool Allocation**: Much faster than system allocation
-- **HTTP Request Processing**: Industry-leading throughput
+- **Coroutine Creation & Execution**: Optimized performance with PGO
+- **Hello World Throughput**: Competitive performance compared to traditional threading
+- **WhenAny Operations**: Efficient concurrent scheduling
+- **Lock-free Queue**: High-performance operations
+- **Memory Pool Allocation**: Faster than standard system allocation
+- **HTTP Request Processing**: Good throughput performance
 
 ### Core Performance Comparison
 
-FlowCoro demonstrates superior performance compared to Go and Rust in key areas:
+FlowCoro demonstrates good performance compared to Go and Rust in key areas:
 
-- **Coroutine Creation & Execution**: Significantly faster than both Go and Rust
-- **Lock-free Queue**: Better performance than competing implementations
-- **HTTP Request Processing**: Industry-competitive performance
-- **Simple Computation**: Excellent computational performance
+- **Coroutine Creation & Execution**: Competitive performance against Go and Rust
+- **Lock-free Queue**: Good performance characteristics
+- **HTTP Request Processing**: Solid performance metrics
+- **Simple Computation**: Efficient computational performance
 - **Memory Pool Allocation**: Optimized memory management
 
-**Specialized for**: Complex coroutine scheduling, batch processing, concurrent task management
+**Best suited for**: Coroutine-based scheduling, batch processing, concurrent task management
 
 ## Quick Start
 
