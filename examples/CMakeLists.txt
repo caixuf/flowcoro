@@ -21,4 +21,11 @@ target_link_libraries(performance_monitor_demo PRIVATE flowcoro_net)
 add_executable(echo_server echo_server.cpp)
 target_link_libraries(echo_server PRIVATE flowcoro_net)
 
+# 聊天服务器 - 展示多客户端协程处理
+add_executable(chat_server chat_server.cpp)
+target_link_libraries(chat_server PRIVATE flowcoro_net)
+
+# 聊天客户端 - 连接指南
+add_executable(chat_client chat_client.cpp)
+
 message(STATUS "FlowCoro examples configured successfully")
