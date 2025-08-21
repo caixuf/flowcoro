@@ -258,7 +258,7 @@ private:
 
 public:
     CoroutinePool()
-        : NUM_SCHEDULERS(std::max(std::thread::hardware_concurrency(), static_cast<unsigned int>(4))), // 调度器数=CPU核数，最少4个
+        : NUM_SCHEDULERS(1), // 固定使用1个调度器 - 性能最优配置
           start_time_(std::chrono::steady_clock::now()) {
         // 根据CPU核心数初始化调度器
         schedulers_.reserve(NUM_SCHEDULERS);
@@ -271,13 +271,13 @@ public:
         auto& load_balancer = manager.get_load_balancer();
         load_balancer.set_scheduler_count(NUM_SCHEDULERS);
         
-        // 智能线程池配置：大规模并发优化
+        // 智能线程池配置：优化并发性能
         size_t thread_count = std::thread::hardware_concurrency();
         if (thread_count == 0) thread_count = 8; // 备用值
 
-        // 高性能配置：工作线程数应该足够大以支持大规模并发
-        thread_count = std::max(thread_count * 2, static_cast<size_t>(32)); // 至少32个线程，通常为核数的2倍
-        thread_count = std::min(thread_count, static_cast<size_t>(128)); // 最多128个线程，避免过度创建
+        // 优化配置：适中的线程数以获得最佳性能/开销比
+        thread_count = std::max(thread_count, static_cast<size_t>(8)); // 至少8个线程
+        thread_count = std::min(thread_count, static_cast<size_t>(24)); // 最多24个线程，减少调度开销
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 

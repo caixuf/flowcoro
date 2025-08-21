@@ -248,13 +248,51 @@ async fn benchmark_concurrent_tasks() -> BenchmarkResult {
 
 async fn benchmark_echo_server() -> BenchmarkResult {
     let runner = BenchmarkRunner::new();
-    runner.run("Echo Server Simulation", || async {
-        // Simulate echo server processing
-        let message = b"Hello, Echo Server!";
-        let mut processed = vec![0u8; message.len()];
-        processed.copy_from_slice(message);
-        let _ = processed;
-    }).await
+    
+    let result = runner.run("Echo Server Throughput", || async {
+        // Simulate network processing without server startup overhead
+        let data = vec![65u8; 20]; // Fill with 'A' characters
+        
+        // Simulate echo processing
+        let mut echo = Vec::with_capacity(data.len());
+        echo.extend_from_slice(&data);
+        
+        // Simulate checksum validation
+        let sum: u32 = echo.iter().map(|&b| b as u32).sum();
+        let _ = sum;
+    }).await;
+    
+    result
+}
+
+async fn benchmark_concurrent_echo_clients() -> BenchmarkResult {
+    let runner = BenchmarkRunner::new();
+    const CLIENT_COUNT: usize = 100;  // 与FlowCoro和Go保持一致：100个并发任务
+    
+    let result = runner.run("Concurrent Echo Clients", || async {
+        let mut join_set = JoinSet::new();
+        
+        for _ in 0..CLIENT_COUNT {
+            join_set.spawn(async {
+                // 模拟更多的网络处理工作（与FlowCoro和Go一致）
+                let mut work = 0;
+                for j in 0..1000 {  // 1000次循环，与FlowCoro和Go一致
+                    work += j * j;  // 更复杂的计算
+                }
+                
+                // 模拟网络延迟（与FlowCoro和Go的sleep对应）
+                tokio::time::sleep(tokio::time::Duration::from_micros(1)).await;
+                
+                let _ = work; // 防止编译器优化
+            });
+        }
+        
+        while let Some(result) = join_set.join_next().await {
+            let _ = result.unwrap();
+        }
+    }).await;
+    
+    result
 }
 
 fn benchmark_small_data_transfer() -> BenchmarkResult {
@@ -411,6 +449,7 @@ async fn main() {
 
     // Network and IO simulation benchmarks
     results.push(benchmark_echo_server().await);
+    results.push(benchmark_concurrent_echo_clients().await);
     results.push(benchmark_http_processing().await);
 
     // Data transfer benchmarks

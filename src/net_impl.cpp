@@ -495,7 +495,8 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
 }
 
 Task<ssize_t> Socket::write(const char* data, size_t size) {
-    ssize_t result = ::write(fd_, data, size);
+    // 使用 send() 而不是 write()，并设置 MSG_NOSIGNAL 避免 SIGPIPE
+    ssize_t result = ::send(fd_, data, size, MSG_NOSIGNAL);
 
     if (result > 0) {
         co_return result;
@@ -512,7 +513,8 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
     handler->on_write = [&write_promise, this, data, size]() {
         ssize_t total = 0;
         while (true) {
-            ssize_t n = ::write(fd_, data + total, size - total);
+            // 使用 send() 而不是 write()，并设置 MSG_NOSIGNAL 避免 SIGPIPE
+            ssize_t n = ::send(fd_, data + total, size - total, MSG_NOSIGNAL);
             if (n > 0) {
                 total += n;
                 if (static_cast<size_t>(total) == size) {
