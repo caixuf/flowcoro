@@ -255,10 +255,24 @@ struct Task {
             auto& manager = CoroutineManager::get_instance();
             manager.schedule_resume(handle);
             
-            // 等待协程完成（同步等待）
+            // 等待协程完成（优化的自适应等待）
+            auto wait_time = std::chrono::nanoseconds(100); // 从100ns开始
+            int spin_count = 0;
+            const int max_spins = 1000; // 先自旋1000次
+            const auto max_wait = std::chrono::nanoseconds(50000); // 50μs
+            
             while (!handle.done() && !handle.promise().is_cancelled()) {
                 manager.drive(); // 驱动协程池执行
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                
+                // 先进行无睡眠的快速轮询
+                if (spin_count < max_spins) {
+                    ++spin_count;
+                    continue;
+                }
+                
+                // 然后使用自适应睡眠
+                std::this_thread::sleep_for(wait_time);
+                wait_time = std::min(wait_time * 2, max_wait);
             }
         }
 
