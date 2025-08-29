@@ -162,9 +162,16 @@ struct Task<Result<T, E>> {
             }
         }
 
-        // 等待完成
+        // 等待完成 - 快速自适应等待
         while (!handle.done()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            // 快速检查几次
+            for (int i = 0; i < 100 && !handle.done(); ++i) {
+                std::this_thread::yield();
+            }
+            // 如果还没完成，短暂休眠
+            if (!handle.done()) {
+                std::this_thread::sleep_for(std::chrono::microseconds(1));
+            }
         }
 
         // 获取结果
@@ -398,10 +405,18 @@ struct Task<void> {
                 return;
             }
             
-            // 等待协程完成（同步等待）
+            // 等待协程完成（同步等待）- 快速自适应等待
             while (!handle.done() && !handle.promise().is_cancelled()) {
                 manager.drive(); // 驱动协程池执行
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                // 快速检查几次
+                for (int i = 0; i < 100 && !handle.done() && !handle.promise().is_cancelled(); ++i) {
+                    manager.drive();
+                    std::this_thread::yield();
+                }
+                // 如果还没完成，短暂休眠
+                if (!handle.done() && !handle.promise().is_cancelled()) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(1));
+                }
             }
         }
 
@@ -658,7 +673,15 @@ struct Task<std::unique_ptr<T>> {
             
             while (!handle.done() && !handle.promise().is_cancelled()) {
                 manager.drive();
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                // 快速检查几次
+                for (int i = 0; i < 100 && !handle.done() && !handle.promise().is_cancelled(); ++i) {
+                    manager.drive();
+                    std::this_thread::yield();
+                }
+                // 如果还没完成，短暂休眠
+                if (!handle.done() && !handle.promise().is_cancelled()) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(1));
+                }
             }
         }
 

@@ -229,6 +229,68 @@ fn benchmark_simple_computation() -> BenchmarkResult {
     })
 }
 
+// 复杂任务基准测试 - 测试调度器处理复杂计算的能力
+fn benchmark_complex_computation() -> BenchmarkResult {
+    let runner = BenchmarkRunner::new();
+    runner.run_sync("Complex Computation Task", || {
+        // 1. 矩阵运算 (3x3矩阵乘法)
+        let matrix_a = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9];
+        let matrix_b = [9.9, 8.8, 7.7, 6.6, 5.5, 4.4, 3.3, 2.2, 1.1];
+        let mut result_matrix = [0.0; 9];
+        
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    result_matrix[i * 3 + j] += matrix_a[i * 3 + k] * matrix_b[k * 3 + j];
+                }
+            }
+        }
+        
+        // 2. 字符串处理和哈希计算
+        let data = "ComplexTaskBenchmark";
+        let mut hash: u64 = 0;
+        for c in data.chars() {
+            hash = hash.wrapping_mul(31).wrapping_add(c as u64);
+            hash ^= hash >> 16;
+        }
+        
+        // 3. 三角函数计算
+        let mut trig_sum = 0.0;
+        for i in 1..=50 {
+            let angle = i as f64 * 0.1;
+            trig_sum += angle.sin() * angle.cos() + (angle * 0.5).tan();
+        }
+        
+        // 4. 动态内存操作
+        let mut dynamic_data = Vec::with_capacity(100);
+        for i in 0..100 {
+            dynamic_data.push(i * i + (hash % 1000) as i32);
+        }
+        
+        // 5. 复杂条件分支和数据处理
+        let mut final_result = 0.0;
+        for (i, &val) in dynamic_data.iter().enumerate() {
+            if val % 3 == 0 {
+                final_result += (val as f64).sqrt();
+            } else if val % 5 == 0 {
+                final_result += (val as f64 + 1.0).ln();
+            } else {
+                final_result += val as f64 * 0.1;
+            }
+            let _ = i; // 防止编译器优化
+        }
+        
+        // 6. 合并所有计算结果
+        let mut total = 0.0;
+        for val in result_matrix.iter() {
+            total += val;
+        }
+        total += trig_sum + final_result + hash as f64;
+        
+        let _ = total; // 防止编译器优化
+    })
+}
+
 async fn benchmark_concurrent_tasks() -> BenchmarkResult {
     let runner = BenchmarkRunner::new();
     runner.run("Concurrent Tasks (10)", || async {
@@ -440,6 +502,9 @@ async fn main() {
     results.push(benchmark_task_creation_and_execution().await);
     results.push(benchmark_channel_ops().await);
     results.push(benchmark_simple_computation());
+    
+    // 复杂任务基准测试 - 测试调度器能力
+    results.push(benchmark_complex_computation());
 
     // Concurrency benchmarks
     results.push(benchmark_concurrent_tasks().await);

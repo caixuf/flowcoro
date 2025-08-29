@@ -12,10 +12,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 编译选项
+# 编译选项 - 优化版本
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -mtune=native -flto=auto -ffast-math -funroll-loops")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG -march=native")
 
 # PGO (Profile-Guided Optimization) 自动支持
 option(FLOWCORO_ENABLE_PGO "Enable Profile-Guided Optimization" ON)

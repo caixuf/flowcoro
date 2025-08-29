@@ -184,6 +184,170 @@ func benchmarkSimpleComputation() BenchmarkResult {
 	})
 }
 
+// Complex computation benchmark - 测试调度器处理复杂计算的能力
+func benchmarkComplexComputation() BenchmarkResult {
+	runner := NewBenchmarkRunner()
+	return runner.Run("Complex Computation Task", func() {
+		// 1. 矩阵运算 (3x3矩阵乘法)
+		matrixA := [9]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9}
+		matrixB := [9]float64{9.9, 8.8, 7.7, 6.6, 5.5, 4.4, 3.3, 2.2, 1.1}
+		var resultMatrix [9]float64
+		
+		for i := 0; i < 3; i++ {
+			for j := 0; j < 3; j++ {
+				for k := 0; k < 3; k++ {
+					resultMatrix[i*3+j] += matrixA[i*3+k] * matrixB[k*3+j]
+				}
+			}
+		}
+		
+		// 2. 字符串处理和哈希计算
+		data := "ComplexTaskBenchmark"
+		hash := uint64(0)
+		for _, c := range data {
+			hash = hash*31 + uint64(c)
+			hash ^= (hash >> 16)
+		}
+		
+		// 3. 三角函数计算
+		trigSum := 0.0
+		for i := 1; i <= 50; i++ {
+			angle := float64(i) * 0.1
+			trigSum += math.Sin(angle)*math.Cos(angle) + math.Tan(angle*0.5)
+		}
+		
+		// 4. 动态内存操作
+		dynamicData := make([]int, 100)
+		for i := 0; i < 100; i++ {
+			dynamicData[i] = i*i + int(hash%1000)
+		}
+		
+		// 5. 复杂条件分支和数据处理
+		finalResult := 0.0
+		for i, val := range dynamicData {
+			if val%3 == 0 {
+				finalResult += math.Sqrt(float64(val))
+			} else if val%5 == 0 {
+				finalResult += math.Log(float64(val + 1))
+			} else {
+				finalResult += float64(val) * 0.1
+			}
+			_ = i // 防止编译器优化
+		}
+		
+		// 6. 合并所有计算结果
+		total := 0.0
+		for _, val := range resultMatrix {
+			total += val
+		}
+		total += trigSum + finalResult + float64(hash)
+		
+		_ = total // 防止编译器优化
+	})
+}
+
+// Data processing task benchmark (equivalent to FlowCoro)
+func benchmarkDataProcessingTask() BenchmarkResult {
+	runner := NewBenchmarkRunner()
+	return runner.Run("Data Processing Task", func() {
+		data := make([]int, 50)
+		for i := range data {
+			data[i] = i * 2
+		}
+		
+		sum := 0
+		for _, v := range data {
+			sum += v * v
+		}
+		
+		result := float64(sum) / float64(len(data))
+		_ = result
+	})
+}
+
+// Request handler task benchmark (equivalent to FlowCoro)
+func benchmarkRequestHandlerTask() BenchmarkResult {
+	runner := NewBenchmarkRunner()
+	return runner.Run("Request Handler Task", func() {
+		// Simulate request validation
+		valid := true
+		for i := 0; i < 20; i++ {
+			if i%7 == 0 {
+				valid = !valid
+			}
+		}
+		
+		// Simulate data processing
+		if valid {
+			result := 0
+			for i := 0; i < 30; i++ {
+				result += i * i
+			}
+			_ = result
+		}
+	})
+}
+
+// Batch processing task benchmark (equivalent to FlowCoro)
+func benchmarkBatchProcessingTask() BenchmarkResult {
+	runner := NewBenchmarkRunner()
+	return runner.Run("Batch Processing Task", func() {
+		batch := make([]int, 100)
+		for i := range batch {
+			batch[i] = i
+		}
+		
+		// Process each item
+		results := make([]int, len(batch))
+		for i, item := range batch {
+			temp := item
+			for j := 0; j < 5; j++ {
+				temp = temp*2 + 1
+			}
+			results[i] = temp % 1000
+		}
+		
+		// Calculate final result
+		sum := 0
+		for _, r := range results {
+			sum += r
+		}
+		_ = sum
+	})
+}
+
+// Concurrent task processing benchmark (equivalent to FlowCoro)
+func benchmarkConcurrentTaskProcessing() BenchmarkResult {
+	runner := NewBenchmarkRunner()
+	return runner.Run("Concurrent Task Processing", func() {
+		var wg sync.WaitGroup
+		results := make([]int, 5)
+		
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				
+				// Each goroutine does some work
+				sum := 0
+				for j := 0; j < 50; j++ {
+					sum += (idx + 1) * j
+				}
+				results[idx] = sum
+			}(i)
+		}
+		
+		wg.Wait()
+		
+		// Combine results
+		total := 0
+		for _, r := range results {
+			total += r
+		}
+		_ = total
+	})
+}
+
 // Concurrent goroutines benchmark
 func benchmarkConcurrentGoroutines() BenchmarkResult {
 	runner := NewBenchmarkRunner()
@@ -416,6 +580,14 @@ func main() {
 	results = append(results, benchmarkGoroutineCreationAndExecution())
 	results = append(results, benchmarkChannelOps())
 	results = append(results, benchmarkSimpleComputation())
+	
+	// 复杂任务基准测试 - 测试调度器能力
+	results = append(results, benchmarkComplexComputation())
+	
+	results = append(results, benchmarkDataProcessingTask())
+	results = append(results, benchmarkRequestHandlerTask())
+	results = append(results, benchmarkBatchProcessingTask())
+	results = append(results, benchmarkConcurrentTaskProcessing())
 
 	// Concurrency benchmarks
 	results = append(results, benchmarkConcurrentGoroutines())

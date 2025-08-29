@@ -75,8 +75,8 @@ struct Task {
         }
 
         void return_value(T v) noexcept {
-            // 快速路径：通常情况下协程没有被取消或销毁
-            if (!is_cancelled_.load(std::memory_order_relaxed)) [[likely]] {
+            // 使用更快的路径，减少分支预测失误
+            if (__builtin_expect(!is_cancelled_.load(std::memory_order_relaxed), true)) [[likely]] {
                 value = std::move(v);
             }
         }
@@ -211,17 +211,25 @@ struct Task {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
 
-            if (!handle.promise().is_destroyed()) {
-                // 标记为销毁状态
-                handle.promise().is_destroyed_.store(true, std::memory_order_release);
+            // 使用原子操作检查和设置销毁状态，避免重复销毁
+            bool expected = false;
+            if (!handle.promise().is_destroyed_.compare_exchange_strong(expected, true, std::memory_order_release)) {
+                // 已经在销毁中，直接返回
+                handle = nullptr;
+                return;
             }
 
-            // 延迟销毁 - 避免在协程执行栈中销毁
-            if (handle.done()) {
-                handle.destroy();
-            } else {
-                // 安排在下一个调度周期销毁
-                manager.schedule_destroy(handle);
+            try {
+                // 延迟销毁 - 避免在协程执行栈中销毁
+                if (handle.done()) {
+                    handle.destroy();
+                } else {
+                    // 安排在下一个调度周期销毁
+                    manager.schedule_destroy(handle);
+                }
+            } catch (...) {
+                // 忽略销毁过程中的异常
+                LOG_ERROR("Exception during safe_destroy");
             }
             handle = nullptr;
         }
