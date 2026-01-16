@@ -2,7 +2,7 @@
 
 C++20
 
-[English](README.md) | 
+[English](README.md) | 中文
 
 ## 
 
