@@ -250,6 +250,29 @@ public:
         return queue_size_.load(std::memory_order_relaxed);
     }
     
+    // 工作窃取：尝试从队列中获取一批任务给其他调度器
+    size_t try_steal_work(std::vector<std::coroutine_handle<>>& stolen_tasks, size_t max_steal = 32) {
+        if (queue_size_.load(std::memory_order_relaxed) <= 1) {
+            return 0; // 队列太小，不值得窃取
+        }
+        
+        size_t stolen_count = 0;
+        std::coroutine_handle<> handle;
+        
+        // 窃取一半的任务（最多max_steal个）
+        size_t target_steal = std::min(queue_size_.load() / 2, max_steal);
+        
+        while (stolen_count < target_steal && coroutine_queue_.dequeue(handle)) {
+            if (handle && !handle.done()) {
+                stolen_tasks.push_back(handle);
+                stolen_count++;
+                queue_size_.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+        
+        return stolen_count;
+    }
+    
     size_t get_total_coroutines() const { return total_coroutines_.load(); }
     size_t get_completed_coroutines() const { return completed_coroutines_.load(); }
     size_t get_scheduler_id() const { return scheduler_id_; }
