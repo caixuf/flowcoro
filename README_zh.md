@@ -175,6 +175,7 @@ suspend_never  负载均衡  无锁队列  执行
 - [快速开始指南](docs/QUICK_START.md)
 - [API参考](docs/API_REFERENCE.md)
 - [架构设计](docs/ARCHITECTURE.md)
+- [调度系统设计](docs/SCHEDULING_DESIGN.md) - **调度系统完整指南**
 - [性能数据](docs/PERFORMANCE_DATA.md)
 - [PGO优化指南](docs/PGO_GUIDE.md)
 

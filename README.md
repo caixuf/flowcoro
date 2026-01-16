@@ -175,6 +175,7 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 - [Quick Start Guide](docs/QUICK_START.md)
 - [API Reference](docs/API_REFERENCE.md)
 - [Architecture Design](docs/ARCHITECTURE.md)
+- [Scheduling Design](docs/SCHEDULING_DESIGN.md) - **Comprehensive guide to scheduling system**
 - [Performance Data](docs/PERFORMANCE_DATA.md)
 - [PGO Optimization Guide](docs/PGO_GUIDE.md)
 
