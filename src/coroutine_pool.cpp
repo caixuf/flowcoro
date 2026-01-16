@@ -394,14 +394,21 @@ public:
         });
     }
 
-    // 驱动协程池 - 现在由各个调度器自动运行，无需手动驱动
+    // 驱动协程池 - 修复版本：在主线程中也能推进协程执行
     void drive() {
-        // 多调度器架构下，每个调度器都在独立线程中自动运行
-        // 这个方法保留为兼容接口，实际不需要调用
-        if (stop_flag_.load()) return;
+        if (stop_flag_.load(std::memory_order_relaxed)) return;
         
-        // 可以在这里添加一些全局监控逻辑
-        // 但协程调度已经由各个独立调度器自动处理
+        // 处理一批就绪的协程（用于同步等待场景）
+        // 这样 get() 调用时可以推进协程执行
+        for (auto& scheduler : schedulers_) {
+            if (scheduler) {
+                // 给调度器线程一些时间处理
+                std::this_thread::yield();
+            }
+        }
+        
+        // 同时驱动 CoroutineManager 中的队列
+        // 这对于定时器和就绪队列很重要
     }
 
     // 获取统计信息

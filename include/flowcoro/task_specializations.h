@@ -389,12 +389,19 @@ struct Task<void> {
             return;
         }
 
-        // 支持懒执行：启动协程并驱动事件循环
-        if (!handle.done() && !handle.promise().is_cancelled()) {
-            // 获取协程管理器实例
+        // 🔧 关键修复：先检查是否已完成
+        if (handle.done()) {
+            // 检查是否有错误
+            if (handle.promise().safe_has_error()) {
+                LOG_ERROR("Task<void> execution failed");
+            }
+            return;
+        }
+
+        // 只有在未完成时才进入调度逻辑
+        if (!handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
             
-            // 启动协程（如果尚未开始）- 使用协程管理器调度
             try {
                 manager.schedule_resume(handle);
             } catch (const std::exception& e) {
@@ -405,17 +412,31 @@ struct Task<void> {
                 return;
             }
             
-            // 等待协程完成（同步等待）- 快速自适应等待
+            // 🔧 修复：添加超时保护
+            auto start_time = std::chrono::steady_clock::now();
+            const auto timeout = std::chrono::seconds(5);
+            
+            auto wait_time = std::chrono::microseconds(1);
+            const auto max_wait = std::chrono::microseconds(100);
+            size_t spin_count = 0;
+            const size_t max_spins = 100;
+            
             while (!handle.done() && !handle.promise().is_cancelled()) {
-                manager.drive(); // 驱动协程池执行
-                // 快速检查几次
-                for (int i = 0; i < 100 && !handle.done() && !handle.promise().is_cancelled(); ++i) {
-                    manager.drive();
-                    std::this_thread::yield();
+                // 超时检查
+                auto elapsed = std::chrono::steady_clock::now() - start_time;
+                if (elapsed > timeout) {
+                    LOG_ERROR("Task<void>::get: Timeout after 5 seconds");
+                    return;
                 }
-                // 如果还没完成，短暂休眠
-                if (!handle.done() && !handle.promise().is_cancelled()) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(1));
+                
+                manager.drive();
+                
+                if (spin_count < max_spins) {
+                    ++spin_count;
+                    std::this_thread::yield();
+                } else {
+                    std::this_thread::sleep_for(wait_time);
+                    wait_time = std::min(wait_time * 2, max_wait);
                 }
             }
         }
