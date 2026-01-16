@@ -70,8 +70,10 @@ struct BenchmarkStats {
             (measurements[n/2-1] + measurements[n/2]) / 2.0 : 
             measurements[n/2];
         
-        p95_ns = measurements[static_cast<size_t>(n * 0.95)];
-        p99_ns = measurements[static_cast<size_t>(n * 0.99)];
+        size_t p95_idx = std::min(static_cast<size_t>(n * 0.95), n - 1);
+        size_t p99_idx = std::min(static_cast<size_t>(n * 0.99), n - 1);
+        p95_ns = measurements[p95_idx];
+        p99_ns = measurements[p99_idx];
         
         // 计算标准差
         double variance = 0.0;
@@ -938,11 +940,10 @@ int main() {
     std::vector<BenchmarkResult> results;
     
     // Core coroutine benchmarks
+    results.emplace_back(benchmark_simple_computation());
+    results.emplace_back(benchmark_coroutine_creation_only());
     results.emplace_back(benchmark_coroutine_creation_and_execution());
     results.emplace_back(benchmark_void_coroutine());
-    
-    // Core computation benchmarks (与Go/Rust保持一致)
-    results.emplace_back(benchmark_simple_computation());
     
     // 复杂任务基准测试 - 测试调度器能力
     results.emplace_back(benchmark_complex_computation());
@@ -959,6 +960,11 @@ int main() {
     
     // Memory and data structure benchmarks
     results.emplace_back(benchmark_lockfree_queue());
+    results.emplace_back(benchmark_atomic_operations());
+    results.emplace_back(benchmark_mutex_lock());
+    
+    // System call benchmarks
+    results.emplace_back(benchmark_thread_yield());
     results.emplace_back(benchmark_memory_allocation());
     results.emplace_back(benchmark_memory_pool_allocation());
     
