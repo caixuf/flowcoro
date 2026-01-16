@@ -394,21 +394,29 @@ public:
         });
     }
 
-    // 驱动协程池 - 修复版本：在主线程中也能推进协程执行
+    // 驱动协程池 - 增强版本：主动处理队列并推进协程执行
     void drive() {
         if (stop_flag_.load(std::memory_order_relaxed)) return;
         
-        // 处理一批就绪的协程（用于同步等待场景）
-        // 这样 get() 调用时可以推进协程执行
+        // 获取协程管理器并处理其队列
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        
+        // 1. 处理定时器队列 - 将到期的定时器移到就绪队列
+        manager.process_timer_queue();
+        
+        // 2. 处理就绪队列 - 立即执行就绪的协程
+        manager.process_ready_queue();
+        
+        // 3. 给调度器线程一些时间处理
+        // 这对于异步任务很重要
         for (auto& scheduler : schedulers_) {
             if (scheduler) {
-                // 给调度器线程一些时间处理
                 std::this_thread::yield();
             }
         }
         
-        // 同时驱动 CoroutineManager 中的队列
-        // 这对于定时器和就绪队列很重要
+        // 4. 处理待销毁的协程 - 清理资源
+        manager.process_pending_tasks();
     }
 
     // 获取统计信息
