@@ -2,7 +2,7 @@
 
 A high-performance C++20 coroutine library designed for batch task processing and high-throughput scenarios.
 
-English | [中文](README_zh.md)
+English | [](README_zh.md)
 
 ## Features
 

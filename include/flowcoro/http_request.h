@@ -8,13 +8,13 @@
 
 namespace flowcoro {
 
-// 使用libcurl实现的HTTP请求类
+// libcurlHTTP
 class HttpRequest : public INetworkRequest {
 public:
     HttpRequest() {
-        // 启动工作线程
+        // 
         worker_thread_ = std::thread(&HttpRequest::worker_thread_func, this);
-        // 初始化libcurl
+        // libcurl
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
 
@@ -27,19 +27,19 @@ public:
         if (worker_thread_.joinable()) {
             worker_thread_.join();
         }
-        // 清理libcurl
+        // libcurl
         curl_global_cleanup();
     }
 
     void request(const std::string& url, const std::function<void(const std::string&)>& callback) override {
-        // 创建新的CURL句柄
+        // CURL
         CURL* curl = curl_easy_init();
         if (!curl) {
-            // 错误处理
+            // 
             return;
         }
 
-        // 添加到请求队列
+        // 
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             requests_queue_.push({url, curl, callback});
@@ -60,7 +60,7 @@ private:
     std::condition_variable queue_condition_;
     bool stop_worker_thread_ = false;
 
-    // 工作线程函数
+    // 
     void worker_thread_func() {
         while (true) {
             RequestInfo request;
@@ -82,7 +82,7 @@ private:
                 }
             }
 
-            // 执行网络请求
+            // 
             ResponseData response_data;
             curl_easy_setopt(request.curl, CURLOPT_URL, request.url.c_str());
             curl_easy_setopt(request.curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -90,12 +90,12 @@ private:
 
             CURLcode res = curl_easy_perform(request.curl);
 
-            // 处理响应
+            // 
             if (res == CURLE_OK && request.callback) {
                 request.callback(response_data.data);
             }
 
-            // 清理
+            // 
             curl_easy_cleanup(request.curl);
         }
     }
@@ -105,7 +105,7 @@ private:
         size_t total_size = 0;
     };
 
-    // libcurl写回调函数
+    // libcurl
     static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
         size_t realsize = size * nmemb;
         ResponseData* response = static_cast<ResponseData*>(userp);

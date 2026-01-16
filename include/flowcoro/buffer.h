@@ -9,22 +9,22 @@
 
 namespace flowcoro {
 
-// 缓存行大小常量
+// 
 static constexpr size_t CACHE_LINE_SIZE = 64;
 
-// 内存对齐分配器 - 使用内存池优化
+//  - 
 template<size_t Alignment = CACHE_LINE_SIZE>
 class AlignedAllocator {
 public:
     static void* allocate(size_t size) {
-        // 对于小对象（<= 1024字节）使用内存池
+        // <= 1024
         if (size <= 1024) {
             void* ptr = pool_malloc(size);
             if (!ptr) throw std::bad_alloc();
             return ptr;
         }
         
-        // 大对象使用对齐分配
+        // 
         void* ptr = nullptr;
         if (posix_memalign(&ptr, Alignment, size) != 0) {
             throw std::bad_alloc();
@@ -33,47 +33,47 @@ public:
     }
 
     static void deallocate(void* ptr) {
-        // 内存池会自动处理，如果不是内存池分配的会fallback到系统释放
+        // fallback
         pool_free(ptr);
     }
 };
 
-// 缓存友好的循环缓冲区
+// 
 template<typename T, size_t Capacity>
 class alignas(CACHE_LINE_SIZE) CacheFriendlyRingBuffer {
 private:
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be power of 2");
     static constexpr size_t MASK = Capacity - 1;
 
-    // 分离读写指针到不同缓存行，避免false sharing
+    // false sharing
     alignas(CACHE_LINE_SIZE) std::atomic<size_t> write_pos_{0};
     alignas(CACHE_LINE_SIZE) std::atomic<size_t> read_pos_{0};
 
-    // 数据存储区域，对齐到缓存行
+    // 
     alignas(CACHE_LINE_SIZE) T data_[Capacity];
 
 public:
     CacheFriendlyRingBuffer() {
-        // 初始化数据
+        // 
         for (size_t i = 0; i < Capacity; ++i) {
             new (&data_[i]) T();
         }
     }
 
     ~CacheFriendlyRingBuffer() {
-        // 清理数据
+        // 
         for (size_t i = 0; i < Capacity; ++i) {
             data_[i].~T();
         }
     }
 
-    // 写入数据（生产者）
+    // 
     bool push(const T& item) {
         const size_t write_pos = write_pos_.load(std::memory_order_relaxed);
         const size_t next_write_pos = (write_pos + 1) & MASK;
 
         if (next_write_pos == read_pos_.load(std::memory_order_acquire)) {
-            return false; // 缓冲区满
+            return false; // 
         }
 
         data_[write_pos] = item;
@@ -81,13 +81,13 @@ public:
         return true;
     }
 
-    // 移动语义版本
+    // 
     bool push(T&& item) {
         const size_t write_pos = write_pos_.load(std::memory_order_relaxed);
         const size_t next_write_pos = (write_pos + 1) & MASK;
 
         if (next_write_pos == read_pos_.load(std::memory_order_acquire)) {
-            return false; // 缓冲区满
+            return false; // 
         }
 
         data_[write_pos] = std::move(item);
@@ -95,12 +95,12 @@ public:
         return true;
     }
 
-    // 读取数据（消费者）
+    // 
     bool pop(T& item) {
         const size_t read_pos = read_pos_.load(std::memory_order_relaxed);
 
         if (read_pos == write_pos_.load(std::memory_order_acquire)) {
-            return false; // 缓冲区空
+            return false; // 
         }
 
         item = std::move(data_[read_pos]);
@@ -108,18 +108,18 @@ public:
         return true;
     }
 
-    // 批量操作 - 更好的缓存局部性
+    //  - 
     size_t push_batch(const T* items, size_t count) {
         const size_t write_pos = write_pos_.load(std::memory_order_relaxed);
         const size_t read_pos = read_pos_.load(std::memory_order_acquire);
 
-        // 计算可用空间
+        // 
         const size_t available = (read_pos - write_pos - 1) & MASK;
         const size_t to_push = std::min(count, available);
 
         if (to_push == 0) return 0;
 
-        // 连续写入，减少缓存miss
+        // miss
         for (size_t i = 0; i < to_push; ++i) {
             data_[(write_pos + i) & MASK] = items[i];
         }
@@ -132,13 +132,13 @@ public:
         const size_t read_pos = read_pos_.load(std::memory_order_relaxed);
         const size_t write_pos = write_pos_.load(std::memory_order_acquire);
 
-        // 计算可读数据量
+        // 
         const size_t available = (write_pos - read_pos) & MASK;
         const size_t to_pop = std::min(count, available);
 
         if (to_pop == 0) return 0;
 
-        // 连续读取，减少缓存miss
+        // miss
         for (size_t i = 0; i < to_pop; ++i) {
             items[i] = std::move(data_[(read_pos + i) & MASK]);
         }
@@ -147,7 +147,7 @@ public:
         return to_pop;
     }
 
-    // 查询状态
+    // 
     bool empty() const {
         return read_pos_.load(std::memory_order_acquire) ==
                write_pos_.load(std::memory_order_acquire);
@@ -168,7 +168,7 @@ public:
     static constexpr size_t capacity() { return Capacity; }
 };
 
-// 分层缓存友好的内存池
+// 
 template<typename T>
 class CacheFriendlyMemoryPool {
 private:
@@ -180,16 +180,16 @@ private:
         Block(Args&&... args) : data(std::forward<Args>(args)...) {}
     };
 
-    // 分离到不同缓存行
+    // 
     alignas(CACHE_LINE_SIZE) std::atomic<Block*> free_head_{nullptr};
     alignas(CACHE_LINE_SIZE) std::atomic<size_t> pool_size_{0};
     alignas(CACHE_LINE_SIZE) std::atomic<size_t> allocated_count_{0};
 
-    // 预分配的内存块
+    // 
     std::vector<std::unique_ptr<Block[]>> allocated_chunks_;
     std::mutex chunks_mutex_;
 
-    static constexpr size_t CHUNK_SIZE = 64; // 每次分配64个对象
+    static constexpr size_t CHUNK_SIZE = 64; // 64
 
 public:
     CacheFriendlyMemoryPool() {
@@ -198,7 +198,7 @@ public:
 
     ~CacheFriendlyMemoryPool() = default;
 
-    // 获取对象
+    // 
     template<typename... Args>
     std::unique_ptr<T, std::function<void(T*)>> acquire(Args&&... args) {
         Block* block = free_head_.load(std::memory_order_acquire);
@@ -206,13 +206,13 @@ public:
         while (block) {
             Block* next = block->next.load(std::memory_order_relaxed);
             if (free_head_.compare_exchange_weak(block, next, std::memory_order_release)) {
-                // 成功获取到块
+                // 
                 allocated_count_.fetch_add(1, std::memory_order_relaxed);
 
-                // 构造对象
+                // 
                 new (&block->data) T(std::forward<Args>(args)...);
 
-                // 返回带自定义删除器的unique_ptr
+                // unique_ptr
                 return std::unique_ptr<T, std::function<void(T*)>>(
                     &block->data,
                     [this, block](T* ptr) {
@@ -223,12 +223,12 @@ public:
             }
         }
 
-        // 池为空，扩展后重试
+        // 
         expand_pool();
         return acquire(std::forward<Args>(args)...);
     }
 
-    // 获取池统计信息
+    // 
     struct PoolStats {
         size_t pool_size;
         size_t allocated_count;
@@ -258,16 +258,16 @@ private:
     void expand_pool() {
         std::lock_guard<std::mutex> lock(chunks_mutex_);
 
-        // 分配新的内存块
+        // 
         auto chunk = std::make_unique<Block[]>(CHUNK_SIZE);
 
-        // 链接所有块
+        // 
         for (size_t i = 0; i < CHUNK_SIZE - 1; ++i) {
             chunk[i].next.store(&chunk[i + 1], std::memory_order_relaxed);
         }
         chunk[CHUNK_SIZE - 1].next.store(nullptr, std::memory_order_relaxed);
 
-        // 添加到空闲链表
+        // 
         Block* old_head = free_head_.load(std::memory_order_relaxed);
         do {
             chunk[CHUNK_SIZE - 1].next.store(old_head, std::memory_order_relaxed);
@@ -278,17 +278,17 @@ private:
     }
 };
 
-// 缓存友好的字符串缓冲区
+// 
 class StringBuffer {
 private:
     static constexpr size_t DEFAULT_CAPACITY = 4096;
-    static constexpr size_t MAX_SMALL_STRING = 23; // SSO阈值
+    static constexpr size_t MAX_SMALL_STRING = 23; // SSO
 
     alignas(CACHE_LINE_SIZE) char* data_;
     alignas(CACHE_LINE_SIZE) size_t capacity_;
     alignas(CACHE_LINE_SIZE) size_t size_;
 
-    // 小字符串优化
+    // 
     alignas(CACHE_LINE_SIZE) char small_buffer_[MAX_SMALL_STRING + 1];
     bool use_small_buffer_;
 
@@ -312,7 +312,7 @@ public:
         }
     }
 
-    // 禁止拷贝，允许移动
+    // 
     StringBuffer(const StringBuffer&) = delete;
     StringBuffer& operator=(const StringBuffer&) = delete;
 
@@ -331,7 +331,7 @@ public:
         other.capacity_ = 0;
     }
 
-    // 追加字符串
+    // 
     void append(const char* str, size_t len) {
         ensure_capacity(size_ + len + 1);
         std::memcpy(data_ + size_, str, len);
@@ -349,7 +349,7 @@ public:
         data_[size_] = '\0';
     }
 
-    // 格式化追加
+    // 
     template<typename... Args>
     void append_format(const char* format, Args&&... args) {
         char temp_buffer[1024];
@@ -359,27 +359,27 @@ public:
         }
     }
 
-    // 清空缓冲区
+    // 
     void clear() {
         size_ = 0;
         data_[0] = '\0';
     }
 
-    // 重置大小
+    // 
     void resize(size_t new_size) {
         ensure_capacity(new_size + 1);
         size_ = new_size;
         data_[size_] = '\0';
     }
 
-    // 访问器
+    // 
     const char* c_str() const { return data_; }
     const char* data() const { return data_; }
     size_t size() const { return size_; }
     size_t capacity() const { return capacity_; }
     bool empty() const { return size_ == 0; }
 
-    // 转换为std::string
+    // std::string
     std::string to_string() const {
         return std::string(data_, size_);
     }
@@ -388,21 +388,21 @@ private:
     void ensure_capacity(size_t required) {
         if (required <= capacity_) return;
 
-        // 计算新容量（2的倍数增长）
+        // 2
         size_t new_capacity = capacity_;
         while (new_capacity < required) {
             new_capacity *= 2;
         }
 
         if (use_small_buffer_ && new_capacity > MAX_SMALL_STRING) {
-            // 从小缓冲区迁移到大缓冲区
+            // 
             char* new_data = static_cast<char*>(AlignedAllocator<>::allocate(new_capacity));
             std::memcpy(new_data, small_buffer_, size_ + 1);
             data_ = new_data;
             use_small_buffer_ = false;
             capacity_ = new_capacity;
         } else if (!use_small_buffer_) {
-            // 扩展大缓冲区
+            // 
             char* new_data = static_cast<char*>(AlignedAllocator<>::allocate(new_capacity));
             std::memcpy(new_data, data_, size_ + 1);
             AlignedAllocator<>::deallocate(data_);

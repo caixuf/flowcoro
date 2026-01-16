@@ -14,7 +14,7 @@
 
 namespace flowcoro::db {
 
-// 简单的JSON-like数据格式
+// JSON-like
 struct SimpleDocument {
     std::unordered_map<std::string, std::string> fields;
     std::string id;
@@ -35,7 +35,7 @@ struct SimpleDocument {
         return fields.find(key) != fields.end();
     }
 
-    // 序列化为简单格式
+    // 
     std::string serialize() const {
         std::ostringstream ss;
         ss << "{\"id\":\"" << id << "\"";
@@ -46,11 +46,11 @@ struct SimpleDocument {
         return ss.str();
     }
 
-    // 从简单格式反序列化
+    // 
     static SimpleDocument deserialize(const std::string& data) {
         SimpleDocument doc;
 
-        // 简单的JSON解析（仅支持字符串字段）
+        // JSON
         size_t start = data.find("{");
         size_t end = data.find("}", start);
         if (start == std::string::npos || end == std::string::npos) {
@@ -68,7 +68,7 @@ struct SimpleDocument {
             std::string key = item.substr(0, colon);
             std::string value = item.substr(colon + 1);
 
-            // 去除引号
+            // 
             auto remove_quotes = [](std::string& s) {
                 if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
                     s = s.substr(1, s.size() - 2);
@@ -89,7 +89,7 @@ struct SimpleDocument {
     }
 };
 
-// 文件数据库集合
+// 
 class FileCollection {
 private:
     std::string collection_name_;
@@ -100,12 +100,12 @@ public:
     FileCollection(const std::string& db_path, const std::string& collection_name)
         : collection_name_(collection_name) {
 
-        // 确保数据库目录存在
+        // 
         std::filesystem::create_directories(db_path);
         file_path_ = db_path + "/" + collection_name + ".db";
     }
 
-    // 插入文档
+    // 
     Task<bool> insert(const SimpleDocument& doc) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -119,7 +119,7 @@ public:
         co_return true;
     }
 
-    // 查找文档
+    // 
     Task<SimpleDocument> find_by_id(const std::string& id) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -139,7 +139,7 @@ public:
         co_return SimpleDocument();
     }
 
-    // 查找所有文档
+    // 
     Task<std::vector<SimpleDocument>> find_all() {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -159,7 +159,7 @@ public:
         co_return results;
     }
 
-    // 按字段查找
+    // 
     Task<std::vector<SimpleDocument>> find_by_field(const std::string& field, const std::string& value) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -182,13 +182,13 @@ public:
         co_return results;
     }
 
-    // 更新文档（简单实现：重写整个文件）
+    // 
     Task<bool> update_by_id(const std::string& id, const SimpleDocument& new_doc) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         std::vector<SimpleDocument> all_docs;
 
-        // 读取所有文档
+        // 
         std::ifstream read_file(file_path_);
         if (read_file.is_open()) {
             std::string line;
@@ -205,7 +205,7 @@ public:
             read_file.close();
         }
 
-        // 重写文件
+        // 
         std::ofstream write_file(file_path_);
         if (!write_file.is_open()) {
             co_return false;
@@ -219,13 +219,13 @@ public:
         co_return true;
     }
 
-    // 删除文档
+    // 
     Task<bool> delete_by_id(const std::string& id) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         std::vector<SimpleDocument> remaining_docs;
 
-        // 读取除了要删除的文档之外的所有文档
+        // 
         std::ifstream read_file(file_path_);
         if (read_file.is_open()) {
             std::string line;
@@ -240,7 +240,7 @@ public:
             read_file.close();
         }
 
-        // 重写文件
+        // 
         std::ofstream write_file(file_path_);
         if (!write_file.is_open()) {
             co_return false;
@@ -254,7 +254,7 @@ public:
         co_return true;
     }
 
-    // 统计文档数量
+    // 
     Task<size_t> count() {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -273,7 +273,7 @@ public:
     }
 };
 
-// 简单文件数据库
+// 
 class SimpleFileDB {
 private:
     std::string db_path_;
@@ -285,7 +285,7 @@ public:
         std::filesystem::create_directories(db_path_);
     }
 
-    // 获取集合
+    // 
     std::shared_ptr<FileCollection> collection(const std::string& name) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -299,7 +299,7 @@ public:
         return new_collection;
     }
 
-    // 列出所有集合
+    // 
     std::vector<std::string> list_collections() {
         std::vector<std::string> names;
 
@@ -311,13 +311,13 @@ public:
                 }
             }
         } catch (const std::filesystem::filesystem_error&) {
-            // 忽略文件系统错误
+            // 
         }
 
         return names;
     }
 
-    // 删除集合
+    // 
     bool drop_collection(const std::string& name) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -334,7 +334,7 @@ public:
         }
     }
 
-    // 获取数据库信息
+    // 
     Task<std::unordered_map<std::string, std::string>> get_info() {
         std::unordered_map<std::string, std::string> info;
 

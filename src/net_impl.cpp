@@ -1,6 +1,6 @@
 /**
  * @file net_impl.cpp
- * @brief FlowCoro 网络IO层实现
+ * @brief FlowCoro IO
  */
 
 #include "flowcoro/net.h"
@@ -12,12 +12,12 @@
 
 namespace flowcoro::net {
 
-// 静态成员定义
+// 
 std::unique_ptr<EventLoop> GlobalEventLoop::instance_;
 std::once_flag GlobalEventLoop::init_flag_;
 
 // ============================================================================
-// EventLoop 实现
+// EventLoop 
 // ============================================================================
 
 EventLoop::EventLoop() {
@@ -26,13 +26,13 @@ EventLoop::EventLoop() {
         throw std::runtime_error("Failed to create epoll fd: " + std::string(strerror(errno)));
     }
 
-    // 创建eventfd用于唤醒epoll_wait
+    // eventfdepoll_wait
     wakeup_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (wakeup_fd_ == -1) {
         throw std::runtime_error("Failed to create eventfd: " + std::string(strerror(errno)));
     }
 
-    // 将wakeup_fd添加到epoll监听
+    // wakeup_fdepoll
     epoll_event ev{};
     ev.events = EPOLLIN;
     ev.data.fd = wakeup_fd_;
@@ -56,7 +56,7 @@ EventLoop::~EventLoop() {
 
 void EventLoop::start() {
     if (running_.load(std::memory_order_acquire)) {
-        return; // 已经在运行
+        return; // 
     }
     
     running_.store(true, std::memory_order_release);
@@ -65,7 +65,7 @@ void EventLoop::start() {
 
 void EventLoop::stop() {
     running_.store(false, std::memory_order_release);
-    // 唤醒epoll_wait让它立即退出
+    // epoll_wait
     if (wakeup_fd_ != -1) {
         eventfd_t inc = 1;
         (void)eventfd_write(wakeup_fd_, inc);
@@ -83,37 +83,37 @@ void EventLoop::run_loop() {
     epoll_event events[max_events];
 
     while (running_.load(std::memory_order_acquire)) {
-        // 处理定时器和待执行任务
+        // 
         process_timers();
         process_pending_tasks();
 
-        // 获取下次超时时间
+        // 
         int timeout = get_next_timeout();
 
-        // 等待IO事件
+        // IO
         int event_count = epoll_wait(epoll_fd_, events, max_events, timeout);
 
         if (event_count == -1) {
             if (errno == EINTR) {
-                continue; // 被信号中断，继续循环
+                continue; // 
             }
-            // 如果不是在运行状态，正常退出
+            // 
             if (!running_.load(std::memory_order_acquire)) {
                 break;
             }
             throw std::runtime_error("epoll_wait failed: " + std::string(strerror(errno)));
         }
 
-        // 处理IO事件
+        // IO
         for (int i = 0; i < event_count; ++i) {
             const auto& event = events[i];
             int fd = event.data.fd;
 
-            // 处理唤醒事件：清空eventfd计数
+            // eventfd
             if (fd == wakeup_fd_) {
                 eventfd_t val;
                 while (eventfd_read(wakeup_fd_, &val) == 0) {
-                    // 读取直到为空
+                    // 
                 }
                 continue;
             }
@@ -126,15 +126,15 @@ void EventLoop::run_loop() {
                 std::lock_guard<std::mutex> lock(handlers_mutex_);
                 auto handler_it = handlers_.find(fd);
                 if (handler_it == handlers_.end()) {
-                    continue; // 处理器已被移除
+                    continue; // 
                 }
-                // 复制回调，避免回调中修改handlers_引发悬垂
+                // handlers_
                 on_read_cb = handler_it->second->on_read;
                 on_write_cb = handler_it->second->on_write;
                 on_error_cb = handler_it->second->on_error;
             }
 
-            // 处理错误和挂断事件
+            // 
             if (event.events & (EPOLLERR | EPOLLHUP)) {
                 if (on_error_cb) {
                     on_error_cb();
@@ -142,14 +142,14 @@ void EventLoop::run_loop() {
                 continue;
             }
 
-            // 处理读事件
+            // 
             if (event.events & EPOLLIN) {
                 if (on_read_cb) {
                     on_read_cb();
                 }
             }
 
-            // 处理写事件
+            // 
             if (event.events & EPOLLOUT) {
                 if (on_write_cb) {
                     on_write_cb();
@@ -194,7 +194,7 @@ void EventLoop::modify_fd(int fd, uint32_t events) {
 
 void EventLoop::remove_fd(int fd) {
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) == -1) {
-        // 可能fd已经关闭，这里不抛异常
+        // fd
     }
 
     std::lock_guard<std::mutex> lock(handlers_mutex_);
@@ -203,7 +203,7 @@ void EventLoop::remove_fd(int fd) {
 
 void EventLoop::post_task(std::function<void()> task) {
     pending_tasks_.enqueue(std::move(task));
-    // 唤醒epoll_wait
+    // epoll_wait
     if (wakeup_fd_ != -1) {
         eventfd_t inc = 1;
         (void)eventfd_write(wakeup_fd_, inc);
@@ -216,7 +216,7 @@ void EventLoop::schedule_timer(std::chrono::milliseconds delay, std::function<vo
     std::lock_guard<std::mutex> lock(timer_mutex_);
     timer_queue_.push({when, std::move(callback)});
     
-    // 唤醒epoll_wait，让它重新计算超时时间
+    // epoll_wait
     if (wakeup_fd_ != -1) {
         eventfd_t inc = 1;
         (void)eventfd_write(wakeup_fd_, inc);
@@ -226,14 +226,14 @@ void EventLoop::schedule_timer(std::chrono::milliseconds delay, std::function<vo
 void EventLoop::process_pending_tasks() {
     std::function<void()> task;
     int processed = 0;
-    const int max_process = 100; // 避免长时间阻塞
+    const int max_process = 100; // 
 
     while (processed < max_process && pending_tasks_.dequeue(task)) {
         try {
             task();
         } catch (const std::exception& e) {
-            // 记录异常但不中断事件循环
-            // TODO: 使用日志系统记录
+            // 
+            // TODO: 
         }
         ++processed;
     }
@@ -250,7 +250,7 @@ void EventLoop::process_timers() {
         try {
             timer.callback();
         } catch (const std::exception& e) {
-            // 记录异常但不中断事件循环
+            // 
         }
     }
 }
@@ -259,14 +259,14 @@ int EventLoop::get_next_timeout() {
     std::lock_guard<std::mutex> lock(timer_mutex_);
 
     if (timer_queue_.empty()) {
-    return 10; // 更低的默认超时提升响应性
+    return 10; // 
     }
 
     auto now = std::chrono::steady_clock::now();
     auto next_timeout = timer_queue_.top().when;
 
     if (next_timeout <= now) {
-        return 0; // 立即超时
+        return 0; // 
     }
 
     auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -276,7 +276,7 @@ int EventLoop::get_next_timeout() {
 }
 
 // ============================================================================
-// Socket 实现
+// Socket 
 // ============================================================================
 
 Socket::Socket(EventLoop* loop) : loop_(loop) {
@@ -332,12 +332,12 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
         throw std::runtime_error("Connect failed: " + std::string(strerror(errno)));
     }
 
-    // 等待连接完成
+    // 
     AsyncPromise<void> connect_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_write = [&connect_promise, this]() {
-        // 检查连接状态
+        // 
         int error = 0;
         socklen_t len = sizeof(error);
         if (getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &len) == 0 && error == 0) {
@@ -368,7 +368,7 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
 bool Socket::bind(const std::string& host, uint16_t port) {
     auto addr = create_address(host, port);
 
-    // 设置地址重用
+    // 
     set_option(SO_REUSEADDR, 1);
 
     return ::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
@@ -394,7 +394,7 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
         throw std::runtime_error("Accept failed: " + std::string(strerror(errno)));
     }
 
-    // 等待新连接
+    // 
     AsyncPromise<std::unique_ptr<Socket>> accept_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
@@ -446,7 +446,7 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
         throw std::runtime_error("Read failed: " + std::string(strerror(errno)));
     }
 
-    // 等待数据可读
+    // 
     AsyncPromise<ssize_t> read_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
@@ -457,9 +457,9 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
             if (n > 0) {
                 total += n;
                 if (static_cast<size_t>(total) == size) {
-                    break; // 满了
+                    break; // 
                 }
-                // 边沿触发下继续尝试，水平触发下也可提前返回
+                // 
                 continue;
             }
             if (n == 0) {
@@ -467,9 +467,9 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
                 break;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break; // 暂无更多可读
+                break; // 
             }
-            // 错误
+            // 
             read_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Read failed: " + std::string(strerror(errno)))
@@ -495,7 +495,7 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
 }
 
 Task<ssize_t> Socket::write(const char* data, size_t size) {
-    // 使用 send() 而不是 write()，并设置 MSG_NOSIGNAL 避免 SIGPIPE
+    //  send()  write() MSG_NOSIGNAL  SIGPIPE
     ssize_t result = ::send(fd_, data, size, MSG_NOSIGNAL);
 
     if (result > 0) {
@@ -506,26 +506,26 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
         throw std::runtime_error("Write failed: " + std::string(strerror(errno)));
     }
 
-    // 等待可写
+    // 
     AsyncPromise<ssize_t> write_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_write = [&write_promise, this, data, size]() {
         ssize_t total = 0;
         while (true) {
-            // 使用 send() 而不是 write()，并设置 MSG_NOSIGNAL 避免 SIGPIPE
+            //  send()  write() MSG_NOSIGNAL  SIGPIPE
             ssize_t n = ::send(fd_, data + total, size - total, MSG_NOSIGNAL);
             if (n > 0) {
                 total += n;
                 if (static_cast<size_t>(total) == size) {
-                    break; // 全部写完
+                    break; // 
                 }
-                continue; // 边沿触发下继续写
+                continue; // 
             }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                break; // 暂时不可写
+                break; // 
             }
-            // 错误
+            // 
             write_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Write failed: " + std::string(strerror(errno)))
@@ -654,7 +654,7 @@ sockaddr_in Socket::create_address(const std::string& host, uint16_t port) {
 }
 
 // ============================================================================
-// TcpServer 实现
+// TcpServer 
 // ============================================================================
 
 TcpServer::TcpServer(EventLoop* loop) : loop_(loop) {}
@@ -676,13 +676,13 @@ Task<void> TcpServer::listen(const std::string& host, uint16_t port) {
 
     running_.store(true, std::memory_order_release);
 
-    // 启动接受连接的协程并持有其生命周期
+    // 
     accept_task_ = accept_loop();
     
-    // 启动accept_loop协程任务，让它在协程池中执行
+    // accept_loop
     auto& manager = flowcoro::CoroutineManager::get_instance();
     if (accept_task_) {
-        // 获取协程handle并调度执行
+        // handle
         auto handle = accept_task_->handle;
         if (handle && !handle.done()) {
             manager.schedule_resume(handle);
@@ -697,7 +697,7 @@ void TcpServer::stop() {
     if (listen_socket_) {
         listen_socket_->close();
     }
-    // 释放连接处理任务
+    // 
     {
         std::lock_guard<std::mutex> lk(active_tasks_mutex_);
         active_tasks_.clear();
@@ -710,11 +710,11 @@ Task<void> TcpServer::accept_loop() {
             auto client_socket = co_await listen_socket_->accept();
 
             if (connection_handler_) {
-                // 创建连接处理任务并保存，防止任务在临时对象析构时被销毁
+                // 
                 auto task = connection_handler_(std::move(client_socket));
                 auto task_ptr = std::make_shared<Task<void>>(std::move(task));
                 
-                // 调度连接处理任务执行
+                // 
                 auto& manager = flowcoro::CoroutineManager::get_instance();
                 auto handle = task_ptr->handle;
                 if (handle && !handle.done()) {
@@ -726,7 +726,7 @@ Task<void> TcpServer::accept_loop() {
                     active_tasks_.push_back(task_ptr);
                 }
 
-                // 轻量清理：移除已完成/已取消的任务，避免容器无限增长
+                // /
                 {
                     std::lock_guard<std::mutex> lk(active_tasks_mutex_);
                     auto it = active_tasks_.begin();
@@ -742,8 +742,8 @@ Task<void> TcpServer::accept_loop() {
             }
         } catch (const std::exception& e) {
             if (running_.load(std::memory_order_acquire)) {
-                // 记录错误但继续运行
-                // TODO: 使用日志系统
+                // 
+                // TODO: 
             }
         }
     }
@@ -752,7 +752,7 @@ Task<void> TcpServer::accept_loop() {
 }
 
 // ============================================================================
-// TcpConnection 实现
+// TcpConnection 
 // ============================================================================
 
 TcpConnection::TcpConnection(std::unique_ptr<Socket> socket)
@@ -763,7 +763,7 @@ TcpConnection::~TcpConnection() {
 }
 
 Task<std::string> TcpConnection::read_line() {
-    // 先从缓冲区查找
+    // 
     auto pos = read_buffer_.find('\n');
     if (pos != std::string::npos) {
         std::string line = read_buffer_.substr(0, pos + 1);
@@ -771,13 +771,13 @@ Task<std::string> TcpConnection::read_line() {
         co_return line;
     }
 
-    // 需要读取更多数据
+    // 
     while (true) {
         char buffer[4096];
         ssize_t n = co_await socket_->read(buffer, sizeof(buffer));
 
         if (n == 0) {
-            // EOF，返回剩余数据
+            // EOF
             std::string line = std::move(read_buffer_);
             read_buffer_.clear();
             co_return line;
@@ -789,7 +789,7 @@ Task<std::string> TcpConnection::read_line() {
 
         read_buffer_.append(buffer, n);
 
-        // 查找换行符
+        // 
         pos = read_buffer_.find('\n');
         if (pos != std::string::npos) {
             std::string line = read_buffer_.substr(0, pos + 1);

@@ -8,7 +8,7 @@
 
 namespace flowcoro::rpc {
 
-// 简化的RPC消息
+// RPC
 struct SimpleRpcMessage {
     std::string id;
     std::string method;
@@ -27,10 +27,10 @@ struct SimpleRpcMessage {
     }
 };
 
-// 简化的RPC处理器
+// RPC
 using SimpleRpcHandler = std::function<std::string(const std::string&)>;
 
-// 轻量级RPC服务器
+// RPC
 class LightRpcServer {
 private:
     std::unordered_map<std::string, SimpleRpcHandler> handlers_;

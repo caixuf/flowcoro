@@ -14,32 +14,32 @@
 
 namespace flowcoro {
 
-// 前向声明
+// 
 class CoroutineManager;
 
-// 支持返回值的Task - 整合SafeTask的RAII和异常安全特性
+// Task - SafeTaskRAII
 template<typename T>
 struct Task {
     struct promise_type {
         std::optional<T> value;
-        bool has_error = false; // 替换exception_ptr
-        std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
+        bool has_error = false; // exception_ptr
+        std::coroutine_handle<> continuation; // Taskcontinuation
 
-        // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
+        //  - SafeCoroutineHandle
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
 
         promise_type() : creation_time_(std::chrono::steady_clock::now()) {
-            // 记录任务创建
+            // 
             PerformanceMonitor::get_instance().on_task_created();
         }
 
-        // 析构时标记销毁
+        // 
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
             
-            // 记录任务状态
+            // 
             if (has_error) {
                 PerformanceMonitor::get_instance().on_task_failed();
             } else if (is_cancelled()) {
@@ -52,9 +52,9 @@ struct Task {
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
-        std::suspend_never initial_suspend() noexcept { return {}; }  // 立即执行以提高性能
+        std::suspend_never initial_suspend() noexcept { return {}; }  // 
         
-        // 支持continuation的final_suspend
+        // continuationfinal_suspend
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* promise;
@@ -62,7 +62,7 @@ struct Task {
                 bool await_ready() const noexcept { return false; }
                 
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
-                    // 如果有continuation，恢复它
+                    // continuation
                     if (promise->continuation) {
                         return promise->continuation;
                     }
@@ -75,24 +75,24 @@ struct Task {
         }
 
         void return_value(T v) noexcept {
-            // 使用更快的路径，减少分支预测失误
+            // 
             if (__builtin_expect(!is_cancelled_.load(std::memory_order_relaxed), true)) [[likely]] {
                 value = std::move(v);
             }
         }
 
         void unhandled_exception() {
-            // 快速路径：直接设置错误标志
+            // 
             has_error = true;
             LOG_ERROR("Task unhandled exception occurred");
         }
 
-        // Continuation支持
+        // Continuation
         void set_continuation(std::coroutine_handle<> cont) noexcept {
             continuation = cont;
         }
 
-        // 快速的取消支持 - 去除锁
+        //  - 
         void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
         }
@@ -110,13 +110,13 @@ struct Task {
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
         }
 
-        // 快速获取值 - 去除锁，使用原子读取
+        //  - 
         std::optional<T> safe_get_value() const noexcept {
-            // 快速路径：通常情况下协程没有被销毁
+            // 
             if (!is_destroyed_.load(std::memory_order_acquire)) [[likely]] {
                 if constexpr (std::is_move_constructible_v<T>) {
                     if (value.has_value()) {
-                        // 对于可移动类型，避免拷贝
+                        // 
                         return std::make_optional(std::move(const_cast<std::optional<T>&>(value).value()));
                     }
                 } else {
@@ -126,7 +126,7 @@ struct Task {
             return std::nullopt;
         }
 
-        // 快速获取错误状态 - 去除锁
+        //  - 
         bool safe_has_error() const noexcept {
             return has_error && !is_destroyed_.load(std::memory_order_acquire);
         }
@@ -140,11 +140,11 @@ struct Task {
     Task(Task&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
     Task& operator=(Task&& other) noexcept {
         if (this != &other) {
-            // 直接销毁当前句柄，避免递归调用safe_destroy
+            // safe_destroy
             if (handle) {
                 if( handle.address() != nullptr && !handle.done() ) {
-                    handle.promise().request_cancellation(); // 请求取消
-                    safe_destroy(); // 安全销毁当前句柄
+                    handle.promise().request_cancellation(); // 
+                    safe_destroy(); // 
                 }
                 else
                 {
@@ -157,11 +157,11 @@ struct Task {
         return *this;
     }
     ~Task() {
-        // 增强版析构：使用安全销毁
+        // 
         safe_destroy();
     }
 
-    // 增强版：安全取消支持
+    // 
     void cancel() {
         if (handle && !handle.done() && !handle.promise().is_destroyed()) {
             handle.promise().request_cancellation();
@@ -175,7 +175,7 @@ struct Task {
         return handle.promise().is_cancelled();
     }
 
-    // 简化版：基本状态查询
+    // 
     std::chrono::milliseconds get_lifetime() const {
         if (!handle) return std::chrono::milliseconds{0};
         return handle.promise().get_lifetime();
@@ -185,14 +185,14 @@ struct Task {
         return handle && !handle.done() && !is_cancelled();
     }
 
-    // JavaScript Promise 风格状态查询API
+    // JavaScript Promise API
     bool is_pending() const noexcept {
         if (!handle) return false;
         return !handle.done() && !is_cancelled();
     }
 
     bool is_settled() const noexcept {
-        if (!handle) return true; // 无效句柄视为已结束
+        if (!handle) return true; // 
         return handle.done() || is_cancelled();
     }
 
@@ -206,29 +206,29 @@ struct Task {
         return is_cancelled() || handle.promise().has_error;
     }
 
-    // 安全销毁方法 
+    //  
     void safe_destroy() {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
 
-            // 使用原子操作检查和设置销毁状态，避免重复销毁
+            // 
             bool expected = false;
             if (!handle.promise().is_destroyed_.compare_exchange_strong(expected, true, std::memory_order_release)) {
-                // 已经在销毁中，直接返回
+                // 
                 handle = nullptr;
                 return;
             }
 
             try {
-                // 延迟销毁 - 避免在协程执行栈中销毁
+                //  - 
                 if (handle.done()) {
                     handle.destroy();
                 } else {
-                    // 安排在下一个调度周期销毁
+                    // 
                     manager.schedule_destroy(handle);
                 }
             } catch (...) {
-                // 忽略销毁过程中的异常
+                // 
                 LOG_ERROR("Exception during safe_destroy");
             }
             handle = nullptr;
@@ -236,7 +236,7 @@ struct Task {
     }
 
     T get() {
-        // 增强版：安全状态检查
+        // 
         if (!handle) {
             LOG_ERROR("Task::get: Invalid handle");
             if constexpr (std::is_default_constructible_v<T>) {
@@ -247,7 +247,7 @@ struct Task {
             }
         }
 
-        // 检查是否已销毁
+        // 
         if (handle.promise().is_destroyed()) {
             LOG_ERROR("Task::get: Task already destroyed");
             if constexpr (std::is_default_constructible_v<T>) {
@@ -258,19 +258,19 @@ struct Task {
             }
         }
 
-        // 🔧 关键修复：先检查是否已完成（suspend_never 情况下协程会立即执行）
+        //  suspend_never 
         if (handle.done()) {
             goto get_result;
         }
 
-        // 只有在未完成时才进入调度逻辑
+        // 
         if (!handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
             manager.schedule_resume(handle);
             
-            // 🔧 修复：添加超时保护和正确的等待策略
+            //  
             auto start_time = std::chrono::steady_clock::now();
-            const auto timeout = std::chrono::seconds(5); // 5秒超时
+            const auto timeout = std::chrono::seconds(5); // 5
             
             auto wait_time = std::chrono::microseconds(1);
             const auto max_wait = std::chrono::microseconds(100);
@@ -278,7 +278,7 @@ struct Task {
             const size_t max_spins = 100;
             
             while (!handle.done() && !handle.promise().is_cancelled()) {
-                // 超时检查
+                // 
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
                     LOG_ERROR("Task::get: Timeout after 5 seconds");
@@ -289,10 +289,10 @@ struct Task {
                     }
                 }
                 
-                // 驱动协程管理器
+                // 
                 manager.drive();
                 
-                // 自适应等待策略
+                // 
                 if (spin_count < max_spins) {
                     ++spin_count;
                     std::this_thread::yield();
@@ -304,7 +304,7 @@ struct Task {
         }
 
 get_result:
-        // 检查是否有错误
+        // 
         if (handle.promise().safe_has_error()) {
             LOG_ERROR("Task execution failed");
             if constexpr (std::is_default_constructible_v<T>) {
@@ -332,54 +332,54 @@ get_result:
         }
     }
 
-    // SafeTask兼容方法：获取结果（同步）
+    // SafeTask
     T get_result() requires(!std::is_void_v<T>) {
-        return get(); // 复用现有的get()方法
+        return get(); // get()
     }
 
     void get_result() requires(std::is_void_v<T>) {
-        get(); // 复用现有的get()方法
+        get(); // get()
     }
 
-    // SafeTask兼容方法：检查是否就绪
+    // SafeTask
     bool is_ready() const noexcept {
         return await_ready();
     }
 
-    // 使Task可等待 - 增强版安全检查
+    // Task - 
     bool await_ready() const {
-        if (!handle) return true; // 无效句柄视为ready
+        if (!handle) return true; // ready
 
-        // 安全检查：验证句柄地址有效性
-        if (!handle.address()) return true; // 无效地址视为ready
-        if (handle.done()) return true; // 已完成视为ready
+        // 
+        if (!handle.address()) return true; // ready
+        if (handle.done()) return true; // ready
 
-        // 只有在句柄有效时才检查promise状态
+        // promise
         return handle.promise().is_destroyed();
     }
 
     void await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 高性能实现：直接设置continuation
+        // continuation
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效，直接恢复等待协程
+            // 
             auto& manager = CoroutineManager::get_instance();
             manager.schedule_resume(waiting_handle);
             return;
         }
 
         if (handle.done()) {
-            // 任务已完成，直接恢复等待协程
+            // 
             auto& manager = CoroutineManager::get_instance();
             manager.schedule_resume(waiting_handle);
             return;
         }
 
-        // 设置continuation：当task完成时恢复waiting_handle
+        // continuationtaskwaiting_handle
         handle.promise().set_continuation(waiting_handle);
     }
 
     T await_resume() {
-        // 增强版：使用安全getter
+        // getter
         if (!handle) {
             LOG_ERROR("Task await_resume: Invalid handle");
             if constexpr (std::is_default_constructible_v<T>) {
@@ -431,5 +431,5 @@ get_result:
 
 } // namespace flowcoro
 
-// 包含特化版本
+// 
 #include "task_specializations.h"

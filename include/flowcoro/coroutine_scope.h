@@ -5,7 +5,7 @@
 
 namespace flowcoro {
 
-// RAII协程范围管理器
+// RAII
 class CoroutineScope {
 public:
     ~CoroutineScope() {

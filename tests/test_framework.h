@@ -7,7 +7,7 @@
 
 namespace flowcoro::test {
 
-// 统一的测试框架
+// 
 class TestRunner {
 private:
     static std::atomic<int> passed_;
@@ -28,7 +28,7 @@ public:
 
     static void expect_eq(const auto& a, const auto& b, const std::string& message,
                          const char* file, int line) {
-        // 使用static_cast避免符号比较警告
+        // static_cast
         if constexpr (std::is_integral_v<std::decay_t<decltype(a)>> &&
                       std::is_integral_v<std::decay_t<decltype(b)>>) {
             if (static_cast<std::common_type_t<decltype(a), decltype(b)>>(a) ==
@@ -75,11 +75,11 @@ public:
     }
 };
 
-// 静态成员定义
+// 
 std::atomic<int> TestRunner::passed_{0};
 std::atomic<int> TestRunner::failed_{0};
 
-// 便捷宏
+// 
 #define TEST_EXPECT_TRUE(condition) \
     flowcoro::test::TestRunner::expect_true((condition), #condition, __FILE__, __LINE__)
 
@@ -92,7 +92,7 @@ std::atomic<int> TestRunner::failed_{0};
 #define TEST_EXPECT_NE(a, b) \
     flowcoro::test::TestRunner::expect_true((a) != (b), #a " != " #b, __FILE__, __LINE__)
 
-// 测试用例宏
+// 
 #define TEST_CASE(name) \
     void test_##name(); \
     namespace { \
@@ -106,7 +106,7 @@ std::atomic<int> TestRunner::failed_{0};
     } \
     void test_##name()
 
-// 测试套件类
+// 
 class TestSuite {
 public:
     TestSuite(const std::string& suite_name) : name_(suite_name) {

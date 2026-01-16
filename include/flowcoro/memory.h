@@ -1,6 +1,6 @@
 /**
  * @file memory.h
- * @brief FlowCoro内存管理组件
+ * @brief FlowCoro
  */
 
 #pragma once
@@ -11,7 +11,7 @@ namespace flowcoro {
 namespace memory {
 
 /**
- * @brief 全局内存管理器
+ * @brief 
  */
 class GlobalMemoryManager {
 public:

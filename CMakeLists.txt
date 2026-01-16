@@ -1,27 +1,27 @@
 cmake_minimum_required(VERSION 3.16)
 
-# 项目信息
+# 
 project(FlowCoro
     VERSION 4.0.0
     DESCRIPTION "Modern C++20 Coroutine Library - Streamlined Core Implementation"
     LANGUAGES CXX
 )
 
-# 设置C++标准
+# C++
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 编译选项 - 优化版本
+#  - 
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -mtune=native -flto=auto -ffast-math -funroll-loops")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG -march=native")
 
-# PGO (Profile-Guided Optimization) 自动支持
+# PGO (Profile-Guided Optimization) 
 option(FLOWCORO_ENABLE_PGO "Enable Profile-Guided Optimization" ON)
 option(FLOWCORO_PGO_GENERATE "Generate PGO profile data" OFF)
 
-# 自动检测并启用PGO优化
+# PGO
 if(FLOWCORO_ENABLE_PGO)
     if(FLOWCORO_PGO_GENERATE)
         message(STATUS "Enabling PGO profile generation")
@@ -29,7 +29,7 @@ if(FLOWCORO_ENABLE_PGO)
         set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -fprofile-generate")
         set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -fprofile-generate")
     else()
-        # 查找已存在的profile数据
+        # profile
         file(GLOB_RECURSE GCDA_FILES 
              "${CMAKE_CURRENT_SOURCE_DIR}/pgo_profiles/*.gcda")
              
@@ -37,7 +37,7 @@ if(FLOWCORO_ENABLE_PGO)
             list(LENGTH GCDA_FILES PROFILE_COUNT)
             message(STATUS "Found ${PROFILE_COUNT} PGO profile files, enabling PGO optimization")
             
-            # 复制profile到构建目录
+            # profile
             file(COPY ${GCDA_FILES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
             
             set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fprofile-use -fprofile-correction")
@@ -50,12 +50,12 @@ if(FLOWCORO_ENABLE_PGO)
     endif()
 endif()
 
-# 设置默认构建类型
+# 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-# 项目选项
+# 
 option(FLOWCORO_BUILD_TESTS "Build tests" ON)
 option(FLOWCORO_BUILD_EXAMPLES "Build examples" ON)
 option(FLOWCORO_BUILD_BENCHMARKS "Build benchmarks" ON)
@@ -64,12 +64,12 @@ option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers" OFF)
 option(FLOWCORO_BUILD_V3 "Build FlowCoro 3.0 architecture" ON)
 option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
 
-# 查找依赖
+# 
 find_package(Threads REQUIRED)
 
-# 数据库支持
+# 
 if(FLOWCORO_ENABLE_DATABASE)
-    # 查找MySQL客户端库
+    # MySQL
     find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
         PATHS
         /usr/include
@@ -95,7 +95,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         message(WARNING "MySQL not found, database examples will be disabled")
     endif()
 
-    # 查找Redis客户端库 (hiredis)
+    # Redis (hiredis)
     find_path(HIREDIS_INCLUDE_DIR hiredis/hiredis.h
         PATHS
         /usr/include
@@ -119,7 +119,7 @@ if(FLOWCORO_ENABLE_DATABASE)
         message(WARNING "hiredis not found, Redis examples will be disabled")
     endif()
 
-    # 查找JSON库 (jsoncpp)
+    # JSON (jsoncpp)
     find_path(JSONCPP_INCLUDE_DIR json/json.h
         PATHS
         /usr/include
@@ -145,14 +145,14 @@ if(FLOWCORO_ENABLE_DATABASE)
     endif()
 endif()
 
-# 包含cmake模块
+# cmake
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# 头文件目录
+# 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # =============================================================================
-# FlowCoro核心库 (Header-Only)
+# FlowCoro (Header-Only)
 # =============================================================================
 
 add_library(flowcoro INTERFACE)
@@ -163,7 +163,7 @@ target_include_directories(flowcoro INTERFACE
 )
 
 # =============================================================================
-# FlowCoro网络库 (实现库)
+# FlowCoro ()
 # =============================================================================
 
 add_library(flowcoro_net STATIC
@@ -180,7 +180,7 @@ target_include_directories(flowcoro_net PUBLIC
 target_compile_features(flowcoro INTERFACE cxx_std_20)
 target_compile_features(flowcoro_net PUBLIC cxx_std_20)
 
-# 链接系统库
+# 
 target_link_libraries(flowcoro INTERFACE
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
@@ -193,12 +193,12 @@ target_link_libraries(flowcoro_net PUBLIC
     cjson
 )
 
-# 添加项目路径宏定义
+# 
 target_compile_definitions(flowcoro_net PUBLIC
     "PROJECT_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\""
 )
 
-# 协程支持
+# 
 target_compile_options(flowcoro INTERFACE
     $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>
     $<$<CXX_COMPILER_ID:Clang>:-stdlib=libc++>
@@ -209,7 +209,7 @@ target_compile_options(flowcoro_net PUBLIC
     $<$<CXX_COMPILER_ID:Clang>:-stdlib=libc++>
 )
 
-# 编译器特定选项
+# 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(flowcoro INTERFACE
         -Wall -Wextra -Wpedantic
@@ -228,7 +228,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     )
 endif()
 
-# Sanitizers支持
+# Sanitizers
 if(FLOWCORO_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(flowcoro INTERFACE
         -fsanitize=address,undefined
@@ -240,7 +240,7 @@ if(FLOWCORO_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 # =============================================================================
-# 测试
+# 
 # =============================================================================
 
 if(FLOWCORO_BUILD_TESTS)
@@ -249,7 +249,7 @@ if(FLOWCORO_BUILD_TESTS)
 endif()
 
 # =============================================================================
-# 示例
+# 
 # =============================================================================
 
 if(FLOWCORO_BUILD_EXAMPLES)
@@ -257,7 +257,7 @@ if(FLOWCORO_BUILD_EXAMPLES)
 endif()
 
 # =============================================================================
-# 基准测试
+# 
 # =============================================================================
 
 if(FLOWCORO_BUILD_BENCHMARKS)
@@ -265,13 +265,13 @@ if(FLOWCORO_BUILD_BENCHMARKS)
 endif()
 
 # =============================================================================
-# FlowCoro 3.0 架构
+# FlowCoro 3.0 
 # =============================================================================
 
-# V3 架构已经集成到核心中，不再需要单独的文件
+# V3 
 
 # =============================================================================
-# 文档
+# 
 # =============================================================================
 
 if(FLOWCORO_BUILD_DOCS)
@@ -284,19 +284,19 @@ if(FLOWCORO_BUILD_DOCS)
 endif()
 
 # =============================================================================
-# 安装配置
+# 
 # =============================================================================
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-# 安装头文件
+# 
 install(DIRECTORY include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
 )
 
-# 安装目标
+# 
 install(TARGETS flowcoro
     EXPORT FlowCoroTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -305,7 +305,7 @@ install(TARGETS flowcoro
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# 生成配置文件
+# 
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FlowCoroConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/FlowCoroConfig.cmake"
@@ -318,13 +318,13 @@ write_basic_package_version_file(
     COMPATIBILITY AnyNewerVersion
 )
 
-# 导出目标
+# 
 export(EXPORT FlowCoroTargets
     FILE "${CMAKE_CURRENT_BINARY_DIR}/FlowCoroTargets.cmake"
     NAMESPACE FlowCoro::
 )
 
-# 安装配置文件
+# 
 install(EXPORT FlowCoroTargets
     FILE FlowCoroTargets.cmake
     NAMESPACE FlowCoro::
@@ -338,7 +338,7 @@ install(FILES
 )
 
 # =============================================================================
-# 打包配置
+# 
 # =============================================================================
 
 set(CPACK_PACKAGE_NAME "FlowCoro")
@@ -352,7 +352,7 @@ set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 include(CPack)
 
 # =============================================================================
-# 信息输出
+# 
 # =============================================================================
 
 message(STATUS "")

@@ -5,7 +5,7 @@
 
 namespace flowcoro {
 
-// 统计信息结构
+// 
 struct SystemStats {
     uint64_t tasks_created;
     uint64_t tasks_completed;
@@ -18,7 +18,7 @@ struct SystemStats {
     double tasks_per_second;
 };
 
-// 性能监控系统
+// 
 class PerformanceMonitor {
 private:
     struct Stats {
@@ -38,7 +38,7 @@ public:
         stats_.start_time = std::chrono::steady_clock::now();
     }
     
-    // 统计接口
+    // 
     void on_task_created() noexcept { stats_.tasks_created.fetch_add(1, std::memory_order_relaxed); }
     void on_task_completed() noexcept { stats_.tasks_completed.fetch_add(1, std::memory_order_relaxed); }
     void on_task_cancelled() noexcept { stats_.tasks_cancelled.fetch_add(1, std::memory_order_relaxed); }
@@ -46,7 +46,7 @@ public:
     void on_scheduler_invocation() noexcept { stats_.scheduler_invocations.fetch_add(1, std::memory_order_relaxed); }
     void on_timer_event() noexcept { stats_.timer_events.fetch_add(1, std::memory_order_relaxed); }
     
-    // 获取统计信息
+    // 
     SystemStats get_stats() const noexcept {
         auto now = std::chrono::steady_clock::now();
         auto uptime = std::chrono::duration_cast<std::chrono::milliseconds>(now - stats_.start_time);

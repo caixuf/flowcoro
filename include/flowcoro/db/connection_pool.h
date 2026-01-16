@@ -19,22 +19,22 @@
 
 namespace flowcoro::db {
 
-// 前向声明
+// 
 template<typename Driver>
 class ConnectionPool;
 
-// 连接池配置
+// 
 struct ConnectionPoolConfig {
-    size_t min_connections = 5; // 最小连接数
-    size_t max_connections = 20; // 最大连接数
-    std::chrono::seconds connection_timeout{30}; // 连接超时
-    std::chrono::seconds idle_timeout{300}; // 空闲超时
-    std::chrono::seconds wait_timeout{10}; // 等待连接超时
-    bool auto_reconnect = true; // 自动重连
-    size_t max_reconnect_attempts = 3; // 最大重连尝试次数
+    size_t min_connections = 5; // 
+    size_t max_connections = 20; // 
+    std::chrono::seconds connection_timeout{30}; // 
+    std::chrono::seconds idle_timeout{300}; // 
+    std::chrono::seconds wait_timeout{10}; // 
+    bool auto_reconnect = true; // 
+    size_t max_reconnect_attempts = 3; // 
 };
 
-// 查询结果结构体
+// 
 struct QueryResult {
     bool success{false};
     std::string error;
@@ -42,7 +42,7 @@ struct QueryResult {
     uint64_t affected_rows{0};
     uint64_t insert_id{0};
 
-    // 便捷访问方法
+    // 
     bool empty() const { return rows.empty(); }
     size_t size() const { return rows.size(); }
 
@@ -50,67 +50,67 @@ struct QueryResult {
         return rows[index];
     }
 
-    // 迭代器支持
+    // 
     auto begin() const { return rows.begin(); }
     auto end() const { return rows.end(); }
 };
 
-// 数据库连接接口
+// 
 class IConnection {
 public:
     virtual ~IConnection() = default;
 
-    // 执行SQL查询
+    // SQL
     virtual Task<QueryResult> execute(const std::string& sql) = 0;
     virtual Task<QueryResult> execute(const std::string& sql, const std::vector<std::string>& params) = 0;
 
-    // 事务支持
+    // 
     virtual Task<QueryResult> begin_transaction() = 0;
     virtual Task<QueryResult> commit() = 0;
     virtual Task<QueryResult> rollback() = 0;
 
-    // 连接管理
+    // 
     virtual bool is_valid() const = 0;
     virtual Task<bool> ping() = 0;
     virtual void close() = 0;
 
-    // 连接信息
+    // 
     virtual std::string get_error() const = 0;
     virtual uint64_t get_last_insert_id() const = 0;
     virtual uint64_t get_affected_rows() const = 0;
 };
 
-// 数据库驱动抽象接口
+// 
 template<typename ConnectionType>
 class IDriver {
 public:
     virtual ~IDriver() = default;
 
-    // 创建新连接
+    // 
     virtual Task<std::unique_ptr<ConnectionType>> create_connection(
         const std::string& connection_string) = 0;
 
-    // 验证连接字符串
+    // 
     virtual bool validate_connection_string(const std::string& connection_string) const = 0;
 
-    // 获取驱动信息
+    // 
     virtual std::string get_driver_name() const = 0;
     virtual std::string get_version() const = 0;
 };
 
-// 连接池配置
+// 
 struct PoolConfig {
-    size_t min_connections{5}; // 最小连接数
-    size_t max_connections{20}; // 最大连接数
-    std::chrono::milliseconds acquire_timeout{5000}; // 获取连接超时
-    std::chrono::milliseconds idle_timeout{300000}; // 连接空闲超时(5分钟)
-    std::chrono::milliseconds ping_interval{60000}; // 健康检查间隔(1分钟)
-    bool validate_on_acquire{true}; // 获取时验证连接
-    bool validate_on_return{false}; // 归还时验证连接
-    size_t max_retries{3}; // 最大重试次数
+    size_t min_connections{5}; // 
+    size_t max_connections{20}; // 
+    std::chrono::milliseconds acquire_timeout{5000}; // 
+    std::chrono::milliseconds idle_timeout{300000}; // (5)
+    std::chrono::milliseconds ping_interval{60000}; // (1)
+    bool validate_on_acquire{true}; // 
+    bool validate_on_return{false}; // 
+    size_t max_retries{3}; // 
 };
 
-// 连接包装器 - 管理连接的生命周期和状态
+//  - 
 template<typename ConnectionType>
 class PooledConnection {
 public:
@@ -128,7 +128,7 @@ public:
         }
     }
 
-    // 禁止拷贝，允许移动
+    // 
     PooledConnection(const PooledConnection&) = delete;
     PooledConnection& operator=(const PooledConnection&) = delete;
     PooledConnection(PooledConnection&&) = default;
@@ -174,7 +174,7 @@ private:
     std::atomic<bool> in_use_{false};
 };
 
-// 连接池统计信息
+// 
 struct PoolStats {
     std::atomic<size_t> total_connections{0};
     std::atomic<size_t> active_connections{0};
@@ -201,11 +201,11 @@ struct PoolStats {
     }
 };
 
-// RAII连接管理器
+// RAII
 template<typename ConnectionType>
 class ConnectionGuard {
 public:
-    // 默认构造函数 - 用于Task的promise_type
+    //  - Taskpromise_type
     ConnectionGuard() : connection_(nullptr), pool_(nullptr) {}
 
     ConnectionGuard(std::shared_ptr<PooledConnection<ConnectionType>> conn,
@@ -223,7 +223,7 @@ public:
         }
     }
 
-    // 禁止拷贝，允许移动
+    // 
     ConnectionGuard(const ConnectionGuard&) = delete;
     ConnectionGuard& operator=(const ConnectionGuard&) = delete;
     ConnectionGuard(ConnectionGuard&&) = default;
@@ -239,7 +239,7 @@ private:
     ConnectionPool<ConnectionType>* pool_;
 };
 
-// 连接池主类 - 核心实现
+//  - 
 template<typename ConnectionType>
 class ConnectionPool {
 public:
@@ -261,7 +261,7 @@ public:
         LOG_INFO("Initializing connection pool with config: min=%zu, max=%zu",
                 config_.min_connections, config_.max_connections);
 
-        // 启动后台任务
+        // 
         start_background_tasks();
     }
 
@@ -269,12 +269,12 @@ public:
         shutdown();
     }
 
-    // 获取连接 - 主要接口
+    //  - 
     Task<ConnectionGuard<ConnectionType>> acquire_connection() {
         auto start_time = std::chrono::steady_clock::now();
         stats_.total_requests.fetch_add(1, std::memory_order_relaxed);
 
-        // 尝试获取现有连接
+        // 
         if (auto conn = try_get_available_connection()) {
             auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start_time).count();
@@ -284,7 +284,7 @@ public:
             co_return ConnectionGuard<ConnectionType>(std::move(conn), this);
         }
 
-        // 如果没有可用连接，尝试创建新连接
+        // 
         if (can_create_new_connection()) {
             if (auto new_conn = co_await create_new_connection()) {
                 auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -296,7 +296,7 @@ public:
             }
         }
 
-        // 等待连接变为可用
+        // 
         auto conn = co_await wait_for_available_connection(start_time);
         if (conn) {
             auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -307,64 +307,64 @@ public:
             co_return ConnectionGuard<ConnectionType>(std::move(conn), this);
         }
 
-        // 超时或失败
+        // 
         stats_.timeout_requests.fetch_add(1, std::memory_order_relaxed);
         stats_.failed_requests.fetch_add(1, std::memory_order_relaxed);
         throw std::runtime_error("Failed to acquire connection within timeout");
     }
 
-    // 归还连接
+    // 
     void return_connection(ConnectionPtr conn) {
         if (!conn || shutdown_.load()) return;
 
         std::lock_guard<std::mutex> lock(pool_mutex_);
 
-        // 验证连接是否仍然有效
+        // 
         if (config_.validate_on_return && !conn->is_valid()) {
             stats_.failed_connections.fetch_add(1, std::memory_order_relaxed);
             remove_connection_unsafe(conn);
             return;
         }
 
-        // 归还到空闲池
+        // 
         conn->mark_unused();
         idle_connections_.push(conn);
         stats_.active_connections.fetch_sub(1, std::memory_order_relaxed);
         stats_.idle_connections.fetch_add(1, std::memory_order_relaxed);
 
-        // 通知等待的协程
+        // 
         pool_condition_.notify_one();
     }
 
-    // 获取连接池统计信息
+    // 
     PoolStats get_stats() const { return stats_; }
 
-    // 获取连接池配置
+    // 
     const PoolConfig& get_config() const { return config_; }
 
-    // 关闭连接池
+    // 
     void shutdown() {
         if (shutdown_.exchange(true)) return;
 
         LOG_INFO("Shutting down connection pool");
 
-        // 停止后台任务
+        // 
         stop_background_tasks();
 
-        // 清理所有连接
+        // 
         std::lock_guard<std::mutex> lock(pool_mutex_);
         cleanup_all_connections_unsafe();
 
-        // 通知所有等待的协程
+        // 
         pool_condition_.notify_all();
     }
 
-    // 手动触发健康检查
+    // 
     Task<void> health_check() {
         co_await perform_health_check();
     }
 
-    // 预热连接池 - 创建最小数量的连接
+    //  - 
     Task<void> warm_up() {
         std::vector<CoroTask> create_tasks;
 
@@ -375,7 +375,7 @@ public:
             create_tasks.emplace_back(create_and_add_connection());
         }
 
-        // 等待所有连接创建完成
+        // 
         for (auto& task : create_tasks) {
             co_await task;
         }
@@ -390,16 +390,16 @@ private:
     std::atomic<bool> shutdown_;
     PoolStats stats_;
 
-    // 连接池状态
+    // 
     mutable std::mutex pool_mutex_;
     std::condition_variable pool_condition_;
     std::queue<ConnectionPtr> idle_connections_;
     std::unordered_set<ConnectionPtr> all_connections_;
 
-    // 后台任务
+    // 
     std::vector<std::thread> background_threads_;
 
-    // 私有方法
+    // 
     ConnectionPtr try_get_available_connection() {
         std::lock_guard<std::mutex> lock(pool_mutex_);
 
@@ -407,7 +407,7 @@ private:
             auto conn = idle_connections_.front();
             idle_connections_.pop();
 
-            // 验证连接
+            // 
             if (config_.validate_on_acquire && !conn->is_valid()) {
                 stats_.failed_connections.fetch_add(1, std::memory_order_relaxed);
                 remove_connection_unsafe(conn);
@@ -462,7 +462,7 @@ private:
         std::unique_lock<std::mutex> lock(pool_mutex_);
 
         while (!shutdown_.load()) {
-            // 检查是否有可用连接
+            // 
             if (!idle_connections_.empty()) {
                 auto conn = idle_connections_.front();
                 idle_connections_.pop();
@@ -478,14 +478,14 @@ private:
                 co_return conn;
             }
 
-            // 检查超时
+            // 
             auto now = std::chrono::steady_clock::now();
             auto elapsed = now - start_time;
             if (elapsed >= config_.acquire_timeout) {
                 co_return nullptr;
             }
 
-            // 等待连接归还或超时
+            // 
             auto remaining_time = config_.acquire_timeout - elapsed;
             if (pool_condition_.wait_for(lock, remaining_time) == std::cv_status::timeout) {
                 co_return nullptr;
@@ -499,7 +499,7 @@ private:
         all_connections_.erase(conn);
         stats_.total_connections.fetch_sub(1, std::memory_order_relaxed);
 
-        // 从空闲队列中移除（如果存在）
+        // 
         std::queue<ConnectionPtr> temp_queue;
         while (!idle_connections_.empty()) {
             auto idle_conn = idle_connections_.front();
@@ -514,12 +514,12 @@ private:
     }
 
     void cleanup_all_connections_unsafe() {
-        // 清空空闲连接
+        // 
         while (!idle_connections_.empty()) {
             idle_connections_.pop();
         }
 
-        // 关闭所有连接
+        // 
         for (auto& conn : all_connections_) {
             if (conn && conn->get()) {
                 conn->get()->close();
@@ -535,11 +535,11 @@ private:
     void update_wait_time_stats(uint64_t wait_time_ms) {
         stats_.total_wait_time_ms.fetch_add(wait_time_ms, std::memory_order_relaxed);
 
-        // 更新最大等待时间
+        // 
         uint64_t current_max = stats_.max_wait_time_ms.load();
         while (wait_time_ms > current_max &&
                !stats_.max_wait_time_ms.compare_exchange_weak(current_max, wait_time_ms)) {
-            // CAS循环
+            // CAS
         }
     }
 
@@ -570,14 +570,14 @@ private:
         }
     }
 
-    // 后台任务管理
+    // 
     void start_background_tasks() {
-        // 启动健康检查任务
+        // 
         background_threads_.emplace_back([this] {
             health_check_task();
         });
 
-        // 启动连接清理任务
+        // 
         background_threads_.emplace_back([this] {
             cleanup_task();
         });
@@ -595,11 +595,11 @@ private:
     void health_check_task() {
         while (!shutdown_.load()) {
             try {
-                // 等待健康检查间隔
+                // 
                 std::this_thread::sleep_for(config_.ping_interval);
                 if (shutdown_.load()) break;
 
-                // 执行健康检查
+                // 
                 GlobalThreadPool::get().enqueue_void([this]() {
                     perform_health_check();
                 });
@@ -613,7 +613,7 @@ private:
     void cleanup_task() {
         while (!shutdown_.load()) {
             try {
-                // 每30秒清理一次空闲超时的连接
+                // 30
                 std::this_thread::sleep_for(std::chrono::seconds(30));
                 if (shutdown_.load()) break;
 
@@ -630,7 +630,7 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(pool_mutex_);
-            // 检查空闲连接
+            // 
             std::queue<ConnectionPtr> temp_queue;
             while (!idle_connections_.empty()) {
                 auto conn = idle_connections_.front();
@@ -660,7 +660,7 @@ private:
             }
         }
 
-        // 将健康的连接放回池中
+        // 
         {
             std::lock_guard<std::mutex> lock(pool_mutex_);
             for (auto& conn : healthy_connections) {
@@ -679,9 +679,9 @@ private:
             auto conn = idle_connections_.front();
             idle_connections_.pop();
 
-            // 检查连接是否超时
+            // 
             if (conn->get_idle_time() > config_.idle_timeout) {
-                // 确保不会删除过多连接，保持最小连接数
+                // 
                 if (all_connections_.size() - removed_count > config_.min_connections) {
                     remove_connection_unsafe(conn);
                     removed_count++;

@@ -7,11 +7,11 @@
 
 namespace flowcoro {
 
-// 前向声明
+// 
 template<typename T, typename E = std::exception_ptr>
 class Result;
 
-// 成功值包装器
+// 
 template<typename T>
 struct Ok {
     T value;
@@ -20,7 +20,7 @@ struct Ok {
     explicit Ok(U&& v) : value(std::forward<U>(v)) {}
 };
 
-// 错误值包装器
+// 
 template<typename E>
 struct Err {
     E error;
@@ -29,7 +29,7 @@ struct Err {
     explicit Err(U&& e) : error(std::forward<U>(e)) {}
 };
 
-// 便利函数
+// 
 template<typename T>
 Ok<std::decay_t<T>> ok(T&& value) {
     return Ok<std::decay_t<T>>(std::forward<T>(value));
@@ -40,7 +40,7 @@ Err<std::decay_t<E>> err(E&& error) {
     return Err<std::decay_t<E>>(std::forward<E>(error));
 }
 
-// Result 类型 - Rust风格的错误处理
+// Result  - Rust
 template<typename T, typename E>
 class Result {
 private:
@@ -50,20 +50,20 @@ public:
     using value_type = T;
     using error_type = E;
 
-    // 构造函数
+    // 
     template<typename U>
     Result(Ok<U>&& ok) : value_(std::move(ok.value)) {}
 
     template<typename U>
     Result(Err<U>&& error) : value_(std::move(error.error)) {}
 
-    // 拷贝和移动构造
+    // 
     Result(const Result&) = default;
     Result(Result&&) = default;
     Result& operator=(const Result&) = default;
     Result& operator=(Result&&) = default;
 
-    // 状态查询
+    // 
     bool is_ok() const noexcept {
         return std::holds_alternative<T>(value_);
     }
@@ -72,12 +72,12 @@ public:
         return std::holds_alternative<E>(value_);
     }
 
-    // 显式转换为bool
+    // bool
     explicit operator bool() const noexcept {
         return is_ok();
     }
 
-    // 值访问 - 不安全版本
+    //  - 
     T& unwrap() & {
         if (is_err()) {
             if constexpr (std::is_same_v<E, std::exception_ptr>) {
@@ -111,7 +111,7 @@ public:
         return std::get<T>(std::move(value_));
     }
 
-    // 带默认值的访问
+    // 
     template<typename U>
     T unwrap_or(U&& default_value) const & {
         if (is_ok()) {
@@ -128,7 +128,7 @@ public:
         return static_cast<T>(std::forward<U>(default_value));
     }
 
-    // 错误访问
+    // 
     const E& error() const & {
         if (is_ok()) {
             throw std::runtime_error("Result contains value, not error");
@@ -143,7 +143,7 @@ public:
         return std::get<E>(std::move(value_));
     }
 
-    // 链式操作 - map
+    //  - map
     template<typename F>
     auto map(F&& f) & -> Result<std::invoke_result_t<F, T&>, E> {
         using NewT = std::invoke_result_t<F, T&>;
@@ -174,7 +174,7 @@ public:
         }
     }
 
-    // 链式操作 - and_then (flatMap)
+    //  - and_then (flatMap)
     template<typename F>
     auto and_then(F&& f) & -> std::invoke_result_t<F, T&> {
         static_assert(std::is_same_v<typename std::invoke_result_t<F, T&>::error_type, E>,
@@ -208,7 +208,7 @@ public:
         }
     }
 
-    // 错误映射
+    // 
     template<typename F>
     auto map_err(F&& f) -> Result<T, std::invoke_result_t<F, E>> {
         using NewE = std::invoke_result_t<F, E>;
@@ -220,7 +220,7 @@ public:
     }
 };
 
-// void的特化版本
+// void
 template<typename E>
 class Result<void, E> {
 private:
@@ -230,13 +230,13 @@ public:
     using value_type = void;
     using error_type = E;
 
-    // 构造函数
-    Result() : error_(std::nullopt) {} // 成功
+    // 
+    Result() : error_(std::nullopt) {} // 
 
     template<typename U>
     Result(Err<U>&& error) : error_(std::move(error.error)) {}
 
-    // 状态查询
+    // 
     bool is_ok() const noexcept {
         return !error_.has_value();
     }
@@ -249,7 +249,7 @@ public:
         return is_ok();
     }
 
-    // void版本的unwrap
+    // voidunwrap
     void unwrap() const {
         if (is_err()) {
             if constexpr (std::is_same_v<E, std::exception_ptr>) {
@@ -260,7 +260,7 @@ public:
         }
     }
 
-    // 错误访问
+    // 
     const E& error() const & {
         if (is_ok()) {
             throw std::runtime_error("Result contains success, not error");

@@ -10,7 +10,7 @@
 
 namespace lockfree {
 
-// 无锁线程池实现
+// 
 class ThreadPool {
 private:
     lockfree::Queue<std::function<void()>> task_queue_;
@@ -30,40 +30,40 @@ public:
     }
 
     ~ThreadPool() {
-        // 设置析构标志，避免新任务入队
+        // 
         stop_.store(true, std::memory_order_release);
 
-        // 改进的关闭逻辑：给工作线程更多时间完成当前任务
+        // 
         auto start_time = std::chrono::steady_clock::now();
-        auto timeout = std::chrono::milliseconds(1000); // 增加超时时间到1秒
+        auto timeout = std::chrono::milliseconds(1000); // 1
 
-        // 更智能的等待策略：等待活跃线程数降为0或超时
+        // 0
         bool graceful_shutdown = false;
         while (active_threads_.load(std::memory_order_acquire) > 0) {
             auto current_time = std::chrono::steady_clock::now();
             if (current_time - start_time > timeout) {
                 std::cout << "ThreadPool destructor timeout, forcing shutdown" << std::endl;
-                break; // 超时，停止等待
+                break; // 
             }
             
-            // 使用更短的睡眠间隔来更频繁检查线程状态
+            // 
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
 
-        // 如果线程数降为0，表示优雅关闭成功
+        // 0
         if (active_threads_.load(std::memory_order_acquire) == 0) {
             graceful_shutdown = true;
             std::cout << "ThreadPool graceful shutdown completed" << std::endl;
         }
 
-        // 尝试 join 所有线程
+        //  join 
         for (auto& worker : workers_) {
             if (worker.joinable()) {
                 try {
                     if (graceful_shutdown) {
-                        worker.join(); // 优雅关闭时应该能够快速join
+                        worker.join(); // join
                     } else {
-                        // 强制关闭时使用超时join
+                        // join
                         auto join_future = std::async(std::launch::async, [&worker]() {
                             worker.join();
                         });
@@ -78,13 +78,13 @@ public:
                         }
                     }
                 } catch (...) {
-                    // 如果join失败，使用detach
+                    // joindetach
                     try {
                         if (worker.joinable()) {
                             worker.detach();
                         }
                     } catch (...) {
-                        // 忽略detach异常
+                        // detach
                     }
                 }
             }
@@ -92,7 +92,7 @@ public:
 
         workers_.clear();
 
-        // 清空任务队列，避免析构时访问已失效的对象
+        // 
         std::function<void()> unused_task;
         size_t remaining_tasks = 0;
         while (task_queue_.dequeue(unused_task)) {
@@ -104,12 +104,12 @@ public:
         }
     }
 
-    // 提交任务并返回future
+    // future
     template<typename F, typename... Args>
     auto enqueue(F&& f, Args&&... args) -> std::future<decltype(f(args...))> {
         using return_type = decltype(f(args...));
 
-        // 使用内存池优化的智能指针分配
+        // 
         auto task = std::allocate_shared<std::packaged_task<return_type()>>(
             flowcoro::PoolAllocator<std::packaged_task<return_type()>>{},
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
@@ -126,7 +126,7 @@ public:
         return result;
     }
 
-    // 提交简单的void任务
+    // void
     void enqueue_void(std::function<void()> task) {
         if (!stop_.load(std::memory_order_acquire)) {
             task_queue_.enqueue(std::move(task));
@@ -136,10 +136,10 @@ public:
     }
 
     void shutdown() {
-        // 设置 stop 标志
+        //  stop 
         stop_.store(true, std::memory_order_release);
 
-        // 等待所有工作线程完成当前任务并退出
+        // 
         for (auto& worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
@@ -148,10 +148,10 @@ public:
 
         workers_.clear();
 
-        // 清理队列中剩余的任务
+        // 
         std::function<void()> unused_task;
         while (task_queue_.dequeue(unused_task)) {
-            // 清空队列，避免析构时访问已失效的对象
+            // 
         }
     }
 
@@ -163,13 +163,13 @@ public:
         return stop_.load(std::memory_order_acquire);
     }
 
-    // 新增：获取队列中任务数量的估计
+    // 
     size_t estimated_queue_size() const {
-        // 注意：这只是一个估计值，无锁队列很难精确计算
+        // 
         return task_queue_.size_estimate();
     }
 
-    // 新增：检查线程池健康状态
+    // 
     void print_status() const {
         std::cout << "ThreadPool Status:" << std::endl;
         std::cout << "  Active threads: " << active_thread_count() << std::endl;
@@ -181,58 +181,58 @@ private:
     void worker_loop() {
         std::function<void()> task;
         
-        // 自适应等待策略，减少CPU浪费
+        // CPU
         auto wait_duration = std::chrono::microseconds(100);
         constexpr auto max_wait = std::chrono::milliseconds(10);
         size_t empty_iterations = 0;
 
         while (!stop_.load(std::memory_order_acquire)) {
             if (task_queue_.dequeue(task)) {
-                // 有任务：重置等待策略并执行
+                // 
                 empty_iterations = 0;
                 wait_duration = std::chrono::microseconds(100);
                 
                 try {
                     task();
                 } catch (const std::exception& e) {
-                    // 改进的异常处理：记录但不中断线程
+                    // 
                     std::cerr << "ThreadPool worker caught exception: " << e.what() << std::endl;
                 } catch (...) {
                     std::cerr << "ThreadPool worker caught unknown exception" << std::endl;
                 }
             } else {
-                // 无任务：使用自适应等待策略，避免CPU忙等待
+                // CPU
                 empty_iterations++;
                 
                 if (empty_iterations < 10) {
-                    // 短期内没任务，快速检查
+                    // 
                     std::this_thread::yield();
                 } else if (empty_iterations < 100) {
-                    // 中期没任务，短暂休眠
+                    // 
                     std::this_thread::sleep_for(wait_duration);
                     wait_duration = std::min(wait_duration * 2, std::chrono::microseconds(1000));
                 } else {
-                    // 长期没任务，较长休眠
+                    // 
                     std::this_thread::sleep_for(max_wait);
                 }
             }
         }
 
-        // 线程退出前减少计数
+        // 
         active_threads_.fetch_sub(1, std::memory_order_acq_rel);
 
-        // 线程退出前再次尝试处理剩余任务
+        // 
         while (task_queue_.dequeue(task)) {
             try {
                 task();
             } catch (...) {
-                // 忽略异常
+                // 
             }
         }
     }
 };
 
-// 工作窃取线程池实现
+// 
 class WorkStealingThreadPool {
 private:
     struct alignas(64) WorkerData {
@@ -274,7 +274,7 @@ public:
     auto enqueue(F&& f, Args&&... args) -> std::future<decltype(f(args...))> {
         using return_type = decltype(f(args...));
 
-        // 使用内存池优化的智能指针分配
+        // 
         auto task = std::allocate_shared<std::packaged_task<return_type()>>(
             flowcoro::PoolAllocator<std::packaged_task<return_type()>>{},
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
@@ -285,7 +285,7 @@ public:
         if (!stop_.load(std::memory_order_acquire)) {
             auto wrapper = [task]() { (*task)(); };
 
-            // 如果当前线程是工作线程，优先放入本地队列
+            // 
             if (worker_id_ != SIZE_MAX && worker_id_ < worker_data_.size()) {
                 worker_data_[worker_id_]->local_queue.enqueue(wrapper);
                 worker_data_[worker_id_]->has_work.store(true, std::memory_order_release);
@@ -323,18 +323,18 @@ private:
         while (!stop_.load(std::memory_order_acquire)) {
             bool found_work = false;
 
-            // 1. 先检查本地队列
+            // 1. 
             if (worker_data_[worker_index]->local_queue.dequeue(task)) {
                 found_work = true;
                 if (worker_data_[worker_index]->local_queue.empty()) {
                     worker_data_[worker_index]->has_work.store(false, std::memory_order_release);
                 }
             }
-            // 2. 检查全局队列
+            // 2. 
             else if (global_queue_.dequeue(task)) {
                 found_work = true;
             }
-            // 3. 尝试从其他工作线程偷取任务
+            // 3. 
             else {
                 for (size_t i = 0; i < worker_data_.size(); ++i) {
                     if (i != worker_index &&
@@ -350,7 +350,7 @@ private:
                 try {
                     task();
                 } catch (const std::exception& e) {
-                    // 异常处理
+                    // 
                 }
             } else {
                 std::this_thread::yield();
@@ -361,5 +361,5 @@ private:
     }
 };
 
-// 定义thread_local变量
+// thread_local
 } // namespace lockfree

@@ -1,6 +1,6 @@
 # FlowCoro Benchmarks
 
-# 查找benchmark库
+# benchmark
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(BENCHMARK benchmark)
@@ -9,7 +9,7 @@ endif()
 if(NOT BENCHMARK_FOUND)
     message(STATUS "Google Benchmark not found, building professional benchmarks")
 
-    # 添加专业基准测试 - 核心功能性能测试
+    #  - 
     add_executable(professional_flowcoro_benchmark professional_flowcoro_benchmark.cpp)
     target_link_libraries(professional_flowcoro_benchmark flowcoro_net pthread)
     target_include_directories(professional_flowcoro_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -18,7 +18,7 @@ if(NOT BENCHMARK_FOUND)
 else()
     message(STATUS "Found Google Benchmark, building full benchmarks")
 
-    # 完整基准测试
+    # 
     add_executable(full_benchmarks
         full_bench.cpp
         coroutine_bench.cpp

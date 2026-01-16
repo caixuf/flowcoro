@@ -7,7 +7,7 @@ int main(int argc, char* argv[]) {
     std::cout << " FlowCoro Unified Test Runner" << std::endl;
     std::cout << std::string(50, '=') << std::endl;
 
-    // 简化的测试套件，运行子进程
+    // 
     std::vector<std::pair<std::string, std::string>> test_executables = {
         {"Core Functionality", "./test_core"},
         {"Database Layer", "./test_database"},
@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
         std::cout << "\n Running: " << name << std::endl;
         std::cout << std::string(30, '-') << std::endl;
 
-        // 运行测试可执行文件
+        // 
         int result = std::system(executable.c_str());
 
         if (result == 0) {
@@ -36,7 +36,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 打印总结
+    // 
     std::cout << "\n Test Summary:" << std::endl;
     std::cout << std::string(50, '=') << std::endl;
     std::cout << " Passed: " << total_passed << std::endl;

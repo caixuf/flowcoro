@@ -8,39 +8,39 @@
 
 namespace flowcoro {
 
-// when_all实现 - 等待所有task完成
+// when_all - task
 template<typename... Tasks>
 Task<std::tuple<decltype(std::declval<Tasks>().get())...>> when_all(Tasks&&... tasks) {
-    // 使用fold expression和参数展开
+    // fold expression
     auto execute_all = []<typename... Ts>(Ts&&... ts) -> Task<std::tuple<decltype(ts.get())...>> {
-        // 创建一个tuple来存储所有结果
+        // tuple
         std::tuple<decltype(ts.get())...> results;
 
-        // 使用索引展开来逐个等待每个task
+        // task
         auto await_task = [&]<std::size_t... Is>(std::index_sequence<Is...>) -> Task<void> {
-            // 使用fold expression按顺序等待所有task
+            // fold expressiontask
             ((std::get<Is>(results) = co_await std::forward<Ts>(ts)), ...);
             co_return;
         };
 
-        // 等待所有task完成
+        // task
         co_await await_task(std::index_sequence_for<Ts...>{});
 
-        // 返回所有结果
+        // 
         co_return std::move(results);
     };
 
-    // 调用执行函数
+    // 
     co_return co_await execute_all(std::forward<Tasks>(tasks)...);
 }
 
-// 检查单个任务的辅助函数模板
+// 
 template<std::size_t Index, typename Task>
 bool check_single_task(Task& task, bool& found, std::size_t& winner_index, std::any& result) {
-    if (found) return false; // 已找到完成的任务
+    if (found) return false; // 
     
     if (task.await_ready()) {
-        // 任务已完成，获取结果
+        // 
         try {
             auto task_result = task.await_resume();
             result = std::make_any<std::decay_t<decltype(task_result)>>(std::move(task_result));
@@ -48,34 +48,34 @@ bool check_single_task(Task& task, bool& found, std::size_t& winner_index, std::
             found = true;
             return true;
         } catch (...) {
-            // 如果有异常，也算完成
+            // 
             winner_index = Index;
             found = true;
-            // 可以在这里设置异常信息到result中
+            // result
             return true;
         }
     }
     return false;
 }
 
-// when_any实现 - 等待任意一个task完成
+// when_any - task
 template<typename... Tasks>
 Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
-    // 使用fold expression和参数展开，参考when_all的实现方式
+    // fold expressionwhen_all
     auto execute_any = []<typename... Ts>(Ts&&... ts) -> Task<std::pair<std::size_t, std::any>> {
-        // 将所有tasks存储在tuple中，避免引用问题
+        // taskstuple
         std::tuple<Ts...> task_tuple(std::forward<Ts>(ts)...);
         
-        // 启动所有任务的轮询检查
+        // 
         while (true) {
-            // 检查每个任务是否完成
+            // 
             std::size_t winner_index = std::size_t(-1);
             std::any result;
             bool found = false;
             
-            // 使用索引展开来检查每个task
+            // task
             auto check_tasks = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                // 使用fold expression检查所有任务
+                // fold expression
                 (check_single_task<Is>(std::get<Is>(task_tuple), found, winner_index, result) || ...);
             };
             
@@ -85,21 +85,21 @@ Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
                 co_return std::make_pair(winner_index, std::move(result));
             }
             
-            // 短暂休眠避免忙等待 - 使用ClockAwaiter
+            //  - ClockAwaiter
             co_await ClockAwaiter(std::chrono::milliseconds(1));
         }
     };
 
-    // 调用执行函数
+    // 
     co_return co_await execute_any(std::forward<Tasks>(tasks)...);
 }
 
-// 便捷的when_any重载 - 支持超时
+// when_any - 
 template<typename TaskType, typename Duration>
 auto when_any_timeout(TaskType&& task, Duration timeout) {
     auto timeout_task = [timeout]() -> Task<bool> {
         co_await ClockAwaiter(timeout);
-        co_return false; // 超时返回false
+        co_return false; // false
     }();
     
     return when_any(std::forward<TaskType>(task), std::move(timeout_task));

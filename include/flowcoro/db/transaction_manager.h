@@ -7,7 +7,7 @@
 
 namespace flowcoro::db {
 
-// 事务状态
+// 
 enum class TransactionState {
     NOT_STARTED,
     ACTIVE,
@@ -16,7 +16,7 @@ enum class TransactionState {
     FAILED
 };
 
-// 事务隔离级别
+// 
 enum class IsolationLevel {
     READ_UNCOMMITTED,
     READ_COMMITTED,
@@ -24,20 +24,20 @@ enum class IsolationLevel {
     SERIALIZABLE
 };
 
-// 事务选项
+// 
 struct TransactionOptions {
-    std::chrono::milliseconds timeout{30000}; // 30秒超时
-    bool auto_rollback_on_error{true}; // 错误时自动回滚
-    int max_retries{3}; // 最大重试次数
-    std::chrono::milliseconds retry_delay{100}; // 重试延迟
-    IsolationLevel isolation_level{IsolationLevel::READ_COMMITTED}; // 默认隔离级别
+    std::chrono::milliseconds timeout{30000}; // 30
+    bool auto_rollback_on_error{true}; // 
+    int max_retries{3}; // 
+    std::chrono::milliseconds retry_delay{100}; // 
+    IsolationLevel isolation_level{IsolationLevel::READ_COMMITTED}; // 
 };
 
-// 事务管理器 - 提供RAII事务管理
+//  - RAII
 template<typename ConnectionType>
 class Transaction {
 public:
-    // 默认构造函数 - 用于Task的promise_type
+    //  - Taskpromise_type
     Transaction()
         : connection_(ConnectionGuard<ConnectionType>{})
         , options_({})
@@ -52,24 +52,24 @@ public:
         , start_time_(std::chrono::steady_clock::now()) {}
 
     ~Transaction() {
-        // RAII自动清理
+        // RAII
         if (state_ == TransactionState::ACTIVE) {
-            // 在析构函数中不能使用协程，所以需要同步回滚
+            // 
             try {
                 sync_rollback();
             } catch (...) {
-                // 忽略析构函数中的异常
+                // 
             }
         }
     }
 
-    // 禁止拷贝，允许移动
+    // 
     Transaction(const Transaction&) = delete;
     Transaction& operator=(const Transaction&) = delete;
     Transaction(Transaction&&) = default;
     Transaction& operator=(Transaction&&) = default;
 
-    // 开始事务
+    // 
     Task<void> begin() {
         if (state_ != TransactionState::NOT_STARTED) {
             throw std::runtime_error("Transaction already started");
@@ -85,7 +85,7 @@ public:
         }
     }
 
-    // 提交事务
+    // 
     Task<void> commit() {
         if (state_ != TransactionState::ACTIVE) {
             LOG_ERROR("Transaction not active for commit");
@@ -97,7 +97,7 @@ public:
         bool should_auto_rollback = false;
 
         try {
-            // 处理可能抛出异常的commit调用
+            // commit
             auto commit_result = co_await connection_->commit();
             if (commit_result.success) {
                 state_ = TransactionState::COMMITTED;
@@ -112,14 +112,14 @@ public:
             should_auto_rollback = options_.auto_rollback_on_error;
         }
 
-        // 在try-catch之外处理回滚
+        // try-catch
         if (should_auto_rollback) {
             co_await auto_rollback();
         }
     }
 
 private:
-    // 自动回滚辅助方法
+    // 
     Task<void> auto_rollback() {
         try {
             auto rollback_result = co_await rollback();
@@ -133,7 +133,7 @@ private:
 
 public:
 
-    // 回滚事务
+    // 
     Task<QueryResult> rollback() {
         if (state_ != TransactionState::ACTIVE) {
             LOG_ERROR("Transaction not active for rollback");
@@ -162,7 +162,7 @@ public:
         }
     }
 
-    // 执行SQL - 自动事务管理
+    // SQL - 
     template<typename... Args>
     Task<QueryResult> execute(const std::string& sql, Args&&... args) {
         if (state_ != TransactionState::ACTIVE) {
@@ -193,19 +193,19 @@ public:
         co_return result;
     }
 
-    // 获取事务状态
+    // 
     TransactionState get_state() const { return state_; }
 
-    // 检查事务是否活跃
+    // 
     bool is_active() const { return state_ == TransactionState::ACTIVE; }
 
-    // 获取事务持续时间
+    // 
     std::chrono::milliseconds get_duration() const {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time_);
     }
 
-    // 获取底层连接(谨慎使用)
+    // ()
     ConnectionType* get_connection() { return connection_.operator->(); }
 
 private:
@@ -220,29 +220,29 @@ private:
         }
     }
 
-    // 同步回滚 - 在析构函数中使用
+    //  - 
     void sync_rollback() {
-        // 这里需要实现同步版本的回滚
-        // 实际项目中可能需要使用线程池执行
+        // 
+        // 
         try {
             if (connection_->is_valid()) {
-                // 简单的同步回滚实现
-                // 注意：这里可能阻塞，仅作为最后手段
+                // 
+                // 
             }
         } catch (...) {
-            // 忽略异常
+            // 
         }
     }
 };
 
-// 事务管理器工厂
+// 
 template<typename ConnectionType>
 class TransactionManager {
 public:
     TransactionManager(std::shared_ptr<ConnectionPool<ConnectionType>> pool)
         : pool_(std::move(pool)) {}
 
-    // 开始新事务
+    // 
     Task<Transaction<ConnectionType>> begin_transaction(
         const TransactionOptions& options = {}) {
 
@@ -252,7 +252,7 @@ public:
         co_return std::move(tx);
     }
 
-    // 执行事务性操作 - 自动管理事务生命周期
+    //  - 
     template<typename Func>
     auto execute_transaction(Func&& func,
                            const TransactionOptions& options = {})
@@ -264,9 +264,9 @@ public:
             try {
                 auto tx = co_await begin_transaction(options);
 
-                result = co_await func(tx); // 执行用户代码
+                result = co_await func(tx); // 
 
-                // 提交事务
+                // 
                 co_await tx.commit();
 
                 co_return result;
@@ -274,7 +274,7 @@ public:
             } catch (const std::exception& e) {
                 if (retry_count >= options.max_retries) {
                     LOG_ERROR("Transaction retry limit exceeded: %s", e.what());
-                    // 返回失败的结果而不是抛异常
+                    // 
                     decltype(result) failed_result{};
                     co_return failed_result;
                 }
@@ -282,22 +282,22 @@ public:
                 ++retry_count;
                 LOG_WARN("Transaction failed, retrying %d/%d: %s", retry_count, options.max_retries, e.what());
 
-                // 等待一段时间后重试
+                // 
                 if (options.retry_delay.count() > 0) {
-                    // 简化的sleep实现，不在异常处理中使用co_await
+                    // sleepco_await
                     std::this_thread::sleep_for(options.retry_delay);
                 }
 
-                // 继续重试
+                // 
                 continue;
             }
         }
 
-        // 不应该到达这里
+        // 
         throw std::runtime_error("Unexpected error in transaction execution");
     }
 
-    // 获取连接池统计
+    // 
     const PoolStats& get_stats() const {
         return pool_->get_stats();
     }
@@ -306,7 +306,7 @@ private:
     std::shared_ptr<ConnectionPool<ConnectionType>> pool_;
 
     Task<void> sleep_for(std::chrono::milliseconds duration) {
-        // 简单的异步sleep实现
+        // sleep
         class SleepAwaiter {
             std::chrono::milliseconds duration_;
         public:
@@ -330,17 +330,17 @@ private:
     }
 };
 
-// 便捷的事务执行宏
+// 
 #define FLOWCORO_TRANSACTION(manager, options, ...) \
     co_await manager.execute_transaction([&](auto& tx) -> Task<void> { \
         __VA_ARGS__ \
         co_return; \
     }, options)
 
-// 异步事务操作辅助函数
+// 
 namespace tx {
 
-// 批量操作
+// 
 template<typename ConnectionType>
 Task<std::vector<QueryResult>> batch_execute(
     Transaction<ConnectionType>& tx,
@@ -361,7 +361,7 @@ Task<std::vector<QueryResult>> batch_execute(
     co_return results;
 }
 
-// 条件执行
+// 
 template<typename ConnectionType, typename Predicate>
 Task<QueryResult> execute_if(
     Transaction<ConnectionType>& tx,
@@ -383,7 +383,7 @@ Task<QueryResult> execute_if(
     }
 }
 
-// 乐观锁重试
+// 
 template<typename ConnectionType, typename Func>
 auto with_optimistic_lock(
     TransactionManager<ConnectionType>& manager,
@@ -395,7 +395,7 @@ auto with_optimistic_lock(
     for (int retry = 0; retry < max_retries; ++retry) {
         try {
             co_return co_await manager.execute_transaction([&](auto& tx) -> Task<decltype(func(tx).get())> {
-                // 读取版本号
+                // 
                 auto version_result = co_await tx.execute(
                     "SELECT version FROM " + lock_table + " WHERE key = ? FOR UPDATE",
                     lock_key);
@@ -406,10 +406,10 @@ auto with_optimistic_lock(
 
                 int64_t old_version = std::stoll(version_result[0].at("version"));
 
-                // 执行用户操作
+                // 
                 auto result = co_await func(tx);
 
-                // 更新版本号
+                // 
                 auto update_result = co_await tx.execute(
                     "UPDATE " + lock_table + " SET version = version + 1 WHERE key = ? AND version = ?",
                     lock_key, std::to_string(old_version));
@@ -423,15 +423,15 @@ auto with_optimistic_lock(
 
         } catch (const std::runtime_error& e) {
             if (std::string(e.what()).find("lock conflict") != std::string::npos) {
-                // 乐观锁冲突，重试
+                // 
                 co_await manager.execute_transaction([retry](auto& tx) -> Task<void> {
-                    // 短暂延迟
+                    // 
                     std::this_thread::sleep_for(std::chrono::milliseconds(10 + retry * 5));
                     co_return;
                 });
                 continue;
             }
-            throw; // 其他错误直接抛出
+            throw; // 
         }
     }
 

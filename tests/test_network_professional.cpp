@@ -1,13 +1,13 @@
 /**
  * @file test_network_professional.cpp
- * @brief FlowCoro 网络模块专业测试套件
+ * @brief FlowCoro 
  * 
- * 测试覆盖：
- * - 并发连接处理能力
- * - 吞吐量与延迟测试
- * - 长连接稳定性
- * - 异常场景处理
- * - 内存泄漏检测
+ * 
+ * - 
+ * - 
+ * - 
+ * - 
+ * - 
  */
 
 #include "flowcoro.hpp"
@@ -49,7 +49,7 @@ private:
     };
 
 public:
-    // Echo 服务器协程
+    // Echo 
     Task<void> echo_handler(std::unique_ptr<Socket> socket) {
         try {
             TcpConnection conn(std::move(socket));
@@ -60,7 +60,7 @@ public:
                 if (data.empty()) break;
                 
                 messages_processed_.fetch_add(1);
-                bytes_transferred_.fetch_add(data.size() * 2); // 读+写
+                bytes_transferred_.fetch_add(data.size() * 2); // +
                 
                 co_await conn.write(data);
                 co_await conn.flush();
@@ -72,7 +72,7 @@ public:
         co_return;
     }
 
-    // 启动测试服务器
+    // 
     Task<void> start_test_server(uint16_t port) {
         auto& loop = GlobalEventLoop::get();
         TcpServer server(&loop);
@@ -85,9 +85,9 @@ public:
         try {
             co_await server.listen("127.0.0.1", port);
             std::cout << "Test server listening successfully on 127.0.0.1:" << port << std::endl;
-            server_ready_.store(true);  // 标记服务器就绪
+            server_ready_.store(true);  // 
             
-            // 添加小延迟确保accept_loop开始运行
+            // accept_loop
             co_await sleep_for(std::chrono::milliseconds(50));
             std::cout << "Test server accept loop started" << std::endl;
         } catch (const std::exception& e) {
@@ -104,7 +104,7 @@ public:
         co_return;
     }
 
-    // 等待服务器就绪
+    // 
     bool wait_for_server_ready(int timeout_ms = 5000) {
         auto start = steady_clock::now();
         while (!server_ready_.load()) {
@@ -118,7 +118,7 @@ public:
         return true;
     }
 
-    // 创建原生TCP客户端连接（用于测试）
+    // TCP
     int create_client_socket(const std::string& host, uint16_t port) {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock == -1) {
@@ -126,7 +126,7 @@ public:
             return -1;
         }
         
-        // 设置非阻塞
+        // 
         int flags = fcntl(sock, F_GETFL, 0);
         fcntl(sock, F_SETFL, flags | O_NONBLOCK);
         
@@ -142,12 +142,12 @@ public:
             return -1;
         }
         
-        // 等待连接完成
+        // 
         fd_set write_fds;
         FD_ZERO(&write_fds);
         FD_SET(sock, &write_fds);
         
-        timeval timeout{1, 0}; // 1秒超时
+        timeval timeout{1, 0}; // 1
         int select_result = select(sock + 1, nullptr, &write_fds, nullptr, &timeout);
         if (select_result <= 0) {
             std::cout << "Connection timeout or error, select result: " << select_result << std::endl;
@@ -155,7 +155,7 @@ public:
             return -1;
         }
         
-        // 检查连接状态
+        // 
         int error = 0;
         socklen_t len = sizeof(error);
         if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) != 0 || error != 0) {
@@ -166,7 +166,7 @@ public:
         return sock;
     }
 
-    // 并发连接测试
+    // 
     TestStats test_concurrent_connections(uint16_t port, size_t num_connections, size_t messages_per_conn) {
         TestStats stats;
         stats.start_time = steady_clock::now();
@@ -193,11 +193,11 @@ public:
                 for (size_t j = 0; j < messages_per_conn; ++j) {
                     std::string msg = "test_message_" + std::to_string(i) + "_" + std::to_string(j) + "\n";
                     
-                    // 发送消息
+                    // 
                     ssize_t sent = send(sock, msg.c_str(), msg.size(), MSG_NOSIGNAL);
                     if (sent <= 0) break;
                     
-                    // 接收回显
+                    // 
                     char buffer[1024];
                     ssize_t received = recv(sock, buffer, sizeof(buffer), 0);
                     if (received <= 0) break;
@@ -210,7 +210,7 @@ public:
             });
         }
         
-        // 等待所有客户端完成
+        // 
         for (auto& t : client_threads) {
             t.join();
         }
@@ -229,7 +229,7 @@ public:
         return stats;
     }
 
-    // 吞吐量测试（单连接大量数据）
+    // 
     TestStats test_throughput(uint16_t port, size_t message_size, size_t num_messages) {
         TestStats stats;
         stats.start_time = steady_clock::now();
@@ -250,11 +250,11 @@ public:
         size_t total_bytes_sent = 0;
         
         for (size_t i = 0; i < num_messages; ++i) {
-            // 发送大消息
+            // 
             ssize_t sent = send(sock, large_msg.c_str(), large_msg.size(), MSG_NOSIGNAL);
             if (sent <= 0) break;
             
-            // 接收回显
+            // 
             std::string received;
             char buffer[4096];
             while (received.size() < large_msg.size()) {
@@ -282,7 +282,7 @@ public:
         return stats;
     }
 
-    // 长连接稳定性测试
+    // 
     TestStats test_long_connection_stability(uint16_t port, std::chrono::seconds duration) {
         TestStats stats;
         stats.start_time = steady_clock::now();
@@ -312,7 +312,7 @@ public:
             message_count++;
             total_bytes_sent += sent + received;
             
-            // 小延迟模拟实际应用
+            // 
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         
@@ -351,7 +351,7 @@ public:
     }
 
     void run_all_tests(uint16_t port) {
-        // 重置计数器
+        // 
         connections_handled_ = 0;
         messages_processed_ = 0;
         bytes_transferred_ = 0;
@@ -359,28 +359,28 @@ public:
         std::cout << "FlowCoro Network Module Professional Test Suite" << std::endl;
         std::cout << "================================================" << std::endl;
         
-        // 等待服务器启动
+        // 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 测试1: 中等并发连接
+        // 1: 
         auto test1 = test_concurrent_connections(port, 50, 10);
         print_stats("Concurrent Connections Test (50 conns, 10 msgs each)", test1);
         
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        // 测试2: 高并发连接
+        // 2: 
         auto test2 = test_concurrent_connections(port, 200, 5);
         print_stats("High Concurrency Test (200 conns, 5 msgs each)", test2);
         
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        // 测试3: 吞吐量测试（大消息）
+        // 3: 
         auto test3 = test_throughput(port, 1024, 1000);
         print_stats("Throughput Test (1KB messages)", test3);
         
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        // 测试4: 长连接稳定性
+        // 4: 
         auto test4 = test_long_connection_stability(port, std::chrono::seconds(10));
         print_stats("Long Connection Stability Test (10s)", test4);
         
@@ -388,7 +388,7 @@ public:
         
         std::cout << "\nAll tests completed!" << std::endl;
         
-        // 总结
+        // 
         std::cout << "\nOverall Server Performance:" << std::endl;
         std::cout << "- Total connections handled: " << connections_handled_.load() << std::endl;
         std::cout << "- Total messages processed: " << messages_processed_.load() << std::endl;
@@ -397,7 +397,7 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    // 忽略SIGPIPE信号，避免在socket关闭时程序崩溃
+    // SIGPIPEsocket
     signal(SIGPIPE, SIG_IGN);
     
     uint16_t port = 18888;
@@ -408,20 +408,20 @@ int main(int argc, char* argv[]) {
     try {
         NetworkTester tester;
         
-        // 获取事件循环和协程管理器
-        auto& loop = GlobalEventLoop::get();  // EventLoop 自动启动
+        // 
+        auto& loop = GlobalEventLoop::get();  // EventLoop 
         auto& manager = flowcoro::CoroutineManager::get_instance();
         
-        // 启动测试服务器协程
+        // 
         auto server_task = tester.start_test_server(port);
         
-        // 调度服务器任务执行
+        // 
         auto server_handle = server_task.handle;
         if (server_handle && !server_handle.done()) {
             manager.schedule_resume(server_handle);
         }
         
-        // 在后台线程运行驱动循环
+        // 
         std::atomic<bool> should_stop{false};
         std::thread driver_thread([&manager, &should_stop]() {
             while (!should_stop.load()) {
@@ -430,7 +430,7 @@ int main(int argc, char* argv[]) {
             }
         });
         
-        // 等待服务器启动
+        // 
         if (!tester.wait_for_server_ready()) {
             std::cerr << "Server failed to start within timeout" << std::endl;
             should_stop = true;
@@ -441,10 +441,10 @@ int main(int argc, char* argv[]) {
         
         std::cout << "Server is ready, starting tests..." << std::endl;
         
-        // 在主线程运行测试
+        // 
         tester.run_all_tests(port);
         
-        // 停止后台线程
+        // 
         should_stop = true;
         loop.stop();
         driver_thread.join();

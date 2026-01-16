@@ -8,7 +8,7 @@
 
 namespace flowcoro {
 
-// 错误类型定义
+// 
 enum class FlowCoroError {
     NetworkTimeout,
     DatabaseConnectionFailed,
@@ -19,7 +19,7 @@ enum class FlowCoroError {
     UnknownError
 };
 
-// 错误信息结构
+// 
 struct ErrorInfo {
     FlowCoroError code;
     std::string message;
@@ -52,18 +52,18 @@ private:
     }
 };
 
-// void Result特化的Ok构造
+// void ResultOk
 template<>
 struct Ok<void> {
     Ok() = default;
 };
 
-// void版本的便利函数
+// void
 inline Ok<void> ok() {
     return Ok<void>{};
 }
 
-// 协程错误传播宏
+// 
 #define CO_TRY(expr) \
     ({ \
         auto __result = (expr); \
@@ -73,7 +73,7 @@ inline Ok<void> ok() {
         std::move(__result).unwrap(); \
     })
 
-// 协程错误传播宏 - void版本
+//  - void
 #define CO_TRY_VOID(expr) \
     do { \
         auto __result = (expr); \
@@ -83,11 +83,11 @@ inline Ok<void> ok() {
         __result.unwrap(); \
     } while(0)
 
-// 便利宏创建错误
+// 
 #define FLOWCORO_ERROR(code, msg) \
     flowcoro::err(flowcoro::ErrorInfo(code, msg, __FILE__, __LINE__))
 
-// Try-catch 转换为Result的工具函数
+// Try-catch Result
 template<typename F>
 auto try_catch_to_result(F&& func) noexcept -> Result<std::invoke_result_t<F>, ErrorInfo> {
     try {

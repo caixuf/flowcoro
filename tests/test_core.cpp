@@ -13,7 +13,7 @@ using namespace flowcoro;
 using namespace flowcoro::test;
 using namespace lockfree;
 
-// 测试协程基础功能
+// 
 TEST_CASE(basic_coroutine) {
     bool executed = false;
 
@@ -22,22 +22,22 @@ TEST_CASE(basic_coroutine) {
         co_return 42;
     }();
 
-    // 等待协程完成并验证结果
+    // 
     auto result = sync_wait(std::move(coro));
     TEST_EXPECT_EQ(result, 42);
     
-    // 协程完成后应该已经执行过
+    // 
     TEST_EXPECT_TRUE(executed);
 }
 
-// 测试线程池
+// 
 TEST_CASE(thread_pool) {
     ThreadPool pool(4);
 
     std::atomic<int> counter{0};
     std::vector<std::future<void>> futures;
 
-    // 提交多个任务
+    // 
     for (int i = 0; i < 10; ++i) {
         futures.push_back(pool.enqueue([&counter]() {
             counter.fetch_add(1);
@@ -45,7 +45,7 @@ TEST_CASE(thread_pool) {
         }));
     }
 
-    // 等待所有任务完成
+    // 
     for (auto& f : futures) {
         f.wait();
     }
@@ -53,11 +53,11 @@ TEST_CASE(thread_pool) {
     TEST_EXPECT_EQ(counter.load(), 10);
 }
 
-// 测试内存池 - 支持动态扩容
+//  - 
 TEST_CASE(memory_pool) {
-    MemoryPool pool(64, 16); // 64字节块，16个块
+    MemoryPool pool(64, 16); // 6416
 
-    // 分配内存
+    // 
     std::vector<void*> ptrs;
     for (int i = 0; i < 16; ++i) {
         void* ptr = pool.allocate();
@@ -65,23 +65,23 @@ TEST_CASE(memory_pool) {
         ptrs.push_back(ptr);
     }
 
-    // 库支持动态扩容，继续分配应该成功
+    // 
     void* ptr = pool.allocate();
-    TEST_EXPECT_TRUE(ptr != nullptr); // 动态扩容
+    TEST_EXPECT_TRUE(ptr != nullptr); // 
     ptrs.push_back(ptr);
 
-    // 释放一些内存
+    // 
     for (size_t i = 0; i < 8; ++i) {
         pool.deallocate(ptrs[i]);
     }
 
-    // 应该能继续分配
+    // 
     ptr = pool.allocate();
     TEST_EXPECT_TRUE(ptr != nullptr);
     pool.deallocate(ptr);
 }
 
-// 测试对象池
+// 
 TEST_CASE(object_pool) {
     struct TestObject {
         int value = 0;
@@ -91,7 +91,7 @@ TEST_CASE(object_pool) {
 
     ObjectPool<TestObject> pool(8);
 
-    // 获取对象
+    // 
     auto obj1 = pool.acquire();
     obj1->value = 42;
     TEST_EXPECT_EQ(obj1->value, 42);
@@ -100,20 +100,20 @@ TEST_CASE(object_pool) {
     obj2->value = 100;
     TEST_EXPECT_EQ(obj2->value, 100);
 
-    // 归还对象
+    // 
     pool.release(std::move(obj1));
     pool.release(std::move(obj2));
 
-    // 再次获取（可能是复用的对象）
+    // 
     auto obj3 = pool.acquire();
     TEST_EXPECT_TRUE(obj3 != nullptr);
 }
 
-// 测试无锁队列
+// 
 TEST_CASE(lockfree_queue) {
     Queue<int> queue;
 
-    // 测试单线程操作
+    // 
     queue.enqueue(1);
     queue.enqueue(2);
     queue.enqueue(3);
@@ -128,20 +128,20 @@ TEST_CASE(lockfree_queue) {
     TEST_EXPECT_TRUE(queue.dequeue(value));
     TEST_EXPECT_EQ(value, 3);
 
-    // 队列应该为空
+    // 
     TEST_EXPECT_FALSE(queue.dequeue(value));
 }
 
-// 测试多线程下的无锁队列 - 使用协程池而非用户线程
+//  - 
 TEST_CASE(lockfree_queue_multithreaded) {
     Queue<int> queue;
-    const int num_items = 100; // 减少数量，便于测试
+    const int num_items = 100; // 
 
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
     std::atomic<bool> production_done{false};
 
-    // 使用协程池调度任务，而不是用户创建线程
+    // 
     auto producer_task = [&]() -> Task<void> {
         for (int i = 0; i < num_items; ++i) {
             queue.enqueue(i);
@@ -157,21 +157,21 @@ TEST_CASE(lockfree_queue_multithreaded) {
             if (queue.dequeue(value)) {
                 consumed.fetch_add(1);
             }
-            // 简单的忙等待，避免复杂的协程睡眠
+            // 
         }
         co_return;
     };
 
-    // 启动生产者和消费者协程
+    // 
     auto prod = producer_task();
     auto cons = consumer_task();
 
-    // 使用协程管理器调度
+    // 
     auto& manager = CoroutineManager::get_instance();
     schedule_coroutine_enhanced(prod.handle);
     schedule_coroutine_enhanced(cons.handle);
 
-    // 驱动协程执行，设置超时防止死锁
+    // 
     int timeout_counter = 0;
     while ((!prod.handle.done() || !cons.handle.done()) && timeout_counter < 1000) {
         manager.drive();
@@ -183,17 +183,17 @@ TEST_CASE(lockfree_queue_multithreaded) {
     TEST_EXPECT_EQ(consumed.load(), num_items);
 }
 
-// 测试协程同步等待功能
+// 
 TEST_CASE(coroutine_sync_wait) {
     std::atomic<int> counter{0};
 
-    // 创建一个简单的协程任务
+    // 
     auto task = [&counter]() -> Task<int> {
         counter.fetch_add(1);
         co_return 42;
     }();
 
-    // 使用sync_wait等待协程完成
+    // sync_wait
     auto result = sync_wait(std::move(task));
     
     TEST_EXPECT_EQ(counter.load(), 1);

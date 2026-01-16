@@ -1,98 +1,98 @@
-# FlowCoro Profile-Guided Optimization (PGO) 指南
+# FlowCoro Profile-Guided Optimization (PGO) 
 
-## 简介
+## 
 
-F## 配置选项
+F## 
 
-| 选项 | 默认值 | 描述 |
+|  |  |  |
 |------|--------|------|
-| `FLOWCORO_ENABLE_PGO` | ON | 启用PGO支持 |
-| `FLOWCORO_PGO_GENERATE` | OFF | 生成新的profile数据 |
+| `FLOWCORO_ENABLE_PGO` | ON | PGO |
+| `FLOWCORO_PGO_GENERATE` | OFF | profile |
 
-## 文件结构
+## 
 
 ```text
 FlowCoro/
-├── pgo_profiles/           # PGO profile数据存储
-│   └── *.gcda             # 编译器生成的profile文件
-└── build/                 # 构建目录（自动启用PGO）
-```ided Optimization (PGO)，当profile数据可用时自动提供37.5%的性能提升！
+ pgo_profiles/           # PGO profile
+    *.gcda             # profile
+ build/                 # PGO
+```ided Optimization (PGO)profile37.5%
 
-## 性能收益
+## 
 
->  **详细性能数据**: 完整的PGO优化前后对比请参考 [性能数据参考](PERFORMANCE_DATA.md)
+>  ****: PGO [](PERFORMANCE_DATA.md)
 
-PGO优化后的主要性能提升：
+PGO
 
-- **协程创建性能**: +32%
-- **WhenAny性能**: +75%
-- **队列操作**: +25.6%
-- **整体性能**: +37.5%
-- **WhenAny并发操作**: +75%  
-- **整体吞吐量**: +37.5%
-- **协程vs线程优势**: 139.8x（从102.2x提升）
+- ****: +32%
+- **WhenAny**: +75%
+- ****: +25.6%
+- ****: +37.5%
+- **WhenAny**: +75%  
+- ****: +37.5%
+- **vs**: 139.8x102.2x
 
-## 使用方式
+## 
 
-### 1. 自动PGO（推荐）
+### 1. PGO
 
-FlowCoro会自动检测并使用可用的PGO profile数据：
+FlowCoroPGO profile
 
 ```bash
-# 正常构建，自动启用PGO优化（如果profile数据存在）
+# PGOprofile
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
-### 2. 手动生成PGO profiles
+### 2. PGO profiles
 
-如果需要为新的工作负载优化：
+
 
 ```bash
-# 第一步：生成profile数据
+# profile
 mkdir build_pgo && cd build_pgo
 cmake -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_PGO_GENERATE=ON ..
 make -j$(nproc)
 
-# 第二步：运行代表性工作负载
+# 
 ./examples/hello_world 50000
 ./benchmarks/professional_flowcoro_benchmark
 ./tests/test_core
 
-# 第三步：复制profile数据到项目目录
+# profile
 find . -name "*.gcda" -exec cp {} ../pgo_profiles/ \;
 
-# 第四步：重新构建使用PGO优化
+# PGO
 cd .. && rm -rf build_pgo
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
-### 3. 禁用PGO
+### 3. PGO
 
 ```bash
 cmake -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_ENABLE_PGO=OFF ..
 ```
 
-## 配置选项
+## 
 
-| 选项 | 默认值 | 描述 |
+|  |  |  |
 |------|--------|------|
-| `FLOWCORO_ENABLE_PGO` | ON | 启用PGO支持 |
-| `FLOWCORO_PGO_USE` | ON | 使用已有的profile数据 |
-| `FLOWCORO_PGO_GENERATE` | OFF | 生成新的profile数据 |
+| `FLOWCORO_ENABLE_PGO` | ON | PGO |
+| `FLOWCORO_PGO_USE` | ON | profile |
+| `FLOWCORO_PGO_GENERATE` | OFF | profile |
 
-## 工作原理
+## 
 
-1. **Profile生成阶段**: 使用`-fprofile-generate`编译，运行代表性负载
-2. **优化编译阶段**: 使用`-fprofile-use`基于profile数据优化代码
-3. **自动检测**: CMake自动检测`pgo_profiles/`目录中的profile数据
+1. **Profile**: `-fprofile-generate`
+2. ****: `-fprofile-use`profile
+3. ****: CMake`pgo_profiles/`profile
 
-## 性能验证
+## 
 
-运行性能测试验证PGO效果：
+PGO
 
 ```bash
 cd build
@@ -100,58 +100,58 @@ cd build
 ./benchmarks/professional_flowcoro_benchmark
 ```
 
-期望结果：
-- 协程吞吐量: 百万级+ 请求/秒
-- 协程vs线程优势: 显著性能提升
 
-## 更新Profile数据
+- : + /
+- vs: 
 
-当添加新功能或改变性能关键路径时，重新生成profile数据。
+## Profile
 
-## 最佳实践
+profile
 
-1. **保持profile数据最新**: 重大代码变更后重新生成profile
-2. **使用代表性负载**: profile生成时运行真实的使用场景
-3. **验证性能提升**: 定期运行基准测试确认PGO效果
-4. **版本控制**: 将`pgo_profiles/`目录加入版本控制
+## 
 
-## 故障排除
+1. **profile**: profile
+2. ****: profile
+3. ****: PGO
+4. ****: `pgo_profiles/`
 
-### CMake提示：找不到PGO profile数据
+## 
 
-检查profile文件是否存在：
+### CMakePGO profile
+
+profile
 
 ```bash
 ls -la pgo_profiles/
 ```
 
-如需重新生成，按照上述手动生成步骤操作。
 
-### 编译器警告：profile count data file not found
 
-这是正常的警告，表示特定文件没有profile数据，不影响PGO效果。
+### profile count data file not found
 
-### 性能没有提升
+profilePGO
 
-1. 确认使用Release构建模式
-2. 验证PGO确实启用（CMake配置输出）
-3. 重新生成适合当前工作负载的profile数据
+### 
 
-## 技术细节
+1. Release
+2. PGOCMake
+3. profile
 
-FlowCoro的PGO实现基于GCC的Profile-Guided Optimization：
+## 
 
-- **Profile格式**: GCDA (GCC Data Archive)
-- **优化目标**: 分支预测、函数内联、循环优化
-- **覆盖范围**: 核心协程调度、内存池、lockfree数据结构
+FlowCoroPGOGCCProfile-Guided Optimization
 
-## 性能成果
+- **Profile**: GCDA (GCC Data Archive)
+- ****: 
+- ****: lockfree
 
->  **完整数据**: 详细的性能对比和基准测试结果请参考 [性能数据参考](PERFORMANCE_DATA.md)
+## 
 
-FlowCoro通过多层优化实现卓越性能：
+>  ****:  [](PERFORMANCE_DATA.md)
 
-1. **Memory Pool优化**: 数倍性能提升
-2. **LockFree优化**: 显著性能提升  
-3. **PGO编译器优化**: 大幅性能提升
-4. **综合效果**: 百万级请求/秒，显著协程优势
+FlowCoro
+
+1. **Memory Pool**: 
+2. **LockFree**:   
+3. **PGO**: 
+4. ****: /

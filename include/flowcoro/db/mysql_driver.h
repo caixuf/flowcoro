@@ -2,7 +2,7 @@
 
 #include "connection_pool.h"
 
-// 条件编译MySQL支持
+// MySQL
 #ifdef FLOWCORO_HAS_MYSQL
 #include <mysql/mysql.h>
 #endif
@@ -13,7 +13,7 @@ namespace flowcoro::db {
 
 #ifdef FLOWCORO_HAS_MYSQL
 
-// MySQL连接实现
+// MySQL
 class MySQLConnection : public IConnection {
 public:
     MySQLConnection(MYSQL* mysql) : mysql_(mysql) {}
@@ -59,7 +59,7 @@ public:
     Task<bool> ping() override {
         if (!mysql_) co_return false;
 
-        // 在线程池中执行ping，因为mysql_ping可能阻塞
+        // pingmysql_ping
         co_return co_await GlobalThreadPool::get().enqueue([this]() -> bool {
             return mysql_ping(mysql_) == 0;
         });
@@ -96,28 +96,28 @@ private:
             co_return result;
         }
 
-        // 在线程池中执行查询以避免阻塞协程
+        // 
         co_return co_await GlobalThreadPool::get().enqueue([this, sql, params]() -> QueryResult {
             QueryResult result;
 
             try {
-                // 准备SQL语句
+                // SQL
                 std::string prepared_sql = prepare_sql(sql, params);
 
-                // 执行查询
+                // 
                 if (mysql_real_query(mysql_, prepared_sql.c_str(), prepared_sql.length()) != 0) {
                     result.error = mysql_error(mysql_);
                     return result;
                 }
 
-                // 获取结果
+                // 
                 MYSQL_RES* mysql_result = mysql_store_result(mysql_);
                 if (mysql_result) {
-                    // 有结果集的查询（SELECT等）
+                    // SELECT
                     result = process_result_set(mysql_result);
                     mysql_free_result(mysql_result);
                 } else {
-                    // 没有结果集的查询（INSERT, UPDATE, DELETE等）
+                    // INSERT, UPDATE, DELETE
                     if (mysql_errno(mysql_) == 0) {
                         result.success = true;
                         result.affected_rows = mysql_affected_rows(mysql_);
@@ -143,7 +143,7 @@ private:
         size_t pos = 0;
 
         while ((pos = result.find('?', pos)) != std::string::npos && param_index < params.size()) {
-            // 转义参数值
+            // 
             std::string escaped_param = escape_string(params[param_index]);
             result.replace(pos, 1, "'" + escaped_param + "'");
             pos += escaped_param.length() + 2; // +2 for quotes
@@ -186,11 +186,11 @@ private:
     }
 };
 
-// MySQL驱动实现
+// MySQL
 class MySQLDriver : public IDriver<MySQLConnection> {
 public:
     MySQLDriver() {
-        // 初始化MySQL库（线程安全）
+        // MySQL
         mysql_library_init(0, nullptr, nullptr);
     }
 
@@ -201,7 +201,7 @@ public:
     Task<std::unique_ptr<MySQLConnection>> create_connection(
         const std::string& connection_string) override {
 
-        // 在线程池中创建连接以避免阻塞
+        // 
         co_return co_await GlobalThreadPool::get().enqueue([this, connection_string]()
             -> std::unique_ptr<MySQLConnection> {
 
@@ -213,10 +213,10 @@ public:
                     throw std::runtime_error("Failed to initialize MySQL connection");
                 }
 
-                // 设置连接选项
+                // 
                 set_connection_options(mysql, params);
 
-                // 建立连接
+                // 
                 if (!mysql_real_connect(mysql,
                                        params.host.c_str(),
                                        params.user.c_str(),
@@ -272,7 +272,7 @@ private:
     ConnectionParams parse_connection_string(const std::string& conn_str) const {
         ConnectionParams params;
 
-        // 支持格式: mysql://user:password@host:port/database?param=value
+        // : mysql://user:password@host:port/database?param=value
         std::regex url_regex(R"(mysql://([^:]+)(?::([^@]*))?@([^:/]+)(?::(\d+))?/([^?]+)(?:\?(.+))?)");
         std::smatch matches;
 
@@ -311,24 +311,24 @@ private:
     }
 
     void set_connection_options(MYSQL* mysql, const ConnectionParams& params) const {
-        // 设置字符集
+        // 
         mysql_options(mysql, MYSQL_SET_CHARSET_NAME, params.charset.c_str());
 
-        // 设置超时
+        // 
         mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &params.connect_timeout);
         mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &params.read_timeout);
         mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &params.write_timeout);
 
-        // 设置自动重连
+        // 
         mysql_options(mysql, MYSQL_OPT_RECONNECT, &params.auto_reconnect);
 
-        // 启用多语句支持
+        // 
         unsigned long client_flags = CLIENT_MULTI_STATEMENTS;
         mysql_options(mysql, MYSQL_INIT_COMMAND, "SET SESSION sql_mode='STRICT_TRANS_TABLES'");
     }
 };
 
-// 便捷的工厂函数
+// 
 inline std::unique_ptr<ConnectionPool<MySQLConnection>> create_mysql_pool(
     const std::string& connection_string,
     const PoolConfig& config = {}) {
@@ -340,7 +340,7 @@ inline std::unique_ptr<ConnectionPool<MySQLConnection>> create_mysql_pool(
 
 #else // !FLOWCORO_HAS_MYSQL
 
-// 当没有MySQL支持时的占位实现
+// MySQL
 class MySQLConnection : public IConnection {
 public:
     Task<QueryResult> execute(const std::string&) override {

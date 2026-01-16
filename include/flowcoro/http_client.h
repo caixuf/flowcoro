@@ -26,7 +26,7 @@
 
 namespace flowcoro::net {
 
-// HTTP方法
+// HTTP
 enum class HttpMethod {
     GET,
     POST,
@@ -37,7 +37,7 @@ enum class HttpMethod {
     OPTIONS
 };
 
-// HTTP响应状态
+// HTTP
 struct HttpResponse {
     int status_code = 0;
     std::string status_text;
@@ -51,23 +51,23 @@ struct HttpResponse {
         : status_code(code), status_text(text), body(content), success(code >= 200 && code < 300) {}
 };
 
-// URL解析结果
+// URL
 struct ParsedUrl {
     std::string scheme; // http/https
-    std::string host; // 主机名
-    std::string port; // 端口
-    std::string path; // 路径
-    std::string query; // 查询参数
+    std::string host; // 
+    std::string port; // 
+    std::string path; // 
+    std::string query; // 
     bool valid = false;
 };
 
-// HTTP请求客户端
+// HTTP
 class HttpClient {
 private:
     static constexpr int DEFAULT_TIMEOUT_MS = 30000;
     static constexpr size_t MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
 
-    // 网络初始化（Windows）
+    // Windows
     class NetworkInit {
     public:
         NetworkInit() {
@@ -86,11 +86,11 @@ private:
 
     static NetworkInit network_init_;
 
-    // 解析URL
+    // URL
     ParsedUrl parse_url(const std::string& url) {
         ParsedUrl result;
 
-        // 简单的URL解析正则表达式
+        // URL
         std::regex url_regex(R"((https?)://([^/:]+)(?::(\d+))?(/[^?#]*)?(?:\?([^#]*))?(?:#.*)?)");
         std::smatch matches;
 
@@ -101,12 +101,12 @@ private:
             result.path = matches[4].str();
             result.query = matches[5].str();
 
-            // 设置默认端口
+            // 
             if (result.port.empty()) {
                 result.port = (result.scheme == "https") ? "443" : "80";
             }
 
-            // 设置默认路径
+            // 
             if (result.path.empty()) {
                 result.path = "/";
             }
@@ -117,7 +117,7 @@ private:
         return result;
     }
 
-    // 创建TCP连接
+    // TCP
     int create_connection(const std::string& host, const std::string& port) {
         struct addrinfo hints = {};
         hints.ai_family = AF_UNSPEC;
@@ -135,7 +135,7 @@ private:
             if (sock == -1) continue;
 
             if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
-                break; // 连接成功
+                break; // 
             }
 
 #ifdef _WIN32
@@ -150,7 +150,7 @@ private:
         return sock;
     }
 
-    // 设置socket超时
+    // socket
     bool set_socket_timeout(int sock, int timeout_ms) {
 #ifdef _WIN32
         DWORD timeout = timeout_ms;
@@ -164,7 +164,7 @@ private:
 #endif
     }
 
-    // 发送HTTP请求
+    // HTTP
     bool send_request(int sock, const std::string& method, const ParsedUrl& url,
                      const std::unordered_map<std::string, std::string>& headers,
                      const std::string& body) {
@@ -175,7 +175,7 @@ private:
         }
         request << " HTTP/1.1\r\n";
 
-        // 默认头部
+        // 
         request << "Host: " << url.host << "\r\n";
         request << "Connection: close\r\n";
         request << "User-Agent: FlowCoro-HttpClient/2.0\r\n";
@@ -184,7 +184,7 @@ private:
             request << "Content-Length: " << body.length() << "\r\n";
         }
 
-        // 用户自定义头部
+        // 
         for (const auto& [key, value] : headers) {
             request << key << ": " << value << "\r\n";
         }
@@ -210,25 +210,25 @@ private:
         return true;
     }
 
-    // 接收HTTP响应
+    // HTTP
     HttpResponse receive_response(int sock) {
         HttpResponse response;
         std::string raw_response;
         char buffer[4096];
 
-        // 接收数据
+        // 
         while (raw_response.size() < MAX_RESPONSE_SIZE) {
             ssize_t received = recv(sock, buffer, sizeof(buffer) - 1, 0);
             if (received <= 0) {
-                break; // 连接关闭或错误
+                break; // 
             }
 
             buffer[received] = '\0';
             raw_response.append(buffer, received);
 
-            // 检查是否接收完整（简单检查Content-Length或连接关闭）
+            // Content-Length
             if (raw_response.find("\r\n\r\n") != std::string::npos) {
-                // 找到头部结束标志，检查是否有Content-Length
+                // Content-Length
                 size_t header_end = raw_response.find("\r\n\r\n") + 4;
                 std::string headers_part = raw_response.substr(0, header_end);
 
@@ -240,20 +240,20 @@ private:
                     size_t body_length = raw_response.length() - header_end;
 
                     if (body_length >= content_length) {
-                        break; // 接收完整
+                        break; // 
                     }
                 } else {
-                    // 没有Content-Length，依赖连接关闭
+                    // Content-Length
                     continue;
                 }
             }
         }
 
-        // 解析响应
+        // 
         return parse_response(raw_response);
     }
 
-    // 解析HTTP响应
+    // HTTP
     HttpResponse parse_response(const std::string& raw_response) {
         HttpResponse response;
 
@@ -262,7 +262,7 @@ private:
             return response;
         }
 
-        // 分离头部和主体
+        // 
         size_t header_end = raw_response.find("\r\n\r\n");
         if (header_end == std::string::npos) {
             response.error_message = "Invalid HTTP response format";
@@ -272,7 +272,7 @@ private:
         std::string headers_part = raw_response.substr(0, header_end);
         response.body = raw_response.substr(header_end + 4);
 
-        // 解析状态行
+        // 
         std::istringstream header_stream(headers_part);
         std::string status_line;
         if (!std::getline(header_stream, status_line)) {
@@ -280,12 +280,12 @@ private:
             return response;
         }
 
-        // 移除\r
+        // \r
         if (!status_line.empty() && status_line.back() == '\r') {
             status_line.pop_back();
         }
 
-        // 解析状态行: "HTTP/1.1 200 OK"
+        // : "HTTP/1.1 200 OK"
         std::regex status_regex(R"(HTTP/\d\.\d\s+(\d+)\s+(.*))");
         std::smatch matches;
         if (std::regex_match(status_line, matches, status_regex)) {
@@ -296,10 +296,10 @@ private:
             return response;
         }
 
-        // 解析头部
+        // 
         std::string header_line;
         while (std::getline(header_stream, header_line)) {
-            // 移除\r
+            // \r
             if (!header_line.empty() && header_line.back() == '\r') {
                 header_line.pop_back();
             }
@@ -311,7 +311,7 @@ private:
                 std::string key = header_line.substr(0, colon_pos);
                 std::string value = header_line.substr(colon_pos + 1);
 
-                // 去除前后空格
+                // 
                 key.erase(0, key.find_first_not_of(" \t"));
                 key.erase(key.find_last_not_of(" \t") + 1);
                 value.erase(0, value.find_first_not_of(" \t"));
@@ -326,13 +326,13 @@ private:
     }
 
 public:
-    // GET请求
+    // GET
     Task<HttpResponse> get(const std::string& url,
                           const std::unordered_map<std::string, std::string>& headers = {}) {
         co_return request_sync(HttpMethod::GET, url, headers, "");
     }
 
-    // POST请求
+    // POST
     Task<HttpResponse> post(const std::string& url, const std::string& body,
                            const std::unordered_map<std::string, std::string>& headers = {}) {
         auto merged_headers = headers;
@@ -342,11 +342,11 @@ public:
         co_return request_sync(HttpMethod::POST, url, merged_headers, body);
     }
 
-    // 同步请求方法
+    // 
     HttpResponse request_sync(HttpMethod method, const std::string& url,
                              const std::unordered_map<std::string, std::string>& headers = {},
                              const std::string& body = "") {
-        // 解析URL
+        // URL
         ParsedUrl parsed_url = parse_url(url);
         if (!parsed_url.valid) {
             HttpResponse error_response;
@@ -354,14 +354,14 @@ public:
             return error_response;
         }
 
-        // HTTPS支持检查
+        // HTTPS
         if (parsed_url.scheme == "https") {
             HttpResponse error_response;
             error_response.error_message = "HTTPS not supported in this simple implementation";
             return error_response;
         }
 
-        // 创建连接
+        // 
         int sock = create_connection(parsed_url.host, parsed_url.port);
         if (sock == -1) {
             HttpResponse error_response;
@@ -369,10 +369,10 @@ public:
             return error_response;
         }
 
-        // 设置超时
+        // 
         set_socket_timeout(sock, DEFAULT_TIMEOUT_MS);
 
-        // 发送请求
+        // 
         std::string method_str;
         switch (method) {
             case HttpMethod::GET: method_str = "GET"; break;
@@ -396,10 +396,10 @@ public:
             return error_response;
         }
 
-        // 接收响应
+        // 
         HttpResponse result = receive_response(sock);
 
-        // 关闭连接
+        // 
 #ifdef _WIN32
         closesocket(sock);
 #else
@@ -409,7 +409,7 @@ public:
         return result;
     }
 
-    // 通用请求方法（协程版本）
+    // 
     Task<HttpResponse> request(HttpMethod method, const std::string& url,
                               const std::unordered_map<std::string, std::string>& headers = {},
                               const std::string& body = "") {
@@ -417,7 +417,7 @@ public:
     }
 };
 
-// 静态成员初始化
+// 
 HttpClient::NetworkInit HttpClient::network_init_;
 
 } // namespace flowcoro::net

@@ -11,16 +11,16 @@
 
 namespace flowcoro::rpc {
 
-// RPC消息结构
+// RPC
 struct RpcMessage {
-    std::string id; // 请求ID
-    std::string method; // 方法名
-    std::string params; // 参数（JSON格式）
-    std::string result; // 结果（JSON格式）
-    std::string error; // 错误信息
-    bool is_request = true; // 是否为请求
+    std::string id; // ID
+    std::string method; // 
+    std::string params; // JSON
+    std::string result; // JSON
+    std::string error; // 
+    bool is_request = true; // 
 
-    // 序列化为JSON
+    // JSON
     std::string to_json() const {
         std::ostringstream oss;
         oss << "{";
@@ -40,11 +40,11 @@ struct RpcMessage {
         return oss.str();
     }
 
-    // 从JSON反序列化（简化版本）
+    // JSON
     static RpcMessage from_json(const std::string& json) {
         RpcMessage msg;
 
-        // 简单JSON解析（实际项目中应使用专业JSON库）
+        // JSONJSON
         auto extract_field = [&json](const std::string& field) -> std::string {
             std::string pattern = "\"" + field + "\":\"";
             size_t start = json.find(pattern);
@@ -59,11 +59,11 @@ struct RpcMessage {
         msg.method = extract_field("method");
         msg.error = extract_field("error");
 
-        // 提取params和result（可能不是字符串）
+        // paramsresult
         size_t params_pos = json.find("\"params\":");
         if (params_pos != std::string::npos) {
             params_pos += 9;
-            // 找到params值的结束位置（简化处理）
+            // params
             size_t comma_pos = json.find(",", params_pos);
             if (comma_pos != std::string::npos) {
                 msg.params = json.substr(params_pos, comma_pos - params_pos);
@@ -76,10 +76,10 @@ struct RpcMessage {
     }
 };
 
-// RPC处理函数类型
+// RPC
 using RpcHandler = std::function<Task<std::string>(const std::string& params)>;
 
-// RPC客户端
+// RPC
 class RpcClient {
 private:
     net::HttpClient http_client_;
@@ -89,7 +89,7 @@ private:
 public:
     RpcClient(const std::string& server_url) : server_url_(server_url) {}
 
-    // 远程方法调用 - 修复编译器内部错误
+    //  - 
     Task<std::string> call(const std::string& method, const std::string& params = "{}") {
         RpcMessage request;
         request.id = std::to_string(++request_id_counter_);
@@ -99,7 +99,7 @@ public:
 
         std::string json_data = request.to_json();
 
-        // 分步构建请求，避免复杂的临时对象
+        // 
         std::string url = server_url_ + "/rpc";
         std::unordered_map<std::string, std::string> headers;
         headers["Content-Type"] = "application/json";
@@ -120,7 +120,7 @@ public:
         co_return rpc_response.result;
     }
 
-    // 异步批量调用
+    // 
     Task<std::vector<std::string>> batch_call(
         const std::vector<std::pair<std::string, std::string>>& calls
     ) {
@@ -141,7 +141,7 @@ public:
     }
 };
 
-// RPC服务器
+// RPC
 class RpcServer {
 private:
     std::unordered_map<std::string, RpcHandler> handlers_;
@@ -151,12 +151,12 @@ private:
 public:
     RpcServer(int port) : port_(port) {}
 
-    // 注册RPC方法
+    // RPC
     void register_method(const std::string& method_name, RpcHandler handler) {
         handlers_[method_name] = std::move(handler);
     }
 
-    // 处理RPC请求
+    // RPC
     Task<std::string> handle_request(const std::string& json_data) {
         auto request = RpcMessage::from_json(json_data);
 
@@ -179,16 +179,16 @@ public:
         co_return response.to_json();
     }
 
-    // 启动服务器（简化版本，实际需要TCP服务器）
+    // TCP
     Task<void> start() {
         running_ = true;
         std::cout << " RPC Server started on port " << port_ << std::endl;
 
-        // 这里需要实现TCP服务器监听
-        // 为了演示，我们只是标记为运行状态
+        // TCP
+        // 
         while (running_) {
-            // 在实际实现中，这里会监听TCP连接
-            // 并为每个连接调用handle_request
+            // TCP
+            // handle_request
             co_await sleep_for(std::chrono::milliseconds(100));
         }
         co_return;
@@ -199,7 +199,7 @@ public:
         std::cout << " RPC Server stopped" << std::endl;
     }
 
-    // 获取已注册方法列表
+    // 
     std::vector<std::string> list_methods() const {
         std::vector<std::string> methods;
         methods.reserve(handlers_.size());
@@ -212,13 +212,13 @@ public:
     }
 };
 
-// RPC注册宏，简化方法注册
+// RPC
 #define FLOWCORO_RPC_METHOD(server, method_name, handler) \
     server.register_method(#method_name, [](const std::string& params) -> Task<std::string> { \
         co_return handler(params); \
     })
 
-// 类型安全的RPC代理生成器
+// RPC
 template<typename T>
 class RpcProxy {
 private:
@@ -227,8 +227,8 @@ private:
 public:
     explicit RpcProxy(RpcClient& client) : client_(client) {}
 
-    // 通过模板和概念可以实现类型安全的远程调用
-    // 这里简化为基本版本
+    // 
+    // 
     Task<std::string> invoke(const std::string& method, const std::string& params = "{}") {
         co_return co_await client_.call(method, params);
     }

@@ -2,7 +2,7 @@
 
 #include "connection_pool.h"
 
-// 条件编译Redis支持
+// Redis
 #ifdef FLOWCORO_HAS_REDIS
 #include <hiredis/hiredis.h>
 #endif
@@ -14,7 +14,7 @@
 
 namespace flowcoro::db {
 
-// Redis数据类型（无论是否有Redis支持都需要）
+// RedisRedis
 enum class RedisDataType {
     NIL,
     STRING,
@@ -24,7 +24,7 @@ enum class RedisDataType {
     STATUS
 };
 
-// Redis值类型（无论是否有Redis支持都需要）
+// RedisRedis
 struct RedisValue {
     RedisDataType type = RedisDataType::NIL;
     std::string string_val;
@@ -37,7 +37,7 @@ struct RedisValue {
     RedisValue(int64_t i) : type(RedisDataType::INTEGER), int_val(i) {}
     RedisValue(const std::vector<RedisValue>& arr) : type(RedisDataType::ARRAY), array_val(arr) {}
 
-    // 类型检查方法
+    // 
     bool is_nil() const { return type == RedisDataType::NIL; }
     bool is_string() const { return type == RedisDataType::STRING; }
     bool is_integer() const { return type == RedisDataType::INTEGER; }
@@ -66,7 +66,7 @@ struct RedisValue {
     operator bool() const { return type != RedisDataType::NIL && type != RedisDataType::ERROR; }
 };
 
-// Redis查询结果（无论是否有Redis支持都需要）
+// RedisRedis
 struct RedisResult {
     bool success{false};
     std::string error;
@@ -81,7 +81,7 @@ struct RedisResult {
 
 #ifdef FLOWCORO_HAS_REDIS
 
-// Redis连接实现
+// Redis
 class RedisConnection : public IConnection {
 public:
     RedisConnection(redisContext* context) : context_(context) {}
@@ -90,7 +90,7 @@ public:
         close();
     }
 
-    // 执行Redis命令
+    // Redis
     Task<RedisResult> execute_redis(const std::string& command) {
         co_return co_await execute_redis_internal(command);
     }
@@ -99,7 +99,7 @@ public:
         co_return co_await execute_redis_args(args);
     }
 
-    // 字符串操作
+    // 
     Task<RedisResult> set(const std::string& key, const std::string& value) {
         co_return co_await execute_redis({"SET", key, value});
     }
@@ -121,7 +121,7 @@ public:
         co_return co_await execute_redis({"EXISTS", key});
     }
 
-    // 哈希操作
+    // 
     Task<RedisResult> hset(const std::string& key, const std::string& field, const std::string& value) {
         co_return co_await execute_redis({"HSET", key, field, value});
     }
@@ -138,7 +138,7 @@ public:
         co_return co_await execute_redis({"HDEL", key, field});
     }
 
-    // 列表操作
+    // 
     Task<RedisResult> lpush(const std::string& key, const std::string& value) {
         co_return co_await execute_redis({"LPUSH", key, value});
     }
@@ -159,7 +159,7 @@ public:
         co_return co_await execute_redis({"LRANGE", key, std::to_string(start), std::to_string(stop)});
     }
 
-    // 集合操作
+    // 
     Task<RedisResult> sadd(const std::string& key, const std::string& member) {
         co_return co_await execute_redis({"SADD", key, member});
     }
@@ -176,7 +176,7 @@ public:
         co_return co_await execute_redis({"SISMEMBER", key, member});
     }
 
-    // 有序集合操作
+    // 
     Task<RedisResult> zadd(const std::string& key, double score, const std::string& member) {
         co_return co_await execute_redis({"ZADD", key, std::to_string(score), member});
     }
@@ -189,7 +189,7 @@ public:
         co_return co_await execute_redis({"ZREM", key, member});
     }
 
-    // 过期时间操作
+    // 
     Task<RedisResult> expire(const std::string& key, std::chrono::seconds ttl) {
         co_return co_await execute_redis({"EXPIRE", key, std::to_string(ttl.count())});
     }
@@ -198,14 +198,14 @@ public:
         co_return co_await execute_redis({"TTL", key});
     }
 
-    // IConnection接口实现 (为了兼容连接池)
+    // IConnection ()
     Task<QueryResult> execute(const std::string& sql) override {
         auto result = co_await execute_redis(sql);
         QueryResult qr;
         qr.success = result.success;
         qr.error = result.error;
         if (result.success) {
-            // 简单转换Redis结果为QueryResult格式
+            // RedisQueryResult
             std::unordered_map<std::string, std::string> row;
             row["result"] = result.value.to_string();
             qr.rows.push_back(std::move(row));
@@ -214,7 +214,7 @@ public:
     }
 
     Task<QueryResult> execute(const std::string& sql, const std::vector<std::string>& params) override {
-        // Redis不支持参数化查询，直接调用无参版本
+        // Redis
         co_return co_await execute(sql);
     }
 
@@ -260,11 +260,11 @@ public:
     }
 
     uint64_t get_last_insert_id() const override {
-        return 0; // Redis没有插入ID概念
+        return 0; // RedisID
     }
 
     uint64_t get_affected_rows() const override {
-        return 0; // Redis没有受影响行数概念
+        return 0; // Redis
     }
 
 private:
@@ -275,7 +275,7 @@ private:
             co_return RedisResult("Connection not initialized");
         }
 
-        // 在线程池中执行Redis命令以避免阻塞协程
+        // Redis
         co_return co_await GlobalThreadPool::get().enqueue([this, command]() -> RedisResult {
             redisReply* reply = (redisReply*)redisCommand(context_, command.c_str());
             if (!reply) {
@@ -297,7 +297,7 @@ private:
             co_return RedisResult("Empty command");
         }
 
-        // 在线程池中执行Redis命令
+        // Redis
         co_return co_await GlobalThreadPool::get().enqueue([this, args]() -> RedisResult {
             std::vector<const char*> argv;
             std::vector<size_t> argvlen;
@@ -360,7 +360,7 @@ private:
     }
 };
 
-// Redis驱动实现
+// Redis
 class RedisDriver : public IDriver<RedisConnection> {
 public:
     Task<std::unique_ptr<RedisConnection>> create_connection(
@@ -368,16 +368,16 @@ public:
 
         auto config = parse_connection_string(connection_string);
 
-        // 在线程池中创建连接以避免阻塞
+        // 
         auto context = co_await GlobalThreadPool::get().enqueue([config]() -> redisContext* {
-            struct timeval timeout = {2, 0}; // 2秒超时
+            struct timeval timeout = {2, 0}; // 2
             redisContext* context;
 
             if (config.host == "unix") {
-                // Unix socket连接
+                // Unix socket
                 context = redisConnectUnixWithTimeout(config.path.c_str(), timeout);
             } else {
-                // TCP连接
+                // TCP
                 context = redisConnectWithTimeout(config.host.c_str(), config.port, timeout);
             }
 
@@ -388,7 +388,7 @@ public:
                 return nullptr;
             }
 
-            // 设置认证
+            // 
             if (!config.password.empty()) {
                 redisReply* reply = (redisReply*)redisCommand(context, "AUTH %s", config.password.c_str());
                 if (!reply || reply->type == REDIS_REPLY_ERROR) {
@@ -399,7 +399,7 @@ public:
                 freeReplyObject(reply);
             }
 
-            // 选择数据库
+            // 
             if (config.database > 0) {
                 redisReply* reply = (redisReply*)redisCommand(context, "SELECT %d", config.database);
                 if (!reply || reply->type == REDIS_REPLY_ERROR) {
@@ -449,7 +449,7 @@ private:
     RedisConfig parse_connection_string(const std::string& connection_string) const {
         RedisConfig config;
 
-        // 支持的格式:
+        // :
         // redis://[password@]host[:port][/database]
         // redis://[password@]unix:/path/to/socket[?db=database]
         // host:port
@@ -462,7 +462,7 @@ private:
         std::smatch match;
 
         if (std::regex_match(connection_string, match, redis_url_regex)) {
-            // Redis URL格式
+            // Redis URL
             if (match[1].matched) {
                 config.password = match[1].str();
             }
@@ -472,7 +472,7 @@ private:
                 config.host = "unix";
                 config.path = match[3].str();
             } else if (match[4].matched) {
-                // TCP连接
+                // TCP
                 config.host = match[4].str();
                 if (match[5].matched) {
                     config.port = std::stoi(match[5].str());
@@ -485,15 +485,15 @@ private:
                 config.database = std::stoi(match[7].str());
             }
         } else if (std::regex_match(connection_string, match, simple_host_port_regex)) {
-            // 简单的host:port格式
+            // host:port
             config.host = match[1].str();
             config.port = std::stoi(match[2].str());
         } else if (std::regex_match(connection_string, unix_socket_regex)) {
-            // Unix socket路径
+            // Unix socket
             config.host = "unix";
             config.path = connection_string;
         } else if (connection_string.find(':') == std::string::npos) {
-            // 只有主机名
+            // 
             config.host = connection_string;
         } else {
             throw std::invalid_argument("Invalid Redis connection string format");
@@ -505,7 +505,7 @@ private:
 
 #else // !FLOWCORO_HAS_REDIS
 
-// 当没有Redis支持时的占位实现
+// Redis
 class RedisConnection : public IConnection {
 public:
     Task<QueryResult> execute(const std::string&) override {
@@ -532,7 +532,7 @@ public:
     uint64_t get_last_insert_id() const override { return 0; }
     uint64_t get_affected_rows() const override { return 0; }
 
-    // Redis特有方法的占位实现
+    // Redis
     Task<RedisResult> execute_redis(const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -540,7 +540,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 字符串操作
+    // 
     Task<RedisResult> set(const std::string&, const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -557,7 +557,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 哈希操作
+    // 
     Task<RedisResult> hset(const std::string&, const std::string&, const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -571,7 +571,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 列表操作
+    // 
     Task<RedisResult> lpush(const std::string&, const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -588,7 +588,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 集合操作
+    // 
     Task<RedisResult> sadd(const std::string&, const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -602,7 +602,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 有序集合操作
+    // 
     Task<RedisResult> zadd(const std::string&, double, const std::string&) {
         throw std::runtime_error("Redis support not compiled");
     }
@@ -613,7 +613,7 @@ public:
         throw std::runtime_error("Redis support not compiled");
     }
 
-    // 过期时间操作
+    // 
     Task<RedisResult> expire(const std::string&, std::chrono::seconds) {
         throw std::runtime_error("Redis support not compiled");
     }

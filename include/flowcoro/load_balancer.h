@@ -5,7 +5,7 @@
 
 namespace flowcoro {
 
-// 智能负载均衡器 - 无锁实现
+//  - 
 class SmartLoadBalancer {
 private:
     static constexpr size_t MAX_SCHEDULERS = 32;
@@ -24,16 +24,16 @@ public:
         scheduler_count_.store(std::min(count, MAX_SCHEDULERS), std::memory_order_release);
     }
 
-    // 选择负载最小的调度器
+    // 
     size_t select_scheduler() noexcept {
         size_t count = scheduler_count_.load(std::memory_order_acquire);
         if (count == 0) return 0;
         if (count == 1) return 0;
 
-        // 快速路径：使用轮询（性能更好）
+        // 
         size_t quick_choice = round_robin_counter_.fetch_add(1, std::memory_order_relaxed) % count;
         
-        // 每16次执行一次负载检查
+        // 16
         if ((quick_choice & 0xF) == 0) {
             size_t min_load = SIZE_MAX;
             size_t best_scheduler = 0;
@@ -51,33 +51,33 @@ public:
         return quick_choice;
     }
 
-    // 更新调度器负载
+    // 
     void update_load(size_t scheduler_id, size_t load) noexcept {
         if (scheduler_id < MAX_SCHEDULERS) {
             queue_loads_[scheduler_id].store(load, std::memory_order_relaxed);
         }
     }
 
-    // 增加调度器负载
+    // 
     void increment_load(size_t scheduler_id) noexcept {
         if (scheduler_id < MAX_SCHEDULERS) {
             queue_loads_[scheduler_id].fetch_add(1, std::memory_order_relaxed);
         }
     }
 
-    // 减少调度器负载
+    // 
     void decrement_load(size_t scheduler_id) noexcept {
         if (scheduler_id < MAX_SCHEDULERS) {
             queue_loads_[scheduler_id].fetch_sub(1, std::memory_order_relaxed);
         }
     }
     
-    // 记录任务完成
+    // 
     void on_task_completed(size_t scheduler_id) noexcept {
         decrement_load(scheduler_id);
     }
     
-    // 获取负载统计
+    // 
     struct LoadStats {
         size_t scheduler_id;
         size_t queue_load;
@@ -94,7 +94,7 @@ public:
             stats.push_back({
                 .scheduler_id = i,
                 .queue_load = queue_load,
-                .total_processed = 0, // 简化实现，暂不跟踪处理总数
+                .total_processed = 0, // 
                 .load_score = static_cast<double>(queue_load)
             });
         }

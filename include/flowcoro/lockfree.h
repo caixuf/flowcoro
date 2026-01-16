@@ -6,11 +6,11 @@
 
 namespace lockfree {
 
-// 使用flowcoro内存池的便利函数
+// flowcoro
 using flowcoro::pool_malloc;
 using flowcoro::pool_free;
 
-// 无锁队列实现
+// 
 template<typename T>
 class Queue {
 private:
@@ -22,19 +22,19 @@ private:
         ~Node() {
             T* data_ptr = data.load();
             if (data_ptr) {
-                data_ptr->~T(); // 显式调用析构函数
-                pool_free(data_ptr); // 使用内存池释放
+                data_ptr->~T(); // 
+                pool_free(data_ptr); // 
             }
         }
     };
 
     alignas(64) std::atomic<Node*> head;
     alignas(64) std::atomic<Node*> tail;
-    alignas(64) std::atomic<bool> destroyed{false}; // 添加析构标志
+    alignas(64) std::atomic<bool> destroyed{false}; // 
 
 public:
     Queue() {
-        Node* dummy = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
+        Node* dummy = static_cast<Node*>(pool_malloc(sizeof(Node))); // 
         new(dummy) Node(); // placement new
         head.store(dummy);
         tail.store(dummy);
@@ -42,31 +42,31 @@ public:
     }
 
     ~Queue() {
-        // 设置析构标志
+        // 
         destroyed.store(true, std::memory_order_release);
 
-        // 先清理所有数据，避免析构时访问无效内存
+        // 
         T unused_item;
         while (dequeue_unsafe(unused_item)) {
-            // 清空队列
+            // 
         }
 
-        // 然后清理节点链表
+        // 
         Node* current = head.load();
         while (current) {
             Node* next = current->next.load();
-            current->~Node(); // 显式调用析构函数
-            pool_free(current); // 使用内存池释放
+            current->~Node(); // 
+            pool_free(current); // 
             current = next;
         }
     }
 
     void enqueue(T item) {
         if (destroyed.load(std::memory_order_acquire)) {
-            return; // 队列已析构，丢弃任务
+            return; // 
         }
 
-        // 优化：一次分配包含Node和数据的内存块
+        // Node
         struct NodeWithData {
             Node node;
             alignas(T) char data_storage[sizeof(T)];
@@ -87,7 +87,7 @@ public:
 
     bool dequeue(T& result) {
         if (destroyed.load(std::memory_order_acquire)) {
-            return false; // 队列已析构
+            return false; // 
         }
 
         return dequeue_unsafe(result);
@@ -97,35 +97,35 @@ private:
     bool dequeue_unsafe(T& result) {
         Node* head_node = head.load();
         if (!head_node) {
-            return false; // 队列已被析构
+            return false; // 
         }
 
         Node* next = head_node->next.load();
         if (next == nullptr) {
-            return false; // 队列为空
+            return false; // 
         }
 
         T* data_ptr = next->data.exchange(nullptr);
         if (data_ptr == nullptr) {
-            return false; // 数据已被其他线程取走
+            return false; // 
         }
 
         result = *data_ptr;
-        data_ptr->~T(); // 显式调用析构函数
+        data_ptr->~T(); // 
 
-        // 尝试更新head，如果失败也不要紧，下次调用会重试
+        // head
         Node* expected = head_node;
         if (head.compare_exchange_weak(expected, next)) {
-            head_node->~Node(); // 显式调用析构函数
+            head_node->~Node(); // 
             
-            // 计算包含Node的完整块地址并释放
+            // Node
             struct NodeWithData {
                 Node node;
                 alignas(T) char data_storage[sizeof(T)];
             };
             NodeWithData* block = reinterpret_cast<NodeWithData*>(
                 reinterpret_cast<char*>(head_node) - offsetof(NodeWithData, node));
-            pool_free(block); // 释放整个块
+            pool_free(block); // 
         }
 
         return true;
@@ -138,7 +138,7 @@ public:
         return head_node->next.load() == nullptr;
     }
 
-    // 估算队列大小（注意：这只是估计值，可能不准确）
+    // 
     size_t size_estimate() const {
         if (destroyed.load(std::memory_order_acquire)) {
             return 0;
@@ -147,8 +147,8 @@ public:
         size_t count = 0;
         Node* current = head.load();
         if (current) {
-            current = current->next.load(); // 跳过虚拟头节点
-            while (current && count < 10000) { // 限制最大计数以避免长时间循环
+            current = current->next.load(); // 
+            while (current && count < 10000) { // 
                 current = current->next.load();
                 count++;
             }
@@ -157,7 +157,7 @@ public:
     }
 };
 
-// 无锁栈实现 (Treiber Stack) - 优化内存分配
+//  (Treiber Stack) - 
 template<typename T>
 class Stack {
 private:
@@ -174,18 +174,18 @@ public:
     ~Stack() {
         while (Node* old_head = head.load()) {
             head.store(old_head->next);
-            old_head->~Node(); // 显式调用析构函数
-            pool_free(old_head); // 使用内存池释放
+            old_head->~Node(); // 
+            pool_free(old_head); // 
         }
     }
 
     void push(T item) {
-        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
+        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 
         new(new_node) Node(std::move(item)); // placement new
         new_node->next = head.load();
 
         while (!head.compare_exchange_weak(new_node->next, new_node)) {
-            // 重试
+            // 
         }
     }
 
@@ -193,13 +193,13 @@ public:
         Node* old_head = head.load();
 
         while (old_head && !head.compare_exchange_weak(old_head, old_head->next)) {
-            // 重试
+            // 
         }
 
         if (old_head) {
             result = std::move(old_head->data);
-            old_head->~Node(); // 显式调用析构函数
-            pool_free(old_head); // 使用内存池释放
+            old_head->~Node(); // 
+            pool_free(old_head); // 
             return true;
         }
 
@@ -211,7 +211,7 @@ public:
     }
 };
 
-// 无锁环形缓冲区 (SPSC Ring Buffer)
+//  (SPSC Ring Buffer)
 template<typename T, size_t Size>
 class RingBuffer {
 private:
@@ -233,7 +233,7 @@ public:
         size_t next_tail = (current_tail + 1) & MASK;
 
         if (next_tail == head.load(std::memory_order_acquire)) {
-            return false; // 缓冲区满
+            return false; // 
         }
 
         slots[current_tail].data.store(std::move(item), std::memory_order_relaxed);
@@ -247,7 +247,7 @@ public:
         size_t current_head = head.load(std::memory_order_relaxed);
 
         if (current_head == tail.load(std::memory_order_acquire)) {
-            return false; // 缓冲区空
+            return false; // 
         }
 
         if (!slots[current_head].valid.load(std::memory_order_acquire)) {
@@ -272,7 +272,7 @@ public:
     }
 };
 
-// 高性能原子计数器
+// 
 class AtomicCounter {
 private:
     alignas(64) std::atomic<size_t> count_{0};
@@ -295,5 +295,5 @@ public:
     }
 };
 
-// 静态成员定义
+// 
 } // namespace lockfree
