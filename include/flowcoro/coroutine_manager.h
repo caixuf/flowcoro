@@ -160,54 +160,7 @@ public:
         return timer_id;
     }
 
-private:
-    // 专用定时器线程主函数
-    void dedicated_timer_thread_func()
-    {
-        LOG_INFO("Dedicated timer thread started");
-        while (!timer_thread_stop_.load(std::memory_order_acquire))
-        {
-            std::unique_lock<std::mutex> lock(timer_mutex_);
-            if (timer_queue_.empty())
-            {
-                // 等待新的定时器或停止信号
-                timer_thread_cv_.wait(lock, [this]
-                                      { return timer_thread_stop_.load(std::memory_order_acquire) ||
-                                               !timer_queue_.empty(); });
-                continue;
-            }
-            auto now = std::chrono::steady_clock::now();
-            const auto &[when, handle] = timer_queue_.top();
-            if (when <= now)
-            {
-                // 批量处理到期的定时器
-                std::vector<std::coroutine_handle<>> expired_handles;
-                while (!timer_queue_.empty() && timer_queue_.top().first <= now)
-                {
-                    expired_handles.push_back(timer_queue_.top().second);
-                    timer_queue_.pop();
-                }
-                lock.unlock(); // 释放锁，避免在恢复协程时阻塞
-                // 批量恢复协程（通过线程池异步执行）
-                for (auto h : expired_handles)
-                {
-                    if (h && !h.done())
-                    {
-                        // 使用现有的协程池恢复
-                        schedule_coroutine_enhanced(h);
-                    }
-                }
-            }
-            else
-            {
-                // 精确等待到下一个定时器时间
-                timer_thread_cv_.wait_until(lock, when, [this]
-                                            { return timer_thread_stop_.load(std::memory_order_acquire); });
-            }
-        }
-        LOG_INFO("Dedicated timer thread stopped");
-    }
-
+    // 公开的队列处理方法 - 用于外部驱动
     void process_timer_queue() {
         static constexpr size_t BATCH_SIZE = 32; // 批处理大小
         std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
@@ -294,6 +247,54 @@ private:
                 #endif
             }
         }
+    }
+
+private:
+    // 专用定时器线程主函数
+    void dedicated_timer_thread_func()
+    {
+        LOG_INFO("Dedicated timer thread started");
+        while (!timer_thread_stop_.load(std::memory_order_acquire))
+        {
+            std::unique_lock<std::mutex> lock(timer_mutex_);
+            if (timer_queue_.empty())
+            {
+                // 等待新的定时器或停止信号
+                timer_thread_cv_.wait(lock, [this]
+                                      { return timer_thread_stop_.load(std::memory_order_acquire) ||
+                                               !timer_queue_.empty(); });
+                continue;
+            }
+            auto now = std::chrono::steady_clock::now();
+            const auto &[when, handle] = timer_queue_.top();
+            if (when <= now)
+            {
+                // 批量处理到期的定时器
+                std::vector<std::coroutine_handle<>> expired_handles;
+                while (!timer_queue_.empty() && timer_queue_.top().first <= now)
+                {
+                    expired_handles.push_back(timer_queue_.top().second);
+                    timer_queue_.pop();
+                }
+                lock.unlock(); // 释放锁，避免在恢复协程时阻塞
+                // 批量恢复协程（通过线程池异步执行）
+                for (auto h : expired_handles)
+                {
+                    if (h && !h.done())
+                    {
+                        // 使用现有的协程池恢复
+                        schedule_coroutine_enhanced(h);
+                    }
+                }
+            }
+            else
+            {
+                // 精确等待到下一个定时器时间
+                timer_thread_cv_.wait_until(lock, when, [this]
+                                            { return timer_thread_stop_.load(std::memory_order_acquire); });
+            }
+        }
+        LOG_INFO("Dedicated timer thread stopped");
     }
 
     // 定时器队列（最小堆）

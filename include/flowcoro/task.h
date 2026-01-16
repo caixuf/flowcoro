@@ -258,45 +258,62 @@ struct Task {
             }
         }
 
-        // 安全恢复协程 - 统一使用协程管理器调度
-        if (!handle.done() && !handle.promise().is_cancelled()) {
+        // 🔧 关键修复：先检查是否已完成（suspend_never 情况下协程会立即执行）
+        if (handle.done()) {
+            goto get_result;
+        }
+
+        // 只有在未完成时才进入调度逻辑
+        if (!handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
             manager.schedule_resume(handle);
             
-            // 等待协程完成（优化的自适应等待）
-            auto wait_time = std::chrono::nanoseconds(100); // 从100ns开始
-            int spin_count = 0;
-            const int max_spins = 1000; // 先自旋1000次
-            const auto max_wait = std::chrono::nanoseconds(50000); // 50μs
+            // 🔧 修复：添加超时保护和正确的等待策略
+            auto start_time = std::chrono::steady_clock::now();
+            const auto timeout = std::chrono::seconds(5); // 5秒超时
+            
+            auto wait_time = std::chrono::microseconds(1);
+            const auto max_wait = std::chrono::microseconds(100);
+            size_t spin_count = 0;
+            const size_t max_spins = 100;
             
             while (!handle.done() && !handle.promise().is_cancelled()) {
-                manager.drive(); // 驱动协程池执行
-                
-                // 先进行无睡眠的快速轮询
-                if (spin_count < max_spins) {
-                    ++spin_count;
-                    continue;
+                // 超时检查
+                auto elapsed = std::chrono::steady_clock::now() - start_time;
+                if (elapsed > timeout) {
+                    LOG_ERROR("Task::get: Timeout after 5 seconds");
+                    if constexpr (std::is_default_constructible_v<T>) {
+                        return T{};
+                    } else {
+                        std::terminate();
+                    }
                 }
                 
-                // 然后使用自适应睡眠
-                std::this_thread::sleep_for(wait_time);
-                wait_time = std::min(wait_time * 2, max_wait);
+                // 驱动协程管理器
+                manager.drive();
+                
+                // 自适应等待策略
+                if (spin_count < max_spins) {
+                    ++spin_count;
+                    std::this_thread::yield();
+                } else {
+                    std::this_thread::sleep_for(wait_time);
+                    wait_time = std::min(wait_time * 2, max_wait);
+                }
             }
         }
 
+get_result:
         // 检查是否有错误
         if (handle.promise().safe_has_error()) {
-            // 不使用异常，记录错误日志并返回默认值
             LOG_ERROR("Task execution failed");
             if constexpr (std::is_default_constructible_v<T>) {
                 return T{};
             } else {
-                // 对于不可默认构造的类型，尝试使用value的移动构造
                 auto safe_value = handle.promise().safe_get_value();
                 if (safe_value.has_value()) {
                     return std::move(safe_value.value());
                 }
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
                 std::terminate();
             }
         }

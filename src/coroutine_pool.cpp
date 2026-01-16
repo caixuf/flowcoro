@@ -250,6 +250,29 @@ public:
         return queue_size_.load(std::memory_order_relaxed);
     }
     
+    // 工作窃取：尝试从队列中获取一批任务给其他调度器
+    size_t try_steal_work(std::vector<std::coroutine_handle<>>& stolen_tasks, size_t max_steal = 32) {
+        if (queue_size_.load(std::memory_order_relaxed) <= 1) {
+            return 0; // 队列太小，不值得窃取
+        }
+        
+        size_t stolen_count = 0;
+        std::coroutine_handle<> handle;
+        
+        // 窃取一半的任务（最多max_steal个）
+        size_t target_steal = std::min(queue_size_.load() / 2, max_steal);
+        
+        while (stolen_count < target_steal && coroutine_queue_.dequeue(handle)) {
+            if (handle && !handle.done()) {
+                stolen_tasks.push_back(handle);
+                stolen_count++;
+                queue_size_.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+        
+        return stolen_count;
+    }
+    
     size_t get_total_coroutines() const { return total_coroutines_.load(); }
     size_t get_completed_coroutines() const { return completed_coroutines_.load(); }
     size_t get_scheduler_id() const { return scheduler_id_; }
@@ -394,14 +417,29 @@ public:
         });
     }
 
-    // 驱动协程池 - 现在由各个调度器自动运行，无需手动驱动
+    // 驱动协程池 - 增强版本：主动处理队列并推进协程执行
     void drive() {
-        // 多调度器架构下，每个调度器都在独立线程中自动运行
-        // 这个方法保留为兼容接口，实际不需要调用
-        if (stop_flag_.load()) return;
+        if (stop_flag_.load(std::memory_order_relaxed)) return;
         
-        // 可以在这里添加一些全局监控逻辑
-        // 但协程调度已经由各个独立调度器自动处理
+        // 获取协程管理器并处理其队列
+        auto& manager = flowcoro::CoroutineManager::get_instance();
+        
+        // 1. 处理定时器队列 - 将到期的定时器移到就绪队列
+        manager.process_timer_queue();
+        
+        // 2. 处理就绪队列 - 立即执行就绪的协程
+        manager.process_ready_queue();
+        
+        // 3. 给调度器线程一些时间处理
+        // 这对于异步任务很重要
+        for (auto& scheduler : schedulers_) {
+            if (scheduler) {
+                std::this_thread::yield();
+            }
+        }
+        
+        // 4. 处理待销毁的协程 - 清理资源
+        manager.process_pending_tasks();
     }
 
     // 获取统计信息

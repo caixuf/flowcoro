@@ -49,6 +49,8 @@
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 #include "flowcoro/channel.h"
+#include "flowcoro/yield.h"           // 新增：轻量级yield支持
+#include "flowcoro/task_allocator.h"  // 新增：缓存友好的任务分配器
 
 // #include "flowcoro/rpc.h" // 暂时注释掉复杂的RPC实现
 

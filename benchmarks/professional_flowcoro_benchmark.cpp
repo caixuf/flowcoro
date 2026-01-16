@@ -70,8 +70,10 @@ struct BenchmarkStats {
             (measurements[n/2-1] + measurements[n/2]) / 2.0 : 
             measurements[n/2];
         
-        p95_ns = measurements[static_cast<size_t>(n * 0.95)];
-        p99_ns = measurements[static_cast<size_t>(n * 0.99)];
+        size_t p95_idx = std::min(static_cast<size_t>(n * 0.95), n - 1);
+        size_t p99_idx = std::min(static_cast<size_t>(n * 0.99), n - 1);
+        p95_ns = measurements[p95_idx];
+        p99_ns = measurements[p99_idx];
         
         // 计算标准差
         double variance = 0.0;
@@ -89,8 +91,10 @@ public:
     BenchmarkStats stats;
     size_t iterations;
     double total_time_ns;
+    bool success = true;
+    std::string error_msg;
     
-    BenchmarkResult(const std::string& benchmark_name, size_t iter_count) 
+    BenchmarkResult(const std::string& benchmark_name, size_t iter_count = 0) 
         : name(benchmark_name), iterations(iter_count), total_time_ns(0.0) {}
     
     void add_measurement(double time_ns) {
@@ -99,76 +103,113 @@ public:
     }
     
     void finalize() {
+        iterations = stats.measurements.size();
         stats.calculate();
     }
     
+    void set_error(const std::string& msg) {
+        success = false;
+        error_msg = msg;
+    }
+    
     void print_summary() const {
-        std::cout << std::left << std::setw(30) << name 
-                  << std::right << std::setw(10) << iterations
+        if (!success) {
+            std::cout << std::left << std::setw(35) << name 
+                      << " [FAILED: " << error_msg << "]" << std::endl;
+            return;
+        }
+        
+        std::cout << std::left << std::setw(35) << name 
+                  << std::right << std::setw(8) << iterations
                   << std::setw(12) << std::fixed << std::setprecision(0) << stats.mean_ns << " ns"
                   << std::setw(12) << std::fixed << std::setprecision(0) << stats.median_ns << " ns"
-                  << std::setw(14) << std::fixed << std::setprecision(2) << (1e9 / stats.mean_ns) << " ops/sec"
+                  << std::setw(14) << std::fixed << std::setprecision(0) << (1e9 / stats.mean_ns) << " ops/s"
                   << std::endl;
     }
     
     void print_detailed() const {
+        if (!success) {
+            std::cout << "\n" << name << " - FAILED: " << error_msg << "\n";
+            return;
+        }
+        
         std::cout << "\n" << name << " - Detailed Statistics:\n";
-        std::cout << "  Iterations:    " << iterations << "\n";
-        std::cout << "  Mean:          " << std::fixed << std::setprecision(0) << stats.mean_ns << " ns\n";
-        std::cout << "  Median:        " << std::fixed << std::setprecision(0) << stats.median_ns << " ns\n";
-        std::cout << "  Min:           " << std::fixed << std::setprecision(0) << stats.min_ns << " ns\n";
-        std::cout << "  Max:           " << std::fixed << std::setprecision(0) << stats.max_ns << " ns\n";
-        std::cout << "  Std Dev:       " << std::fixed << std::setprecision(0) << stats.stddev_ns << " ns\n";
-        std::cout << "  95th pct:      " << std::fixed << std::setprecision(0) << stats.p95_ns << " ns\n";
-        std::cout << "  99th pct:      " << std::fixed << std::setprecision(0) << stats.p99_ns << " ns\n";
-        std::cout << "  Throughput:    " << std::fixed << std::setprecision(2) << (1e9 / stats.mean_ns) << " ops/sec\n";
+        std::cout << "  Iterations:     " << iterations << "\n";
+        std::cout << "  Mean:           " << std::fixed << std::setprecision(0) << stats.mean_ns << " ns\n";
+        std::cout << "  Median:         " << std::fixed << std::setprecision(0) << stats.median_ns << " ns\n";
+        std::cout << "  Min:            " << std::fixed << std::setprecision(0) << stats.min_ns << " ns\n";
+        std::cout << "  Max:            " << std::fixed << std::setprecision(0) << stats.max_ns << " ns\n";
+        std::cout << "  Std Dev:        " << std::fixed << std::setprecision(0) << stats.stddev_ns << " ns\n";
+        std::cout << "  P95:            " << std::fixed << std::setprecision(0) << stats.p95_ns << " ns\n";
+        std::cout << "  P99:            " << std::fixed << std::setprecision(0) << stats.p99_ns << " ns\n";
+        std::cout << "  Throughput:     " << std::fixed << std::setprecision(0) << (1e9 / stats.mean_ns) << " ops/sec\n";
     }
 };
 
-// 基准测试框架
+// 基准测试框架 - 增强版
 class BenchmarkRunner {
 private:
-    static constexpr size_t WARMUP_ITERATIONS = 10;
+    static constexpr size_t WARMUP_ITERATIONS = 5;
     static constexpr size_t MIN_ITERATIONS = 100;
     static constexpr size_t MAX_ITERATIONS = 10000;
-    static constexpr double MIN_BENCHMARK_TIME_NS = 1e8; // 100ms minimum
+    static constexpr double MIN_BENCHMARK_TIME_MS = 100.0; // 100ms minimum
+    static constexpr double TIMEOUT_PER_OP_MS = 100.0;     // 每次操作最大100ms
     
 public:
     template<typename Func>
     static BenchmarkResult run(const std::string& name, Func&& benchmark_func) {
-        // 预热阶段
-        for (size_t i = 0; i < WARMUP_ITERATIONS; ++i) {
-            benchmark_func();
-        }
+        BenchmarkResult result(name);
         
-        BenchmarkResult result(name, 0);
-        HighResTimer total_timer;
-        
-        // 动态确定迭代次数
-        size_t iterations = MIN_ITERATIONS;
-        double elapsed = 0.0;
-        
-        while (elapsed < MIN_BENCHMARK_TIME_NS && iterations <= MAX_ITERATIONS) {
-            for (size_t i = 0; i < iterations; ++i) {
-                HighResTimer timer;
+        try {
+            // 预热阶段
+            for (size_t i = 0; i < WARMUP_ITERATIONS; ++i) {
+                auto warmup_start = std::chrono::steady_clock::now();
                 benchmark_func();
-                double measurement = timer.elapsed_ns();
+                auto warmup_elapsed = std::chrono::steady_clock::now() - warmup_start;
                 
-                // 确保测量值合理（至少1ns）
-                if (measurement < 1.0) {
-                    measurement = 1.0;
+                // 预热超时检查
+                if (std::chrono::duration<double, std::milli>(warmup_elapsed).count() > TIMEOUT_PER_OP_MS) {
+                    result.set_error("Warmup timeout");
+                    return result;
                 }
-                result.add_measurement(measurement);
             }
             
-            elapsed = total_timer.elapsed_ns();
-            if (elapsed < MIN_BENCHMARK_TIME_NS) {
-                iterations = std::min(iterations * 2, MAX_ITERATIONS);
+            HighResTimer total_timer;
+            size_t target_iterations = MIN_ITERATIONS;
+            
+            while (total_timer.elapsed_ms() < MIN_BENCHMARK_TIME_MS && 
+                   result.stats.measurements.size() < MAX_ITERATIONS) {
+                
+                for (size_t i = 0; i < target_iterations && 
+                     result.stats.measurements.size() < MAX_ITERATIONS; ++i) {
+                    
+                    HighResTimer timer;
+                    benchmark_func();
+                    double measurement = timer.elapsed_ns();
+                    
+                    // 单次操作超时检查
+                    if (measurement > TIMEOUT_PER_OP_MS * 1e6) {
+                        result.set_error("Operation timeout");
+                        return result;
+                    }
+                    
+                    result.add_measurement(std::max(1.0, measurement));
+                }
+                
+                // 动态调整迭代次数
+                if (total_timer.elapsed_ms() < MIN_BENCHMARK_TIME_MS / 2) {
+                    target_iterations = std::min(target_iterations * 2, MAX_ITERATIONS);
+                }
             }
+            
+            result.finalize();
+            
+        } catch (const std::exception& e) {
+            result.set_error(std::string("Exception: ") + e.what());
+        } catch (...) {
+            result.set_error("Unknown exception");
         }
         
-        result.iterations = result.stats.measurements.size();
-        result.finalize();
         return result;
     }
 };
@@ -334,23 +375,34 @@ Task<void> batch_processing_task(int batch_size) {
 
 // 基准测试函数
 BenchmarkResult benchmark_coroutine_creation_and_execution() {
-    return BenchmarkRunner::run("Coroutine Creation & Execution", []() {
-        // 直接创建和执行协程，避免额外的lambda包装
+    return BenchmarkRunner::run("Coroutine Create & Execute", []() {
         auto task = simple_coroutine();
-        auto result = task.get();
-        static_cast<void>(result);
+        // 由于 initial_suspend 是 suspend_never，协程已执行完毕
+        // 直接检查结果
+        if (task.handle && task.handle.done()) {
+            auto val = task.handle.promise().safe_get_value();
+            static_cast<void>(val);
+        } else {
+            // 如果未完成，使用 get()
+            auto result = task.get();
+            static_cast<void>(result);
+        }
     });
 }
 
 BenchmarkResult benchmark_void_coroutine() {
     return BenchmarkRunner::run("Void Coroutine", []() {
         auto task = void_coroutine();
-        task.get();
+        if (task.handle && task.handle.done()) {
+            // 已完成
+        } else {
+            task.get();
+        }
     });
 }
 
 BenchmarkResult benchmark_simple_computation() {
-    return BenchmarkRunner::run("Simple Computation", []() {
+    return BenchmarkRunner::run("Simple Computation (baseline)", []() {
         // 与Go/Rust保持一致的计算
         int sum = 0;
         for (int i = 0; i < 100; i++) {
@@ -358,6 +410,40 @@ BenchmarkResult benchmark_simple_computation() {
         }
         volatile int result = sum; // 防止编译器优化
         static_cast<void>(result);
+    });
+}
+
+// 协程创建开销（仅创建不等待）
+BenchmarkResult benchmark_coroutine_creation_only() {
+    return BenchmarkRunner::run("Coroutine Creation Only", []() {
+        auto task = simple_coroutine();
+        // 不调用 get()，让析构函数处理
+        static_cast<void>(task.handle.done());
+    });
+}
+
+// 原子操作
+BenchmarkResult benchmark_atomic_operations() {
+    return BenchmarkRunner::run("Atomic Increment", []() {
+        static std::atomic<int> counter{0};
+        counter.fetch_add(1, std::memory_order_relaxed);
+    });
+}
+
+// 互斥锁
+BenchmarkResult benchmark_mutex_lock() {
+    return BenchmarkRunner::run("Mutex Lock/Unlock", []() {
+        static std::mutex mtx;
+        std::lock_guard<std::mutex> lock(mtx);
+        volatile int dummy = 0;
+        static_cast<void>(dummy);
+    });
+}
+
+// 线程 yield
+BenchmarkResult benchmark_thread_yield() {
+    return BenchmarkRunner::run("Thread Yield", []() {
+        std::this_thread::yield();
     });
 }
 
@@ -459,11 +545,11 @@ BenchmarkResult benchmark_sleep_1us() {
 }
 
 BenchmarkResult benchmark_when_any_2_tasks() {
-    return BenchmarkRunner::run("WhenAny 2 Tasks", []() {
+    return BenchmarkRunner::run("WhenAny (2 tasks)", []() {
         auto result = sync_wait([]() -> Task<int> {
-            auto task1 = compute_intensive_coroutine(100);
-            auto task2 = compute_intensive_coroutine(200);
-            auto [value, index] = co_await when_any(std::move(task1), std::move(task2));
+            auto t1 = compute_intensive_coroutine(50);
+            auto t2 = compute_intensive_coroutine(100);
+            auto [value, index] = co_await when_any(std::move(t1), std::move(t2));
             co_return value;
         });
         static_cast<void>(result);
@@ -487,16 +573,12 @@ BenchmarkResult benchmark_when_any_4_tasks() {
 }
 
 BenchmarkResult benchmark_lockfree_queue() {
-    return BenchmarkRunner::run("LockFree Queue Ops", []() {
-        static lockfree::Queue<int> queue;
-        static int counter = 0;
-        
-        // 入队
-        queue.enqueue(++counter);
-        
-        // 出队
+    return BenchmarkRunner::run("LockFree Queue (enq+deq)", []() {
+        lockfree::Queue<int> queue;  // 每次创建新队列
+        queue.enqueue(42);
         int value;
         queue.dequeue(value);
+        static_cast<void>(value);
     });
 }
 
@@ -708,32 +790,28 @@ BenchmarkResult benchmark_concurrent_echo_clients() {
 }
 
 BenchmarkResult benchmark_small_data_transfer() {
-    return BenchmarkRunner::run("Small Data Transfer (64B)", []() {
-        // 与Go/Rust保持一致的数据传输测试
-        std::vector<uint8_t> data(64);
+    return BenchmarkRunner::run("Data Transfer (64B)", []() {
+        std::array<uint8_t, 64> data;
         for (size_t i = 0; i < data.size(); i++) {
-            data[i] = static_cast<uint8_t>(i % 256);
+            data[i] = static_cast<uint8_t>(i);
         }
-        // Simulate checksum
         volatile int sum = 0;
-        for (uint8_t b : data) {
-            sum += static_cast<int>(b);
+        for (auto b : data) {
+            sum += b;
         }
         static_cast<void>(sum);
     });
 }
 
 BenchmarkResult benchmark_medium_data_transfer() {
-    return BenchmarkRunner::run("Medium Data Transfer (4KB)", []() {
-        // 与Go/Rust保持一致的数据传输测试
+    return BenchmarkRunner::run("Data Transfer (4KB)", []() {
         std::vector<uint8_t> data(4096);
         for (size_t i = 0; i < data.size(); i++) {
             data[i] = static_cast<uint8_t>(i % 256);
         }
-        // Simulate checksum
-        volatile int sum = 0;
-        for (uint8_t b : data) {
-            sum += static_cast<int>(b);
+        volatile size_t sum = 0;
+        for (auto b : data) {
+            sum += b;
         }
         static_cast<void>(sum);
     });
@@ -862,11 +940,10 @@ int main() {
     std::vector<BenchmarkResult> results;
     
     // Core coroutine benchmarks
+    results.emplace_back(benchmark_simple_computation());
+    results.emplace_back(benchmark_coroutine_creation_only());
     results.emplace_back(benchmark_coroutine_creation_and_execution());
     results.emplace_back(benchmark_void_coroutine());
-    
-    // Core computation benchmarks (与Go/Rust保持一致)
-    results.emplace_back(benchmark_simple_computation());
     
     // 复杂任务基准测试 - 测试调度器能力
     results.emplace_back(benchmark_complex_computation());
@@ -883,6 +960,11 @@ int main() {
     
     // Memory and data structure benchmarks
     results.emplace_back(benchmark_lockfree_queue());
+    results.emplace_back(benchmark_atomic_operations());
+    results.emplace_back(benchmark_mutex_lock());
+    
+    // System call benchmarks
+    results.emplace_back(benchmark_thread_yield());
     results.emplace_back(benchmark_memory_allocation());
     results.emplace_back(benchmark_memory_pool_allocation());
     
