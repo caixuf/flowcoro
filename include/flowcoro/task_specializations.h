@@ -218,17 +218,29 @@ struct Task<void> {
         std::atomic<bool> is_destroyed_{false};
         std::chrono::steady_clock::time_point creation_time_;
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
+        promise_type() : creation_time_(std::chrono::steady_clock::now()) {
+            // 记录任务创建
+            PerformanceMonitor::get_instance().on_task_created();
+        }
 
         // 析构时标记销毁
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
+            
+            // 记录任务状态
+            if (has_error) {
+                PerformanceMonitor::get_instance().on_task_failed();
+            } else if (is_cancelled()) {
+                PerformanceMonitor::get_instance().on_task_cancelled();
+            } else {
+                PerformanceMonitor::get_instance().on_task_completed();
+            }
         }
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
-        std::suspend_always initial_suspend() noexcept { return {}; }  // 懒执行
+        std::suspend_never initial_suspend() noexcept { return {}; }  // 立即执行 - 与Task<T>保持一致
         
         // 支持continuation的final_suspend
         auto final_suspend() noexcept {
@@ -389,7 +401,7 @@ struct Task<void> {
             return;
         }
 
-        // 🔧 关键修复：先检查是否已完成
+        // 🔧 关键修复：先检查是否已完成（suspend_never 情况下协程会立即执行）
         if (handle.done()) {
             // 检查是否有错误
             if (handle.promise().safe_has_error()) {
@@ -412,7 +424,7 @@ struct Task<void> {
                 return;
             }
             
-            // 🔧 修复：添加超时保护
+            // 🔧 修复：添加超时保护和优化的等待策略
             auto start_time = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::seconds(5);
             
@@ -465,7 +477,7 @@ struct Task<void> {
     }
 
     bool await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 懒加载Task的正确实现 - Task<void>版本
+        // Task<void>版本 - 与Task<T>保持一致的实现
         if (!handle || handle.promise().is_destroyed()) {
             // 句柄无效，直接恢复等待协程
             auto& manager = CoroutineManager::get_instance();
@@ -482,10 +494,6 @@ struct Task<void> {
 
         // 设置continuation：当task完成时恢复waiting_handle
         handle.promise().set_continuation(waiting_handle);
-
-        // 启动懒加载的任务执行（仅首次）
-        auto& manager = CoroutineManager::get_instance();
-        manager.schedule_resume(handle);
 
         // 挂起等待协程，等待task通过continuation唤醒
         return true;
