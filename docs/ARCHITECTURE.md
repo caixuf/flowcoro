@@ -141,7 +141,7 @@ private:
 
 ## 任务执行流程
 
-### 1. Task创建和立即执行
+### 1. Task创建和同步执行
 
 ```cpp
 Task<int> compute(int x) {
