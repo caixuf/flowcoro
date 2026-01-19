@@ -75,7 +75,7 @@ Task<int> compute(int value) {
 
 // 并发执行
 Task<void> example() {
-    // 任务创建时立即开始执行
+    // 任务创建时开始同步执行，遇到挂起点后进入调度系统
     auto task1 = compute(10);
     auto task2 = compute(20);
     auto task3 = compute(30);
@@ -136,8 +136,8 @@ FlowCoro采用三层调度架构：
 suspend_never  负载均衡  无锁队列  执行
 ```
 
-- **suspend_never**: 任务创建时立即执行
-- **负载均衡**: 自动调度器选择
+- **suspend_never**: 任务创建时同步执行直到首个co_await挂起点
+- **负载均衡**: 协程挂起后自动选择调度器
 - **无锁队列**: 高性能任务分发
 - **延续机制**: 零拷贝任务链接
 
