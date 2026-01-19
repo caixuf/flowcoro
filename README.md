@@ -75,7 +75,7 @@ Task<int> compute(int value) {
 
 // Concurrent execution
 Task<void> example() {
-    // Tasks start executing immediately upon creation
+    // Tasks start executing synchronously, then are scheduled when they suspend
     auto task1 = compute(10);
     auto task2 = compute(20);
     auto task3 = compute(30);
@@ -136,8 +136,8 @@ Task Creation → Coroutine Manager → Coroutine Pool → Thread Pool
 suspend_never   Load Balancing    Lock-free Queue   Execution
 ```
 
-- **suspend_never**: Tasks execute immediately upon creation
-- **Smart Load Balancing**: Automatic scheduler selection
+- **suspend_never**: Tasks start executing synchronously on creation, then suspend at first co_await point
+- **Smart Load Balancing**: Automatic scheduler selection after suspension
 - **Lock-free Queues**: High-performance task distribution
 - **Continuation Mechanism**: Zero-copy task chaining
 

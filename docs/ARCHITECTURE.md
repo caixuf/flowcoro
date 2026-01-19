@@ -10,13 +10,15 @@ FlowCoro 采用**三层调度架构**，结合无锁队列和智能负载均衡�
 
 - **无锁队列调度**: 基于lockfree::Queue的高性能任务分发
 - **智能负载均衡**: 自适应调度器选择，最小化队列长度差异
-- **Task立即执行**: 通过suspend_never实现任务创建时立即投递到调度系统
+- **Task同步启动**: 通过suspend_never实现任务创建时在调用者线程上同步执行，直到首个挂起点才进入调度系统
 
 ## 三层调度架构
 
 ```text
 应用层协程 (Task<T>)
-    ↓ suspend_never立即投递
+    ↓ suspend_never同步执行
+协程遇到co_await挂起
+    ↓ schedule_resume调度
 协程管理器 (CoroutineManager) - 调度决策和负载均衡
     ↓ schedule_coroutine_enhanced
 协程池 (CoroutinePool) - 多调度器并行处理
@@ -143,26 +145,26 @@ private:
 
 ```cpp
 Task<int> compute(int x) {
-    // Task创建时通过suspend_never立即投递到调度系统
-    co_await sleep_for(std::chrono::milliseconds(50));
+    // Task创建时在调用者线程上同步开始执行
+    co_await sleep_for(std::chrono::milliseconds(50));  // 首个挂起点，进入调度器
     co_return x * x;
 }
 
 // 任务创建时的执行流程：
 // 1. Task构造函数调用 -> initial_suspend() -> suspend_never
-// 2. 协程体开始执行 -> 遇到co_await -> suspend_always
-// 3. 投递到协程管理器 -> 负载均衡选择调度器
-// 4. 进入无锁队列 -> 工作线程获取 -> 协程恢复执行
+// 2. 协程体在调用者线程上同步执行 -> 遇到co_await -> 挂起
+// 3. await_suspend调用schedule_resume -> 投递到协程管理器
+// 4. 负载均衡选择调度器 -> 进入无锁队列 -> 工作线程获取 -> 协程恢复执行
 ```
 
 ### 2. 并发机制
 
 ```text
-Task task1 = compute(10);  // 立即开始并发执行
-Task task2 = compute(20);  // 立即开始并发执行
-Task task3 = compute(30);  // 立即开始并发执行
+Task task1 = compute(10);  // 同步执行直到挂起点，然后进入调度
+Task task2 = compute(20);  // 同步执行直到挂起点，然后进入调度
+Task task3 = compute(30);  // 同步执行直到挂起点，然后进入调度
 
-// 此时三个任务已经在不同调度器上并发运行
+// 此时三个任务可能已在不同调度器的队列中等待或正在执行
 auto result1 = co_await task1;  // 等待第一个任务完成
 auto result2 = co_await task2;  // 等待第二个任务完成
 auto result3 = co_await task3;  // 等待第三个任务完成
@@ -202,9 +204,9 @@ public:
 - 支持高并发场景下的任务调度
 
 ### suspend_never机制
-- Task创建时立即开始执行
-- 无需等待调度即可开始工作
-- 最大化并发度
+- Task创建时在调用者线程上同步开始执行
+- 执行直到遇到第一个co_await挂起点
+- 挂起后才进入调度器队列进行异步调度
 
 ### 智能负载均衡
 - 自动选择最优调度器

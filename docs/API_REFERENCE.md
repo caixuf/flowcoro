@@ -2,11 +2,11 @@
 
 ## 概述
 
-FlowCoro 是一个基于 C++20 协程的高性能异步编程库，采用**立即执行+无锁调度**的独特并发模型。
+FlowCoro 是一个基于 C++20 协程的高性能异步编程库，采用**同步启动+挂起调度**的独特并发模型。
 
 ### 核心特性
 
-- **立即执行**: 协程创建时立即开始执行，无需等待调度器
+- **同步启动**: 协程创建时在调用者线程上同步执行直到首个挂起点
 - **无锁架构**: 多层无锁队列实现高性能协程调度
 - **智能负载均衡**: CPU亲和性绑定 + 动态负载感知
 - **内存池优化**: Redis/Nginx风格的内存管理
@@ -16,7 +16,7 @@ FlowCoro 是一个基于 C++20 协程的高性能异步编程库，采用**立�
 
 ### 核心概念
 
-- [并发机制深度解析](#并发机制深度解析) - Task创建时并发，co_await只是等待
+- [并发机制深度解析](#并发机制深度解析) - Task创建时同步执行，co_await挂起后进入调度
 - [架构限制](#架构限制) - 不支持的使用模式
 - [适用场景](#适用场景) - 推荐和不推荐的用法
 
@@ -36,29 +36,29 @@ FlowCoro 是一个基于 C++20 协程的高性能异步编程库，采用**立�
 
 ### FlowCoro的独特并发模型
 
-FlowCoro采用**立即执行+无锁调度**的并发模型，与传统Go/Rust协程有本质区别：
+FlowCoro采用**同步启动+挂起调度**的并发模型，与传统Go/Rust协程有本质区别：
 
-#### 1. 协程立即启动 (suspend_never)
+#### 1. 协程同步启动然后挂起 (suspend_never)
 
 ```cpp
-// FlowCoro: 协程创建时立即开始执行
+// FlowCoro: 协程创建时在调用者线程上同步开始执行
 Task<int> async_compute(int value) {
-    // 这个协程在创建时就开始执行！
-    // 不需要等待调度器或事件循环
+    // 这个协程在创建时在调用者线程上同步开始执行
+    // 不需要立即投递到调度器
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     co_return value * 2;
 }
 
 Task<void> concurrent_processing() {
-    // 三个协程同时开始执行（真正的并发）
-    auto task1 = async_compute(1);  // 立即开始，在协程池中执行
-    auto task2 = async_compute(2);  // 立即开始，在协程池中执行  
-    auto task3 = async_compute(3);  // 立即开始，在协程池中执行
+    // 三个协程依次同步开始执行，遇到挂起点后进入调度系统
+    auto task1 = async_compute(1);  // 同步执行直到挂起，然后调度
+    auto task2 = async_compute(2);  // 同步执行直到挂起，然后调度  
+    auto task3 = async_compute(3);  // 同步执行直到挂起，然后调度
     
-    // co_await只是获取结果，协程可能已经完成
-    auto r1 = co_await task1;  // 可能立即返回结果
-    auto r2 = co_await task2;  // 可能立即返回结果
-    auto r3 = co_await task3;  // 可能立即返回结果
+    // co_await等待结果，协程可能已经完成或在调度器中
+    auto r1 = co_await task1;  // 可能立即返回结果或等待
+    auto r2 = co_await task2;  // 可能立即返回结果或等待
+    auto r3 = co_await task3;  // 可能立即返回结果或等待
     
     std::cout << "Results: " << r1 << ", " << r2 << ", " << r3 << std::endl;
 }
@@ -125,11 +125,11 @@ class SmartLoadBalancer {
 
 ```cpp
 Task<void> high_throughput_processing() {
-    // 批量创建10000个并发任务
+    // 批量创建10000个任务
     std::vector<Task<int>> tasks;
     tasks.reserve(10000);
     
-    // 立即启动10000个协程（真正的大规模并发）
+    // 创建10000个协程（每个同步执行直到首个挂起点）
     for (int i = 0; i < 10000; ++i) {
         tasks.emplace_back(async_process_data(i));
     }
@@ -180,8 +180,8 @@ go func() {
     return value * 2
 }()
 
-// FlowCoro: 立即执行，无需等待
-auto task = async_compute(value);  // 立即开始执行
+// FlowCoro: 同步启动，挂起后调度
+auto task = async_compute(value);  // 同步开始执行直到挂起点
 ```
 
 #### vs Rust async/await
@@ -193,8 +193,8 @@ let future = async {
     value * 2
 };
 
-// FlowCoro: 协程创建时就开始运行
-auto task = async_compute(value);  // 已经在执行中
+// FlowCoro: 协程创建时同步开始执行
+auto task = async_compute(value);  // 同步执行直到挂起
 ```
 
 ### 性能优化技术
@@ -258,14 +258,14 @@ FlowCoro 设计为**单向数据流协程**，不支持复杂的协程间通信�
 ### 不支持的模式
 
 ```cpp
-// ❌ 错误：协程间直接通信
+// 错误：协程间直接通信
 Task<void> wrong_pattern() {
     auto task1 = producer_coroutine();
     auto task2 = consumer_coroutine(task1);  // 依赖关系
     co_await task2;
 }
 
-// ❌ 错误：协程链式调用
+// 错误：协程链式调用
 Task<void> chained_wrong() {
     auto result1 = co_await step1();
     auto result2 = co_await step2(result1);
@@ -278,11 +278,11 @@ Task<void> chained_wrong() {
 **批量任务处理:**
 
 ```cpp
-// ✅ 正确：批量处理模式
+// 正确：批量处理模式
 Task<void> batch_requests() {
     std::vector<Task<Response>> tasks;
     
-    // 批量创建任务（立即开始并发执行）
+    // 批量创建任务（同步执行直到挂起点）
     for (const auto& request : requests) {
         tasks.emplace_back(process_request(request));
     }
@@ -375,10 +375,11 @@ Task<void> non_blocking_check() {
 
 ### 生命周期
 
-1. **创建**: `auto task = func()` - 协程立即开始执行
-2. **执行**: 在协程池中并行运行
-3. **等待**: `co_await task` - 获取结果（可能立即返回）
-4. **销毁**: 超出作用域自动清理
+1. **创建**: `auto task = func()` - 协程同步开始执行直到首个挂起点
+2. **挂起**: 遇到co_await时进入调度器队列
+3. **执行**: 在协程池的工作线程中恢复执行
+4. **等待**: `co_await task` - 获取结果（可能立即返回）
+5. **销毁**: 超出作用域自动清理
 
 ---
 
@@ -545,13 +546,13 @@ Task<void> periodic_task() {
 ### 与 std::this_thread::sleep_for 的区别
 
 ```cpp
-// ❌ 错误：阻塞整个线程
+// 错误：阻塞整个线程
 Task<void> blocking_sleep() {
     std::this_thread::sleep_for(std::chrono::seconds(1));  // 阻塞线程
     co_return;
 }
 
-// ✅ 正确：协程友好的等待
+// 正确：协程友好的等待
 Task<void> async_sleep() {
     co_await sleep_for(std::chrono::seconds(1));  // 不阻塞线程
     co_return;
@@ -825,7 +826,7 @@ FlowCoro 最适合以下场景：
 
 ```cpp
 // 创建和使用
-Task<int> task = async_function();  // 立即开始执行
+Task<int> task = async_function();  // 同步执行直到挂起点
 int result = co_await task;         // 等待结果
 bool ready = task.is_ready();       // 检查是否完成
 ```
