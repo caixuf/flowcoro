@@ -240,7 +240,7 @@ struct Task<void> {
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
-        std::suspend_never initial_suspend() noexcept { return {}; }  // 立即执行 - 与Task<T>保持一致
+        std::suspend_never initial_suspend() noexcept { return {}; }  // 同步执行直到首个挂起点 - 与Task<T>保持一致
         
         // 支持continuation的final_suspend
         auto final_suspend() noexcept {
@@ -401,7 +401,7 @@ struct Task<void> {
             return;
         }
 
-        // 🔧 关键修复：先检查是否已完成（suspend_never 情况下协程会立即执行）
+        // 关键修复：先检查是否已完成（suspend_never 情况下协程会同步执行直到挂起）
         if (handle.done()) {
             // 检查是否有错误
             if (handle.promise().safe_has_error()) {

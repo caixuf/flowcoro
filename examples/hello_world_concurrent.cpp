@@ -123,18 +123,18 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
     } else {
         std::cout << " 任务数量较多，使用真正并发协程处理..." << std::endl;
 
-        // 大规模任务：先创建所有任务（利用Task创建即执行特性）
+        // 大规模任务：先创建所有任务（利用Task同步启动特性）
         std::vector<Task<std::string>> tasks;
         tasks.reserve(request_count);
 
-        std::cout << " 创建所有协程任务 (它们将立即开始执行)..." << std::endl;
+        std::cout << " 创建所有协程任务 (它们将同步开始执行直到挂起)..." << std::endl;
         
-        // 同时创建所有任务 - 它们会立即开始并发执行
+        // 同时创建所有任务 - 它们会同步开始执行直到挂起点
         for (int i = 0; i < request_count; ++i) {
             tasks.emplace_back(handle_single_request(1000 + i));
         }
 
-        std::cout << " 所有任务已创建并开始执行，等待完成..." << std::endl;
+        std::cout << " 所有任务已创建，等待完成..." << std::endl;
 
         // 优化：减少内存分配，移除频繁输出
         std::atomic<int> completed_count{0};

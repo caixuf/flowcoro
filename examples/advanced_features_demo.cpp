@@ -55,9 +55,9 @@ Task<void> concurrent_workers() {
     std::cout << "Total result from " << workers.size() << " workers: " << total << "\n";
 }
 
-// 演示4：立即执行的void任务（利用suspend_never）
+// 演示4：同步启动的void任务（利用suspend_never）
 Task<void> immediate_void_task() {
-    // 这个任务会立即执行，因为Task<void>现在使用suspend_never
+    // 这个任务会同步开始执行，因为Task<void>现在使用suspend_never
     std::cout << "Immediate void task executing!\n";
     co_return;
 }
@@ -66,7 +66,7 @@ Task<void> immediate_void_task() {
 Task<void> combined_async_operations() {
     std::cout << "Starting combined operations...\n";
     
-    // 1. 立即执行的任务
+    // 1. 同步启动的任务
     co_await immediate_void_task();
     
     // 2. 协作式yield
@@ -104,7 +104,7 @@ int main() {
         sync_wait(concurrent_workers());
         std::cout << "\n";
         
-        // 演示4: 立即执行的void任务
+        // 演示4: 同步启动的void任务
         std::cout << "Demo 4: Immediate Void Task\n";
         sync_wait(immediate_void_task());
         std::cout << "\n";
