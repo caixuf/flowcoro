@@ -8,60 +8,60 @@
 
 | 性能指标 | FlowCoro | Go | Rust | FlowCoro优势 |
 |---------|----------|-----|------|-------------|
-| **协程/任务创建** | **15.6M ops/s** | 2.0M ops/s | 17.5K ops/s | **比Go快7.8倍，比Rust快891倍** |
-| **并发客户端(100任务)** | **5.3K ops/s** | 5.7K ops/s | 779 ops/s | **与Go相近(-7.3%)，比Rust快6.8倍** |
-| **简单计算** | **40.0M ops/s** | 19.4M ops/s | 41.6M ops/s | **比Go快2.1倍** |
-| **HTTP请求处理** | **41.5M ops/s** | 36.7M ops/s | 40.2M ops/s | **比Go快1.1倍** |
-| **无锁队列操作** | **23.9M ops/s** | - | 8.1M ops/s | **比Rust快2.9倍** |
-| **内存池分配** | **40.4M ops/s** | 37.0M ops/s | 42.1M ops/s | **与其他语言相当** |
+| **协程/任务创建** | **13.3M ops/s** | 1.86M ops/s | 36.4K ops/s | **比Go快7.2倍，比Rust快365倍** |
+| **并发客户端(100任务)** | **183K ops/s** | 2.9K ops/s | 854 ops/s | **比Go快63倍，比Rust快214倍** |
+| **简单计算** | **35.1M ops/s** | 16.4M ops/s | 35.7M ops/s | **比Go快2.1倍** |
+| **HTTP请求处理** | **34.9M ops/s** | 33.0M ops/s | 34.6M ops/s | **与其他语言相当** |
+| **无锁队列操作** | **15.8M ops/s** | 11.0M ops/s | 7.2M ops/s | **比Go快1.4倍，比Rust快2.2倍** |
+| **内存池分配** | **35.2M ops/s** | 32.7M ops/s | 35.0M ops/s | **与其他语言相当** |
 
 ### 详细性能数据
 
-#### FlowCoro (1个调度器 + 16个工作线程)
+#### FlowCoro (1个调度器 + 4个工作线程)
 
-- 协程创建: 15.6M ops/s (63ns)
-- 并发客户端: 5.3K ops/s (188μs)
-- 简单计算: 40.0M ops/s (25ns)
-- WhenAny 2任务: 3.3M ops/s (302ns)
-- WhenAny 4任务: 2.4M ops/s (407ns)
-- 无锁队列: 23.9M ops/s (42ns)
-- 内存分配: 25.9M ops/s (39ns)
-- 内存池分配: 40.4M ops/s (24ns)
-- Echo服务器: 20.0M ops/s (50ns)
-- HTTP处理: 41.5M ops/s (24ns)
+- 协程创建: 13.3M ops/s (75ns)
+- 并发客户端: 183K ops/s (5.5μs)
+- 简单计算: 35.1M ops/s (29ns)
+- WhenAny 2任务: 2.8M ops/s (361ns)
+- WhenAny 4任务: 2.1M ops/s (487ns)
+- 无锁队列: 15.8M ops/s (63ns)
+- 内存分配: 23.4M ops/s (43ns)
+- 内存池分配: 35.2M ops/s (28ns)
+- Echo服务器: 19.4M ops/s (52ns)
+- HTTP处理: 34.9M ops/s (29ns)
 
 #### Go
 
-- Goroutine创建: 2.0M ops/s (491ns)
-- 并发客户端: 5.7K ops/s (174μs)
-- 简单计算: 19.4M ops/s (51ns)
-- 通道操作: 10.6M ops/s (94ns)
-- 内存分配: 37.0M ops/s (27ns)
-- Echo服务器: 14.8M ops/s (68ns)
-- HTTP处理: 36.7M ops/s (27ns)
+- Goroutine创建: 1.86M ops/s (538ns)
+- 并发客户端: 2.9K ops/s (341μs)
+- 简单计算: 16.4M ops/s (61ns)
+- 通道操作: 11.0M ops/s (91ns)
+- 内存分配: 32.7M ops/s (31ns)
+- Echo服务器: 13.3M ops/s (75ns)
+- HTTP处理: 33.0M ops/s (30ns)
 
 #### Rust (Tokio)
 
-- 任务创建: 17.5K ops/s (57μs)
-- 并发客户端: 779 ops/s (1.28ms)
-- 简单计算: 41.6M ops/s (24ns)
-- 通道操作: 8.1M ops/s (123ns)
-- 内存分配: 42.1M ops/s (24ns)
-- Echo服务器: 41.3M ops/s (24ns)
-- HTTP处理: 40.2M ops/s (25ns)
+- 任务创建: 36.4K ops/s (27.5μs)
+- 并发客户端: 854 ops/s (1.17ms)
+- 简单计算: 35.7M ops/s (28ns)
+- 通道操作: 7.2M ops/s (139ns)
+- 内存分配: 35.0M ops/s (29ns)
+- Echo服务器: 34.2M ops/s (29ns)
+- HTTP处理: 34.6M ops/s (29ns)
 
 ## 配置信息
 
 ### FlowCoro配置
 
 - 调度器: 1个协程调度器
-- 工作线程: 16个线程
+- 工作线程: 4个线程
 - 编译优化: Release模式
 
 ### 测试环境
 
-- CPU: 16核心
-- 编译器: GCC 13.3.0 / Go 1.22.2 / Rust 1.x
+- CPU: 4核心
+- 编译器: GCC 13.3.0 / Go 1.24.11 / Rust 1.x
 - 系统: Linux x86_64
 
 ### 测试方法
