@@ -749,23 +749,23 @@ BenchmarkResult benchmark_echo_server_throughput() {
 }
 
 BenchmarkResult benchmark_concurrent_echo_clients() {
-    // 更真实的并发测试：使用更安全的任务管理
+    // 标准并发测试：与Go和Rust使用相同的测试参数以确保公平对比
     return BenchmarkRunner::run("Concurrent Echo Clients", []() {
         sync_wait([]() -> Task<void> {
-            // 减少并发数量以避免过多的析构竞争，同时保持测试效果
-            constexpr size_t NUM_CLIENTS = 50;  // 从100减少到50
+            // 使用统一的测试参数：100个并发任务（与Go和Rust一致）
+            constexpr size_t NUM_CLIENTS = 100;
             std::vector<Task<void>> client_tasks;
             client_tasks.reserve(NUM_CLIENTS);
             
             for (size_t i = 0; i < NUM_CLIENTS; ++i) {
                 client_tasks.emplace_back([]() -> Task<void> {
-                    // 模拟更多的网络处理工作
+                    // 模拟网络处理工作（与Go和Rust的1000次循环一致）
                     volatile int work = 0;
-                    for (int j = 0; j < 800; ++j) {  // 略微减少工作量以补偿减少的任务数
+                    for (int j = 0; j < 1000; ++j) {
                         work += j * j;  // 更复杂的计算
                     }
                     
-                    // 模拟异步等待（如网络IO）
+                    // 模拟异步等待（如网络IO，与Go和Rust的1μs一致）
                     co_await sleep_for(std::chrono::microseconds(1));
                     
                     static_cast<void>(work);
@@ -773,15 +773,9 @@ BenchmarkResult benchmark_concurrent_echo_clients() {
                 }());
             }
             
-            // 分批等待任务完成，避免同时析构大量Task
-            constexpr size_t BATCH_SIZE = 10;
-            for (size_t i = 0; i < client_tasks.size(); i += BATCH_SIZE) {
-                size_t end = std::min(i + BATCH_SIZE, client_tasks.size());
-                for (size_t j = i; j < end; ++j) {
-                    co_await client_tasks[j];
-                }
-                // 给调度器一些时间处理销毁队列
-                co_await sleep_for(std::chrono::microseconds(10));
+            // 等待所有任务完成（与Go和Rust一致，直接等待不做批处理）
+            for (auto& task : client_tasks) {
+                co_await task;
             }
             
             co_return;
