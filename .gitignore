@@ -117,6 +117,9 @@ coverage/
 *.gcda
 *.gcno
 
+# CodeQL build artifacts
+_codeql_*
+
 # 文档生成
 docs/_build/
 site/
