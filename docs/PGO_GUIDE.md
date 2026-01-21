@@ -2,12 +2,7 @@
 
 ## 简介
 
-F## 配置选项
-
-| 选项 | 默认值 | 描述 |
-|------|--------|------|
-| `FLOWCORO_ENABLE_PGO` | ON | 启用PGO支持 |
-| `FLOWCORO_PGO_GENERATE` | OFF | 生成新的profile数据 |
+FlowCoro支持Profile-Guided Optimization (PGO)，当profile数据可用时自动提供37.5%的性能提升！
 
 ## 文件结构
 
@@ -16,7 +11,7 @@ FlowCoro/
 ├── pgo_profiles/           # PGO profile数据存储
 │   └── *.gcda             # 编译器生成的profile文件
 └── build/                 # 构建目录（自动启用PGO）
-```ided Optimization (PGO)，当profile数据可用时自动提供37.5%的性能提升！
+```
 
 ## 性能收益
 

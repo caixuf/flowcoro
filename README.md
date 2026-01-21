@@ -51,8 +51,8 @@ FlowCoro demonstrates good performance compared to Go and Rust in key areas:
 ### Build
 
 ```bash
-git clone https://github.com/caixuf/flowcord.git
-cd flowcord
+git clone https://github.com/caixuf/flowcoro.git
+cd flowcoro
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
