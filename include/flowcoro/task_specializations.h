@@ -8,7 +8,7 @@ template<typename T, typename E>
 struct Task<Result<T, E>> {
     struct promise_type {
         std::optional<Result<T, E>> result;
-        std::exception_ptr exception;
+        std::exception_ptr exception; // 保存异常
 
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
@@ -36,11 +36,13 @@ struct Task<Result<T, E>> {
 
         // 快速异常处理 - 转换为Result，去除锁
         void unhandled_exception() {
+            // 保存异常
+            exception = std::current_exception();
             // 不使用异常，只设置错误状态
             if constexpr (std::is_same_v<E, ErrorInfo>) {
                 result = err(ErrorInfo(FlowCoroError::UnknownError, "Unhandled exception"));
             } else if constexpr (std::is_same_v<E, std::exception_ptr>) {
-                result = err(std::exception_ptr{}); // 不能捕获异常，只返回空指针
+                result = err(std::current_exception());
             } else {
                 // 对于其他错误类型，只能设置为默认错误
                 result = err(E{});
@@ -71,6 +73,18 @@ struct Task<Result<T, E>> {
                 return result;
             }
             return std::nullopt;
+        }
+
+        // 获取异常
+        std::exception_ptr get_exception() const noexcept {
+            return exception;
+        }
+
+        // 重新抛出异常
+        void rethrow_if_exception() const {
+            if (exception) {
+                std::rethrow_exception(exception);
+            }
         }
     };
 
@@ -204,6 +218,28 @@ struct Task<Result<T, E>> {
     Result<T, E> await_resume() {
         return get();
     }
+
+    // 不抛异常版本（向后兼容） - 对于Result类型，已经不抛异常
+    std::optional<Result<T, E>> try_get() noexcept {
+        if (!handle || handle.promise().is_destroyed()) {
+            return std::nullopt;
+        }
+        return handle.promise().safe_get_result();
+    }
+
+    // 获取错误信息
+    std::optional<std::string> get_error_message() const noexcept {
+        if (!handle || !handle.promise().exception) {
+            return std::nullopt;
+        }
+        try {
+            std::rethrow_exception(handle.promise().exception);
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        } catch (...) {
+            return std::string("Unknown exception");
+        }
+    }
 };
 
 // Task<void>特化 - 增强版集成生命周期管理
@@ -211,6 +247,7 @@ template<>
 struct Task<void> {
     struct promise_type {
         bool has_error = false; // 替换exception_ptr
+        std::exception_ptr exception_; // 保存异常
         std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 与Task<T>保持一致
@@ -269,6 +306,7 @@ struct Task<void> {
         void unhandled_exception() {
             // 快速路径：直接设置错误标志
             has_error = true;
+            exception_ = std::current_exception(); // 捕获异常
             LOG_ERROR("Task<void> unhandled exception occurred");
         }
 
@@ -298,6 +336,18 @@ struct Task<void> {
         // 快速获取错误状态 - 去除锁
         bool safe_has_error() const noexcept {
             return has_error && !is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        // 获取异常
+        std::exception_ptr get_exception() const noexcept {
+            return exception_;
+        }
+
+        // 重新抛出异常
+        void rethrow_if_exception() const {
+            if (exception_) {
+                std::rethrow_exception(exception_);
+            }
         }
     };
     
@@ -455,7 +505,8 @@ struct Task<void> {
 
         // 检查是否有错误
         if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task<void> execution failed");
+            // 重新抛出异常
+            handle.promise().rethrow_if_exception();
         }
     }
 
@@ -502,17 +553,39 @@ struct Task<void> {
     void await_resume() {
         // 增强版：使用安全getter
         if (!handle) {
-            LOG_ERROR("Task<void> await_resume: Invalid handle");
-            return;
+            throw std::runtime_error("Task<void> await_resume: Invalid handle");
         }
 
         if (handle.promise().is_destroyed()) {
-            LOG_ERROR("Task<void> await_resume: Task destroyed");
-            return;
+            throw std::runtime_error("Task<void> await_resume: Task destroyed");
         }
 
-        if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task<void> await_resume: error occurred");
+        // 重新抛出异常
+        handle.promise().rethrow_if_exception();
+    }
+
+    // 不抛异常版本（向后兼容）
+    bool try_get() noexcept {
+        if (!handle || handle.promise().is_destroyed()) {
+            return false;
+        }
+        if (handle.promise().has_error) {
+            return false;
+        }
+        return true;
+    }
+
+    // 获取错误信息
+    std::optional<std::string> get_error_message() const noexcept {
+        if (!handle || !handle.promise().exception_) {
+            return std::nullopt;
+        }
+        try {
+            std::rethrow_exception(handle.promise().exception_);
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        } catch (...) {
+            return std::string("Unknown exception");
         }
     }
 };
@@ -523,6 +596,7 @@ struct Task<std::unique_ptr<T>> {
     struct promise_type {
         std::unique_ptr<T> value;
         bool has_error = false;
+        std::exception_ptr exception_; // 保存异常
         std::coroutine_handle<> continuation;
 
         // 生命周期管理
@@ -577,6 +651,7 @@ struct Task<std::unique_ptr<T>> {
 
         void unhandled_exception() {
             has_error = true;
+            exception_ = std::current_exception(); // 捕获异常
             LOG_ERROR("Task<unique_ptr> unhandled exception occurred");
         }
 
@@ -610,6 +685,18 @@ struct Task<std::unique_ptr<T>> {
 
         bool safe_has_error() const noexcept {
             return has_error && !is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        // 获取异常
+        std::exception_ptr get_exception() const noexcept {
+            return exception_;
+        }
+
+        // 重新抛出异常
+        void rethrow_if_exception() const {
+            if (exception_) {
+                std::rethrow_exception(exception_);
+            }
         }
     };
     
@@ -715,8 +802,8 @@ struct Task<std::unique_ptr<T>> {
         }
 
         if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task<unique_ptr> execution failed");
-            return nullptr;
+            // 重新抛出异常
+            handle.promise().rethrow_if_exception();
         }
 
         return handle.promise().safe_get_value();
@@ -748,21 +835,42 @@ struct Task<std::unique_ptr<T>> {
 
     std::unique_ptr<T> await_resume() {
         if (!handle) {
-            LOG_ERROR("Task<unique_ptr> await_resume: Invalid handle");
-            return nullptr;
+            throw std::runtime_error("Task<unique_ptr> await_resume: Invalid handle");
         }
 
         if (handle.promise().is_destroyed()) {
-            LOG_ERROR("Task<unique_ptr> await_resume: Task destroyed");
-            return nullptr;
+            throw std::runtime_error("Task<unique_ptr> await_resume: Task destroyed");
         }
 
-        if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task<unique_ptr> await_resume: error occurred");
-            return nullptr;
-        }
+        // 重新抛出异常
+        handle.promise().rethrow_if_exception();
 
         return handle.promise().safe_get_value();
+    }
+
+    // 不抛异常版本（向后兼容）
+    std::unique_ptr<T> try_get() noexcept {
+        if (!handle || handle.promise().is_destroyed()) {
+            return nullptr;
+        }
+        if (handle.promise().has_error) {
+            return nullptr;
+        }
+        return handle.promise().safe_get_value();
+    }
+
+    // 获取错误信息
+    std::optional<std::string> get_error_message() const noexcept {
+        if (!handle || !handle.promise().exception_) {
+            return std::nullopt;
+        }
+        try {
+            std::rethrow_exception(handle.promise().exception_);
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        } catch (...) {
+            return std::string("Unknown exception");
+        }
     }
 };
 

@@ -23,6 +23,7 @@ struct Task {
     struct promise_type {
         std::optional<T> value;
         bool has_error = false; // 替换exception_ptr
+        std::exception_ptr exception_; // 保存异常
         std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
@@ -84,6 +85,7 @@ struct Task {
         void unhandled_exception() {
             // 快速路径：直接设置错误标志
             has_error = true;
+            exception_ = std::current_exception(); // 捕获异常
             LOG_ERROR("Task unhandled exception occurred");
         }
 
@@ -129,6 +131,18 @@ struct Task {
         // 快速获取错误状态 - 去除锁
         bool safe_has_error() const noexcept {
             return has_error && !is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        // 获取异常
+        std::exception_ptr get_exception() const noexcept {
+            return exception_;
+        }
+
+        // 重新抛出异常
+        void rethrow_if_exception() const {
+            if (exception_) {
+                std::rethrow_exception(exception_);
+            }
         }
     };
     
@@ -304,31 +318,14 @@ struct Task {
         }
 
 get_result:
-        // 检查是否有错误
-        if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task execution failed");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                auto safe_value = handle.promise().safe_get_value();
-                if (safe_value.has_value()) {
-                    return std::move(safe_value.value());
-                }
-                std::terminate();
-            }
-        }
+        // 重新抛出异常（如果有）
+        handle.promise().rethrow_if_exception();
 
         auto safe_value = handle.promise().safe_get_value();
         if (safe_value.has_value()) {
             return std::move(safe_value.value());
         } else {
-            LOG_ERROR("Task completed without setting a value");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
-            }
+            throw std::runtime_error("Task completed without setting a value");
         }
     }
 
@@ -381,50 +378,46 @@ get_result:
     T await_resume() {
         // 增强版：使用安全getter
         if (!handle) {
-            LOG_ERROR("Task await_resume: Invalid handle");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
-            }
+            throw std::runtime_error("Task await_resume: Invalid handle");
         }
 
         if (handle.promise().is_destroyed()) {
-            LOG_ERROR("Task await_resume: Task destroyed");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
-            }
+            throw std::runtime_error("Task await_resume: Task destroyed");
         }
 
-        if (handle.promise().safe_has_error()) {
-            LOG_ERROR("Task await_resume: error occurred");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                auto safe_value = handle.promise().safe_get_value();
-                if (safe_value.has_value()) {
-                    return std::move(safe_value.value());
-                }
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
-            }
-        }
+        // 重新抛出异常
+        handle.promise().rethrow_if_exception();
 
         auto safe_value = handle.promise().safe_get_value();
         if (safe_value.has_value()) {
             return std::move(safe_value.value());
         } else {
-            LOG_ERROR("Task await_resume: no value set");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
-            }
+            throw std::runtime_error("Task completed without setting a value");
+        }
+    }
+
+    // 不抛异常版本（向后兼容）
+    std::optional<T> try_get() noexcept {
+        if (!handle || handle.promise().is_destroyed()) {
+            return std::nullopt;
+        }
+        if (handle.promise().has_error) {
+            return std::nullopt;
+        }
+        return handle.promise().safe_get_value();
+    }
+
+    // 获取错误信息
+    std::optional<std::string> get_error_message() const noexcept {
+        if (!handle || !handle.promise().exception_) {
+            return std::nullopt;
+        }
+        try {
+            std::rethrow_exception(handle.promise().exception_);
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        } catch (...) {
+            return std::string("Unknown exception");
         }
     }
 };
