@@ -22,8 +22,8 @@ template<typename T>
 struct Task {
     struct promise_type {
         std::optional<T> value;
-        bool has_error = false; // 替换exception_ptr
-        std::exception_ptr exception_; // 保存异常
+        std::atomic<bool> has_error{false}; // 使用原子布尔确保线程安全
+        std::exception_ptr exception_; // 保存异常（exception_ptr本身是线程安全的）
         std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
@@ -41,7 +41,7 @@ struct Task {
             is_destroyed_.store(true, std::memory_order_release);
             
             // 记录任务状态
-            if (has_error) {
+            if (has_error.load(std::memory_order_acquire)) {
                 PerformanceMonitor::get_instance().on_task_failed();
             } else if (is_cancelled()) {
                 PerformanceMonitor::get_instance().on_task_cancelled();
@@ -83,9 +83,9 @@ struct Task {
         }
 
         void unhandled_exception() {
-            // 快速路径：直接设置错误标志
-            has_error = true;
-            exception_ = std::current_exception(); // 捕获异常
+            // 快速路径：使用原子操作设置错误标志，确保线程安全
+            has_error.store(true, std::memory_order_release);
+            exception_ = std::current_exception(); // 捕获异常（exception_ptr是线程安全的）
             LOG_ERROR("Task unhandled exception occurred");
         }
 
@@ -128,19 +128,24 @@ struct Task {
             return std::nullopt;
         }
 
-        // 快速获取错误状态 - 去除锁
+        // 快速获取错误状态 - 使用原子操作
         bool safe_has_error() const noexcept {
-            return has_error && !is_destroyed_.load(std::memory_order_acquire);
+            return has_error.load(std::memory_order_acquire) && !is_destroyed_.load(std::memory_order_acquire);
         }
 
-        // 获取异常
+        // 获取异常 - 添加内存屏障确保可见性
         std::exception_ptr get_exception() const noexcept {
-            return exception_;
+            // 确保先检查has_error标志（内存屏障）
+            if (has_error.load(std::memory_order_acquire)) {
+                return exception_;
+            }
+            return nullptr;
         }
 
-        // 重新抛出异常
+        // 重新抛出异常 - 线程安全版本
         void rethrow_if_exception() const {
-            if (exception_) {
+            // 使用原子操作检查错误标志，确保内存可见性
+            if (has_error.load(std::memory_order_acquire) && exception_) {
                 std::rethrow_exception(exception_);
             }
         }
@@ -225,17 +230,21 @@ struct Task {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
 
-            // 使用原子操作检查和设置销毁状态，避免重复销毁
-            bool expected = false;
-            if (!handle.promise().is_destroyed_.compare_exchange_strong(expected, true, std::memory_order_release)) {
-                // 已经在销毁中，直接返回
-                handle = nullptr;
-                return;
-            }
-
             try {
+                // 先检查协程状态，再原子地设置销毁标志
+                // 这避免了检查和销毁之间的竞态窗口
+                bool is_done = handle.done();
+                
+                // 使用原子操作检查和设置销毁状态，避免重复销毁
+                bool expected = false;
+                if (!handle.promise().is_destroyed_.compare_exchange_strong(expected, true, std::memory_order_release)) {
+                    // 已经在销毁中，直接返回
+                    handle = nullptr;
+                    return;
+                }
+
                 // 延迟销毁 - 避免在协程执行栈中销毁
-                if (handle.done()) {
+                if (is_done) {
                     handle.destroy();
                 } else {
                     // 安排在下一个调度周期销毁
