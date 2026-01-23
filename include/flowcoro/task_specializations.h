@@ -453,10 +453,8 @@ struct Task<void> {
 
         // 关键修复：先检查是否已完成（suspend_never 情况下协程会同步执行直到挂起）
         if (handle.done()) {
-            // 检查是否有错误
-            if (handle.promise().safe_has_error()) {
-                LOG_ERROR("Task<void> execution failed");
-            }
+            // 重新抛出异常（如果有）
+            handle.promise().rethrow_if_exception();
             return;
         }
 
