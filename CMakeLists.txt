@@ -190,7 +190,6 @@ target_link_libraries(flowcoro_net PUBLIC
     flowcoro
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
-    cjson
 )
 
 # 添加项目路径宏定义
