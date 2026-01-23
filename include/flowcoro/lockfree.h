@@ -17,8 +17,10 @@ private:
     struct Node {
         std::atomic<T*> data{nullptr};
         std::atomic<Node*> next{nullptr};
+        bool is_dummy{false}; // 标记是否为虚拟节点
 
         Node() = default;
+        explicit Node(bool dummy) : is_dummy(dummy) {}
         ~Node() {
             T* data_ptr = data.load();
             if (data_ptr) {
@@ -28,16 +30,23 @@ private:
         }
     };
 
+    // NodeWithData结构定义移到类级别，以便整个类都能使用
+    struct NodeWithData {
+        Node node;
+        alignas(T) char data_storage[sizeof(T)];
+    };
+
     alignas(64) std::atomic<Node*> head;
     alignas(64) std::atomic<Node*> tail;
     alignas(64) std::atomic<bool> destroyed{false}; // 添加析构标志
 
 public:
     Queue() {
-        Node* dummy = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
-        new(dummy) Node(); // placement new
-        head.store(dummy);
-        tail.store(dummy);
+        // 使用NodeWithData分配虚拟节点，保持分配一致性
+        NodeWithData* dummy_block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
+        new(&dummy_block->node) Node(true); // 标记为虚拟节点
+        head.store(&dummy_block->node);
+        tail.store(&dummy_block->node);
         destroyed.store(false);
     }
 
@@ -51,12 +60,17 @@ public:
             // 清空队列
         }
 
-        // 然后清理节点链表
+        // 然后清理节点链表 - 使用NodeWithData释放
         Node* current = head.load();
         while (current) {
             Node* next = current->next.load();
             current->~Node(); // 显式调用析构函数
-            pool_free(current); // 使用内存池释放
+            
+            // 计算包含Node的完整块地址并释放
+            NodeWithData* block = reinterpret_cast<NodeWithData*>(
+                reinterpret_cast<char*>(current) - offsetof(NodeWithData, node));
+            pool_free(block); // 释放整个块
+            
             current = next;
         }
     }
@@ -67,13 +81,8 @@ public:
         }
 
         // 优化：一次分配包含Node和数据的内存块
-        struct NodeWithData {
-            Node node;
-            alignas(T) char data_storage[sizeof(T)];
-        };
-        
         NodeWithData* block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
-        new(&block->node) Node(); // placement new for Node
+        new(&block->node) Node(false); // 标记为数据节点
         
         T* data_ptr = reinterpret_cast<T*>(block->data_storage);
         new(data_ptr) T(std::move(item)); // placement new for data
@@ -119,10 +128,7 @@ private:
             head_node->~Node(); // 显式调用析构函数
             
             // 计算包含Node的完整块地址并释放
-            struct NodeWithData {
-                Node node;
-                alignas(T) char data_storage[sizeof(T)];
-            };
+            // 现在所有节点（包括虚拟节点）都使用NodeWithData分配，所以这是安全的
             NodeWithData* block = reinterpret_cast<NodeWithData*>(
                 reinterpret_cast<char*>(head_node) - offsetof(NodeWithData, node));
             pool_free(block); // 释放整个块

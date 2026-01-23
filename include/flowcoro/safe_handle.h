@@ -45,10 +45,13 @@ public:
     safe_coroutine_handle& operator=(const safe_coroutine_handle&) = delete;
 
     ~safe_coroutine_handle() {
-        if (valid() && handle_) {
-            if (handle_) {
-                handle_.destroy(); // 直接销毁，不捕获异常
-            }
+        // 原子地标记为无效并获取之前的状态
+        bool was_valid = valid_.exchange(false, std::memory_order_acq_rel);
+        
+        // 只有当之前有效且句柄存在时才销毁
+        // 这避免了双重检查锁定的竞态条件
+        if (was_valid && handle_) {
+            handle_.destroy(); // 直接销毁，不捕获异常
         }
     }
 
