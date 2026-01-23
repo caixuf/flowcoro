@@ -130,20 +130,24 @@ struct Task {
             return has_error.load(std::memory_order_acquire) && !is_destroyed_.load(std::memory_order_acquire);
         }
 
-        // 获取异常 - 添加内存屏障确保可见性
+        // 获取异常 - 线程安全版本，确保内存可见性
         std::exception_ptr get_exception() const noexcept {
-            // 确保先检查has_error标志（内存屏障）
+            // 原子检查has_error，然后在本地拷贝exception_ptr
+            // exception_ptr本身的拷贝是线程安全的
             if (has_error.load(std::memory_order_acquire)) {
-                return exception_;
+                // 拷贝exception_ptr到本地变量，避免TOCTOU
+                std::exception_ptr local_exception = exception_;
+                return local_exception;
             }
             return nullptr;
         }
 
         // 重新抛出异常 - 线程安全版本
         void rethrow_if_exception() const {
-            // 使用原子操作检查错误标志，确保内存可见性
-            if (has_error.load(std::memory_order_acquire) && exception_) {
-                std::rethrow_exception(exception_);
+            // 获取异常的本地拷贝以避免竞态条件
+            auto exc = get_exception();
+            if (exc) {
+                std::rethrow_exception(exc);
             }
         }
     };
@@ -398,11 +402,8 @@ get_result:
         if (safe_value.has_value()) {
             return std::move(safe_value.value());
         } else {
-            // 提供更多调试信息
-            std::string error_msg = "Task await_resume: No value - done=" + std::to_string(handle.done()) +
-                     " cancelled=" + std::to_string(handle.promise().is_cancelled()) +
-                     " has_error=" + std::to_string(handle.promise().safe_has_error());
-            LOG_ERROR(error_msg.c_str());
+            // 简化错误日志，避免不必要的字符串分配
+            LOG_ERROR("Task await_resume: No value available");
             throw std::runtime_error("Task completed without setting a value");
         }
     }

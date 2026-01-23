@@ -17,10 +17,8 @@ private:
     struct Node {
         std::atomic<T*> data{nullptr};
         std::atomic<Node*> next{nullptr};
-        bool is_dummy{false}; // 标记是否为虚拟节点
 
         Node() = default;
-        explicit Node(bool dummy) : is_dummy(dummy) {}
         ~Node() {
             T* data_ptr = data.load();
             if (data_ptr) {
@@ -43,8 +41,9 @@ private:
 public:
     Queue() {
         // 使用NodeWithData分配虚拟节点，保持分配一致性
+        // 这样所有节点都使用相同的内存布局，pointer arithmetic才安全
         NodeWithData* dummy_block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
-        new(&dummy_block->node) Node(true); // 标记为虚拟节点
+        new(&dummy_block->node) Node();
         head.store(&dummy_block->node);
         tail.store(&dummy_block->node);
         destroyed.store(false);
@@ -82,7 +81,7 @@ public:
 
         // 优化：一次分配包含Node和数据的内存块
         NodeWithData* block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
-        new(&block->node) Node(false); // 标记为数据节点
+        new(&block->node) Node();
         
         T* data_ptr = reinterpret_cast<T*>(block->data_storage);
         new(data_ptr) T(std::move(item)); // placement new for data
