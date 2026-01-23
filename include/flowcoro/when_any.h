@@ -85,7 +85,9 @@ Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
                 co_return std::make_pair(winner_index, std::move(result));
             }
             
-            // 短暂休眠避免忙等待 - 使用ClockAwaiter
+            // 短暂休眠避免忙等待
+            // 注意：这是一个简化实现，使用轮询机制
+            // TODO: 考虑使用事件驱动或条件变量以提高效率和降低CPU使用
             co_await ClockAwaiter(std::chrono::milliseconds(1));
         }
     };

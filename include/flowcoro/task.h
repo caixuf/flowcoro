@@ -116,12 +116,9 @@ struct Task {
         std::optional<T> safe_get_value() const noexcept {
             // 快速路径：通常情况下协程没有被销毁
             if (!is_destroyed_.load(std::memory_order_acquire)) [[likely]] {
-                if constexpr (std::is_move_constructible_v<T>) {
-                    if (value.has_value()) {
-                        // 对于可移动类型，避免拷贝
-                        return std::make_optional(std::move(const_cast<std::optional<T>&>(value).value()));
-                    }
-                } else {
+                if (value.has_value()) {
+                    // 返回值的拷贝，保持const语义正确
+                    // 移除const_cast误用，因为这是const函数不应修改状态
                     return value;
                 }
             }
@@ -266,7 +263,7 @@ struct Task {
                 return T{};
             } else {
                 LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
+                throw std::runtime_error("Task::get called on invalid handle with non-default-constructible type");
             }
         }
 
@@ -277,7 +274,7 @@ struct Task {
                 return T{};
             } else {
                 LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                std::terminate();
+                throw std::runtime_error("Task::get called on destroyed task with non-default-constructible type");
             }
         }
 
@@ -308,7 +305,7 @@ struct Task {
                     if constexpr (std::is_default_constructible_v<T>) {
                         return T{};
                     } else {
-                        std::terminate();
+                        throw std::runtime_error("Task::get timed out after 5 seconds");
                     }
                 }
                 
@@ -401,6 +398,11 @@ get_result:
         if (safe_value.has_value()) {
             return std::move(safe_value.value());
         } else {
+            // 提供更多调试信息
+            std::string error_msg = "Task await_resume: No value - done=" + std::to_string(handle.done()) +
+                     " cancelled=" + std::to_string(handle.promise().is_cancelled()) +
+                     " has_error=" + std::to_string(handle.promise().safe_has_error());
+            LOG_ERROR(error_msg.c_str());
             throw std::runtime_error("Task completed without setting a value");
         }
     }
