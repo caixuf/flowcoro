@@ -146,7 +146,6 @@ public:
     // 链式操作 - map
     template<typename F>
     auto map(F&& f) & -> Result<std::invoke_result_t<F, T&>, E> {
-        using NewT = std::invoke_result_t<F, T&>;
         if (is_ok()) {
             return ok(std::invoke(std::forward<F>(f), std::get<T>(value_)));
         } else {
@@ -156,7 +155,6 @@ public:
 
     template<typename F>
     auto map(F&& f) const & -> Result<std::invoke_result_t<F, const T&>, E> {
-        using NewT = std::invoke_result_t<F, const T&>;
         if (is_ok()) {
             return ok(std::invoke(std::forward<F>(f), std::get<T>(value_)));
         } else {
@@ -166,7 +164,6 @@ public:
 
     template<typename F>
     auto map(F&& f) && -> Result<std::invoke_result_t<F, T&&>, E> {
-        using NewT = std::invoke_result_t<F, T&&>;
         if (is_ok()) {
             return ok(std::invoke(std::forward<F>(f), std::get<T>(std::move(value_))));
         } else {
@@ -211,7 +208,6 @@ public:
     // 错误映射
     template<typename F>
     auto map_err(F&& f) -> Result<T, std::invoke_result_t<F, E>> {
-        using NewE = std::invoke_result_t<F, E>;
         if (is_err()) {
             return err(std::invoke(std::forward<F>(f), std::get<E>(value_)));
         } else {

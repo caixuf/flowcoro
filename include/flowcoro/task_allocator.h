@@ -14,8 +14,9 @@ public:
     using size_type = std::size_t;
     using difference_type = std::ptrdiff_t;
     
-    // C++20 alignas支持
-    static constexpr size_t alignment = std::hardware_destructive_interference_size;
+    // 缓存行对齐常量（64字节适用于x86/ARM主流架构）
+    // 使用固定常量以避免 std::hardware_destructive_interference_size 的 ABI 差异警告
+    static constexpr size_t alignment = 64;
     
     CacheAlignedAllocator() noexcept = default;
     
