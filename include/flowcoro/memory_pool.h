@@ -17,7 +17,10 @@ private:
     struct MemoryBlock {
         MemoryBlock* next;
         size_t size;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         alignas(std::max_align_t) char data[];
+#pragma GCC diagnostic pop
     };
 
     // 线程本地自由列表，借鉴Nginx的设计思路

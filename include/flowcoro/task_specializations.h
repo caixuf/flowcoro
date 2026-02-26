@@ -462,17 +462,10 @@ struct Task<void> {
         if (!handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
             
-            try {
-                manager.schedule_resume(handle);
-            } catch (const std::exception& e) {
-                LOG_ERROR("Task<void>::get: Exception during schedule_resume: %s", e.what());
-                return;
-            } catch (...) {
-                LOG_ERROR("Task<void>::get: Unknown exception during schedule_resume");
-                return;
-            }
-            
-            // 🔧 修复：添加超时保护和优化的等待策略
+            // 🔧 修复：不直接调度外层句柄，通过驱动管理器让子任务完成并触发延续链
+            // 🔧 Fix: do not schedule the outer handle directly; drive the manager so sub-tasks
+            //         complete via their natural mechanisms (timers/continuations) and
+            //         eventually resume this handle.
             auto start_time = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::seconds(5);
             
@@ -783,7 +776,6 @@ struct Task<std::unique_ptr<T>> {
 
         if (!handle.done() && !handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(handle);
             
             while (!handle.done() && !handle.promise().is_cancelled()) {
                 manager.drive();

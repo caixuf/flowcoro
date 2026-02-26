@@ -290,9 +290,9 @@ struct Task {
         // 只有在未完成时才进入调度逻辑
         if (!handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(handle);
             
-            // 🔧 修复：添加超时保护和正确的等待策略
+            // 🔧 修复：不直接调度外层句柄，通过驱动管理器让子任务完成并触发延续链
+            // 直接调度外层句柄会导致在子任务尚未完成时提前调用 await_resume，引发异常
             auto start_time = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::seconds(5); // 5秒超时
             

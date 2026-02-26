@@ -4,6 +4,7 @@
  */
 
 #include "flowcoro/net.h"
+#include "flowcoro/logger.h"
 #include <stdexcept>
 #include <algorithm>
 #include <cerrno>
@@ -233,7 +234,7 @@ void EventLoop::process_pending_tasks() {
             task();
         } catch (const std::exception& e) {
             // 记录异常但不中断事件循环
-            // TODO: 使用日志系统记录
+            LOG_ERROR("EventLoop pending task threw exception: %s", e.what());
         }
         ++processed;
     }
@@ -743,7 +744,7 @@ Task<void> TcpServer::accept_loop() {
         } catch (const std::exception& e) {
             if (running_.load(std::memory_order_acquire)) {
                 // 记录错误但继续运行
-                // TODO: 使用日志系统
+                LOG_ERROR("EventLoop run_loop caught exception: %s", e.what());
             }
         }
     }
