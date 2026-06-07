@@ -13,13 +13,32 @@ namespace flowcoro {
 
 struct CoroTask {
     struct promise_type {
+        // Bug 修复3: 存储异常，以便在 await_resume() 中重新抛出
+        std::exception_ptr exception_;
+        // 用于续体链式唤醒的 continuation（修复 Bug 1 & 2）
+        std::coroutine_handle<> continuation;
+
         CoroTask get_return_object() {
             return CoroTask{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_always initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+
+        // Bug 修复2: final_suspend 通过续体恢复等待者，避免在 await_suspend 里手动双重 resume
+        struct FinalAwaiter {
+            bool await_ready() noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                auto cont = h.promise().continuation;
+                return cont ? cont : std::noop_coroutine();
+            }
+            void await_resume() noexcept {}
+        };
+        FinalAwaiter final_suspend() noexcept { return {}; }
+
         void return_void() noexcept {}
-        void unhandled_exception() {
+
+        // Bug 修复3: 捕获异常而非静默丢弃
+        void unhandled_exception() noexcept {
+            exception_ = std::current_exception();
             LOG_ERROR("Unhandled exception in CoroTask");
         }
     };
@@ -39,16 +58,12 @@ struct CoroTask {
     ~CoroTask() { if (handle) handle.destroy(); }
 
     void resume() {
+        // Bug 修复1: 使用 CoroutineManager::schedule_resume，它内部通过无锁队列保证
+        // 每个 handle 只被调度一次，避免多线程下 check-then-enqueue 竞态导致双重 resume。
         if (handle && !handle.done()) {
             LOG_DEBUG("Resuming coroutine handle: %p", handle.address());
-            // 使用无锁线程池调度协程
-            GlobalThreadPool::get().enqueue_void([h = handle]() {
-                if (h && !h.done()) {
-                    LOG_TRACE("Executing coroutine in thread pool");
-                    h.resume();
-                    LOG_TRACE("Coroutine execution completed");
-                }
-            });
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
         }
     }
     bool done() const { return !handle || handle.done(); }
@@ -59,30 +74,29 @@ struct CoroTask {
     }
 
     void await_suspend(std::coroutine_handle<> waiting_handle) {
+        // Bug 修复2: 使用续体模式（continuation）替代手动在 lambda 里双重 resume。
+        // 原实现在线程池 lambda 里先 h.resume() 再 waiting_handle.resume()，
+        // 若 h 内部也触发了 waiting_handle 的恢复，则导致双重 resume -> UB/崩溃。
+        // 正确做法：把 waiting_handle 存入 h 的 promise.continuation，
+        // 由 final_suspend 在 h 完成时通过对称转移（symmetric transfer）恢复它，
+        // 保证 waiting_handle 只被恢复一次。
         if (handle && !handle.done()) [[likely]] {
-            // 在线程池中运行当前任务，然后恢复等待的协程
-            GlobalThreadPool::get().enqueue_void([h = handle, waiting_handle]() {
-                // 快速路径：先检查是否还有效，减少重复检查
-                if (h) [[likely]] {
-                    h.resume();
-                }
-                // 任务完成后恢复等待的协程
-                if (waiting_handle) [[likely]] {
-                    waiting_handle.resume();
-                }
-            });
+            handle.promise().continuation = waiting_handle;
+            // 调度 h 运行（而非直接 resume，保持线程安全）
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(handle);
         } else {
-            // 如果任务已经完成，直接恢复等待的协程
-            GlobalThreadPool::get().enqueue_void([waiting_handle]() {
-                if (waiting_handle) [[likely]] {
-                    waiting_handle.resume();
-                }
-            });
+            // h 已完成或无效，直接恢复等待者
+            auto& manager = CoroutineManager::get_instance();
+            manager.schedule_resume(waiting_handle);
         }
     }
 
     void await_resume() const {
-        // 任务完成，不返回值
+        // Bug 修复3: 重新抛出协程内捕获的异常
+        if (handle && handle.promise().exception_) {
+            std::rethrow_exception(handle.promise().exception_);
+        }
     }
 
     // 执行网络请求（返回可等待的Task）

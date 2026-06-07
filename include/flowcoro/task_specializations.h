@@ -521,20 +521,17 @@ struct Task<void> {
     bool await_suspend(std::coroutine_handle<> waiting_handle) {
         // Task<void>版本 - 与Task<T>保持一致的实现
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效，直接恢复等待协程
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
+            // 句柄无效：返回 false，C++ 机制立即恢复等待协程（无需 schedule_resume）
+            // 注意：return false 时协程立即被恢复，再调用 schedule_resume 会导致双重唤醒崩溃
             return false;
         }
 
         if (handle.done()) {
-            // 任务已完成，直接恢复等待协程
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
+            // 任务已完成：同上，return false 会立即恢复等待协程
             return false;
         }
 
-        // 设置continuation：当task完成时恢复waiting_handle
+        // 设置continuation：当task完成时通过 final_suspend 恢复 waiting_handle
         handle.promise().set_continuation(waiting_handle);
 
         // 挂起等待协程，等待task通过continuation唤醒

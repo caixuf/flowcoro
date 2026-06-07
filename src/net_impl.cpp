@@ -678,17 +678,10 @@ Task<void> TcpServer::listen(const std::string& host, uint16_t port) {
     running_.store(true, std::memory_order_release);
 
     // 启动接受连接的协程并持有其生命周期
+    // 注意：Task<void> 使用 suspend_never，accept_loop() 调用时已同步运行
+    // 直到第一个挂起点（co_await accept()）。无需再 schedule_resume，
+    // 否则会提前唤醒仍在等待 epoll 事件的协程，导致 await_resume 拿到空 socket。
     accept_task_ = accept_loop();
-    
-    // 启动accept_loop协程任务，让它在协程池中执行
-    auto& manager = flowcoro::CoroutineManager::get_instance();
-    if (accept_task_) {
-        // 获取协程handle并调度执行
-        auto handle = accept_task_->handle;
-        if (handle && !handle.done()) {
-            manager.schedule_resume(handle);
-        }
-    }
 
     co_return;
 }
@@ -712,15 +705,12 @@ Task<void> TcpServer::accept_loop() {
 
             if (connection_handler_) {
                 // 创建连接处理任务并保存，防止任务在临时对象析构时被销毁
+                // 注意：suspend_never 语义下，connection_handler_() 调用时协程体已
+                // 同步运行到第一个真正的挂起点（等待 epoll 事件）。
+                // 无需再 schedule_resume——多余的 resume 会在 await_resume() 中
+                // 拿到还未就绪的值，导致 socket 为 null 的崩溃。
                 auto task = connection_handler_(std::move(client_socket));
                 auto task_ptr = std::make_shared<Task<void>>(std::move(task));
-                
-                // 调度连接处理任务执行
-                auto& manager = flowcoro::CoroutineManager::get_instance();
-                auto handle = task_ptr->handle;
-                if (handle && !handle.done()) {
-                    manager.schedule_resume(handle);
-                }
                 
                 {
                     std::lock_guard<std::mutex> lk(active_tasks_mutex_);
