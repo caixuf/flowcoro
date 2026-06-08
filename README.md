@@ -172,6 +172,7 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 
 ## Documentation
 
+- [Introduction (中文)](docs/INTRODUCTION.md)
 - [Quick Start Guide](docs/QUICK_START.md)
 - [API Reference](docs/API_REFERENCE.md)
 - [Architecture Design](docs/ARCHITECTURE.md)
