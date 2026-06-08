@@ -172,6 +172,7 @@ suspend_never  负载均衡  无锁队列  执行
 
 ## 文档
 
+- [FlowCoro 介绍](docs/INTRODUCTION.md)
 - [快速开始指南](docs/QUICK_START.md)
 - [API参考](docs/API_REFERENCE.md)
 - [架构设计](docs/ARCHITECTURE.md)
