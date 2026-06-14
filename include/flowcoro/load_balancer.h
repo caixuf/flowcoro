@@ -10,6 +10,7 @@ class SmartLoadBalancer {
 private:
     static constexpr size_t MAX_SCHEDULERS = 32;
     std::array<std::atomic<size_t>, MAX_SCHEDULERS> queue_loads_;
+    std::array<std::atomic<size_t>, MAX_SCHEDULERS> total_processed_; // 每个调度器的历史处理总量
     std::atomic<size_t> scheduler_count_{0};
     std::atomic<size_t> round_robin_counter_{0};
 
@@ -17,6 +18,9 @@ public:
     SmartLoadBalancer() {
         for (auto& load : queue_loads_) {
             load.store(0, std::memory_order_relaxed);
+        }
+        for (auto& cnt : total_processed_) {
+            cnt.store(0, std::memory_order_relaxed);
         }
     }
 
@@ -75,6 +79,9 @@ public:
     // 记录任务完成
     void on_task_completed(size_t scheduler_id) noexcept {
         decrement_load(scheduler_id);
+        if (scheduler_id < MAX_SCHEDULERS) {
+            total_processed_[scheduler_id].fetch_add(1, std::memory_order_relaxed);
+        }
     }
     
     // 获取负载统计
@@ -91,11 +98,12 @@ public:
         
         for (size_t i = 0; i < count; ++i) {
             size_t queue_load = queue_loads_[i].load(std::memory_order_relaxed);
+            size_t processed  = total_processed_[i].load(std::memory_order_relaxed);
             stats.push_back({
-                .scheduler_id = i,
-                .queue_load = queue_load,
-                .total_processed = 0, // 简化实现，暂不跟踪处理总数
-                .load_score = static_cast<double>(queue_load)
+                .scheduler_id   = i,
+                .queue_load     = queue_load,
+                .total_processed = processed,
+                .load_score     = static_cast<double>(queue_load)
             });
         }
         

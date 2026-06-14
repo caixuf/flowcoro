@@ -317,13 +317,21 @@ public:
             schedulers_.emplace_back(std::make_unique<CoroutineScheduler>(i));
         }
         
-        // 智能线程池配置：优化并发性能
+        // 线程池大小配置：优先使用编译时常量，否则自动检测
+        // 对混合架构 CPU（如 Alder Lake），建议设置为 P-core 数量
+        // cmake: -DFLOWCORO_THREAD_POOL_SIZE=<N>
+#ifdef FLOWCORO_THREAD_POOL_SIZE
+        size_t thread_count = static_cast<size_t>(FLOWCORO_THREAD_POOL_SIZE);
+        if (thread_count == 0) {
+            thread_count = std::thread::hardware_concurrency();
+        }
+#else
         size_t thread_count = std::thread::hardware_concurrency();
-        if (thread_count == 0) thread_count = 8; // 备用值
-
-        // 优化配置：适中的线程数以获得最佳性能/开销比
-        thread_count = std::max(thread_count, static_cast<size_t>(8)); // 至少8个线程
-        thread_count = std::min(thread_count, static_cast<size_t>(24)); // 最多24个线程，减少调度开销
+        if (thread_count == 0) thread_count = 8;
+#endif
+        // 合理上下界：[4, 32]
+        thread_count = std::max(thread_count, static_cast<size_t>(4));
+        thread_count = std::min(thread_count, static_cast<size_t>(32));
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 

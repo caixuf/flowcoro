@@ -376,7 +376,7 @@ public:
 
     bool validate_connection_string(const std::string&) const override { return false; }
     std::string get_driver_name() const override { return "MySQL (Disabled)"; }
-    std::string get_version() const override { return "0.0.0"; }
+    std::string get_version() const override { return "N/A"; } // 未编译MySQL支持
 };
 
 inline std::unique_ptr<ConnectionPool<MySQLConnection>> create_mysql_pool(

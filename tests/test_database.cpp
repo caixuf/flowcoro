@@ -2,6 +2,7 @@
 #include <memory>
 #include <string>
 #include "flowcoro.hpp"
+#include "flowcoro/db/mysql_driver.h"
 #include "test_framework.h"
 
 using namespace flowcoro;
@@ -72,24 +73,33 @@ void test_pool_stats() {
     }
 }
 
-// 测试MySQL连接占位实现
+// 测试无MySQL编译支持时的降级行为
 void test_mysql_connection_placeholder() {
-    std::cout << "测试MySQL连接占位实现..." << std::endl;
+    std::cout << "测试MySQL无编译支持时的降级行为..." << std::endl;
+#ifndef FLOWCORO_HAS_MYSQL
     try {
-        // 由于MySQL默认未安装，测试占位概念
-        bool mysql_support_available = false; // 占位实现
-        TEST_EXPECT_FALSE(mysql_support_available); // 占位实现应该返回false
+        // 无MySQL支持时，driver应返回明确的禁用状态
+        flowcoro::db::MySQLDriver driver;
 
-        std::string error = "MySQL support not compiled";
-        TEST_EXPECT_TRUE(!error.empty()); // 应该有错误消息
+        // get_driver_name 应指明 disabled 状态
+        std::string name = driver.get_driver_name();
+        TEST_EXPECT_TRUE(name.find("Disabled") != std::string::npos);
 
-        std::cout << "MySQL连接占位实现测试通过" << std::endl;
+        // get_version 应返回 N/A
+        std::string ver = driver.get_version();
+        TEST_EXPECT_TRUE(ver == "N/A");
 
+        // validate_connection_string 应返回 false
+        TEST_EXPECT_FALSE(driver.validate_connection_string("mysql://localhost/test"));
+
+        std::cout << "MySQL降级行为测试通过" << std::endl;
     } catch (const std::exception& e) {
-        // 占位实现可能抛出异常，这是预期的
-        std::cout << "MySQL连接测试异常（预期）: " << e.what() << std::endl;
-        TEST_EXPECT_TRUE(true);
+        std::cout << "MySQL降级测试异常: " << e.what() << std::endl;
+        TEST_EXPECT_TRUE(false);
     }
+#else
+    std::cout << "MySQL已编译，跳过降级测试" << std::endl;
+#endif
 }
 
 // 测试数据库基础组件

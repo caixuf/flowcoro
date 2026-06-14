@@ -630,7 +630,7 @@ public:
 
     bool validate_connection_string(const std::string&) const override { return false; }
     std::string get_driver_name() const override { return "Redis (Disabled)"; }
-    std::string get_version() const override { return "0.0.0"; }
+    std::string get_version() const override { return "N/A"; } // 未编译Redis支持
 };
 
 #endif // FLOWCORO_HAS_REDIS

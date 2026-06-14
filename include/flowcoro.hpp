@@ -1,40 +1,31 @@
 /**
  * @file flowcoro.hpp
-# 版本信息
-#define FLOWCORO_VERSION_MAJOR 4
-#define FLOWCORO_VERSION_MINOR 0
-#define FLOWCORO_VERSION_PATCH 0
-#define FLOWCORO_VERSION "4.0.0"
-#define FLOWCORO_VERSION_STRING "4.0.0"ief FlowCoro - 现代C++20协程库主头文件
+ * @brief FlowCoro - 现代C++20协程库主头文件
  * @author FlowCoro Team
- * @version 2.2.0
- * @date 2025-07-22
+ * @version 4.0.0
+ * @date 2026-06-14
  *
  * FlowCoro是一个基于C++20协程的现代异步编程库，提供：
  * - 高性能无锁协程调度
- * - 增强的Task生命周期管理
- * - 原子状态跟踪和线程安全
+ * - 完善的Task生命周期管理（原子状态 + 互斥锁保护）
  * - JavaScript Promise风格API
- * - 异步网络请求支持
- * - 高性能日志系统
- * - 内存池和对象池
- *
- * v2.2.0更新：
- * - 完全重构的Task<T>生命周期管理
- * - 原子状态管理 (is_cancelled_, is_destroyed_)
- * - 互斥锁保护的状态变更
- * - 安全的协程销毁机制
- * - Promise风格状态查询API
+ * - 异步网络IO（epoll/kqueue事件驱动）
+ * - HTTP客户端与服务端支持
+ * - 高性能异步日志系统
+ * - 内存池与对象池
+ * - 线程安全Channel通信
+ * - 智能负载均衡（无锁实现）
+ * - 数据库连接池（MySQL/Redis）
  */
 
 #pragma once
 
 // 版本信息
-#define FLOWCORO_VERSION_MAJOR 3
+#define FLOWCORO_VERSION_MAJOR 4
 #define FLOWCORO_VERSION_MINOR 0
 #define FLOWCORO_VERSION_PATCH 0
-#define FLOWCORO_VERSION "3.0.0"
-#define FLOWCORO_VERSION_STRING "3.0.0"
+#define FLOWCORO_VERSION "4.0.0"
+#define FLOWCORO_VERSION_STRING "4.0.0"
 
 // 核心组件
 #include "flowcoro/core.h"
@@ -49,10 +40,8 @@
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 #include "flowcoro/channel.h"
-#include "flowcoro/yield.h"           // 新增：轻量级yield支持
-#include "flowcoro/task_allocator.h"  // 新增：缓存友好的任务分配器
-
-// #include "flowcoro/rpc.h" // 暂时注释掉复杂的RPC实现
+#include "flowcoro/yield.h"
+#include "flowcoro/task_allocator.h"
 
 /**
  * @namespace flowcoro
@@ -109,7 +98,7 @@ struct RuntimeStats {
         size_t cancelled_tasks;
         size_t destroyed_tasks;
         double avg_lifetime_ms;
-    } task_lifecycle; // 新增：Task生命周期统计
+    } task_lifecycle;
 };
 
 /**

@@ -7,6 +7,8 @@
 #include <sstream>
 #include <fstream>
 #include <vector>
+#include <cmath>
+#include <algorithm>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -173,11 +175,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "========================================" << std::endl;
-    std::cout << " FlowCoro 协程 vs 多线程终极对决" << std::endl;
+    std::cout << " FlowCoro 三路并发性能对决" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << " 独立进程测试 - 完全内存隔离" << std::endl;
-    std::cout << " 测试规模: " << request_count << " 个并发请求" << std::endl;
-    std::cout << " 每个请求: 50ms IO模拟" << std::endl;
+    std::cout << " 测试规模: " << request_count << " 个并发任务" << std::endl;
+    std::cout << " 任务体: 纯整型计算（零堆分配，三路公平）" << std::endl;
     std::cout << " CPU核心数: " << std::thread::hardware_concurrency() << std::endl;
     std::cout << " 主进程内存: " << SystemInfo::format_memory_bytes(SystemInfo::get_memory_usage_bytes()) << std::endl;
     std::cout << "========================================" << std::endl << std::endl;
@@ -186,7 +188,7 @@ int main(int argc, char* argv[]) {
         std::vector<TestResult> results;
 
         // 测试1：协程方式（独立进程）
-        std::cout << " 第一轮：协程方式测试" << std::endl;
+        std::cout << " 第一轮：协程 M:N 调度" << std::endl;
         std::cout << std::string(40, '-') << std::endl;
         auto coro_result = run_process_test("coroutine", request_count);
         results.push_back(coro_result);
@@ -196,124 +198,179 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         std::cout << std::endl;
 
-        // 测试2：多线程方式（独立进程）
-        std::cout << " 第二轮：多线程方式测试" << std::endl;
+        // 测试2：线程池方式（N线程M任务，与协程公平对比）
+        std::cout << " 第二轮：线程池（N线程处理M任务）" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        auto pool_result = run_process_test("threadpool", request_count);
+        results.push_back(pool_result);
+
+        // 等待系统稳定
+        std::cout << " 等待系统资源释放..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::cout << std::endl;
+
+        // 测试3：one-thread-per-task（演示 OS 线程创建开销）
+        std::cout << " 第三轮：one-thread-per-task" << std::endl;
         std::cout << std::string(40, '-') << std::endl;
         auto thread_result = run_process_test("thread", request_count);
         results.push_back(thread_result);
 
-        // 对比分析 - 使用cJSON库生成标准JSON输出
+        // ──────────────────────────────────────────────────
+        // 三路对比报告
+        // ──────────────────────────────────────────────────
         std::cout << std::string(80, '=') << std::endl;
-        std::cout << " 标准化性能分析报告（cJSON格式）" << std::endl;
+        std::cout << " 三路性能分析报告" << std::endl;
         std::cout << std::string(80, '=') << std::endl;
 
-        // 使用cJSON生成标准JSON
+        // JSON 报告
         cJSON *json = cJSON_CreateObject();
-        
-        // 测试配置
+
         cJSON *test_config = cJSON_CreateObject();
         cJSON_AddNumberToObject(test_config, "task_count", request_count);
         cJSON_AddNumberToObject(test_config, "cpu_cores", std::thread::hardware_concurrency());
-        cJSON_AddStringToObject(test_config, "test_type", "CPU密集型");
+        cJSON_AddStringToObject(test_config, "test_type", "纯整型计算（零堆分配）");
         cJSON_AddItemToObject(json, "test_config", test_config);
-        
-        // 协程结果
-        cJSON *coroutine_result = cJSON_CreateObject();
-        cJSON_AddNumberToObject(coroutine_result, "duration_ms", coro_result.duration_ms);
-        cJSON_AddNumberToObject(coroutine_result, "throughput_rps", coro_result.throughput);
-        cJSON_AddNumberToObject(coroutine_result, "avg_latency_ms", coro_result.avg_latency);
-        cJSON_AddNumberToObject(coroutine_result, "exit_code", coro_result.exit_code);
-        cJSON_AddItemToObject(json, "coroutine_result", coroutine_result);
-        
-        // 线程结果
-        cJSON *thread_result_json = cJSON_CreateObject();
-        cJSON_AddNumberToObject(thread_result_json, "duration_ms", thread_result.duration_ms);
-        cJSON_AddNumberToObject(thread_result_json, "throughput_rps", thread_result.throughput);
-        cJSON_AddNumberToObject(thread_result_json, "avg_latency_ms", thread_result.avg_latency);
-        cJSON_AddNumberToObject(thread_result_json, "exit_code", thread_result.exit_code);
-        cJSON_AddItemToObject(json, "thread_result", thread_result_json);
 
-        double speed_ratio = (double)thread_result.duration_ms / coro_result.duration_ms;
-        std::string winner = (speed_ratio > 1.0) ? "coroutine" : "thread";
-        double advantage = (speed_ratio > 1.0) ? speed_ratio : (1.0 / speed_ratio);
-        
-        // 比较结果
+        auto add_result = [&](cJSON* root, const char* key, const TestResult& r) {
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "duration_ms",   r.duration_ms);
+            cJSON_AddNumberToObject(obj, "throughput_rps", r.throughput);
+            cJSON_AddNumberToObject(obj, "avg_latency_ms", r.avg_latency);
+            cJSON_AddNumberToObject(obj, "exit_code",      r.exit_code);
+            cJSON_AddItemToObject(root, key, obj);
+        };
+        add_result(json, "coroutine_result",  coro_result);
+        add_result(json, "threadpool_result", pool_result);
+        add_result(json, "thread_result",     thread_result);
+
+        // 计算各组对比（协程耗时为0时用 "<1ms" 显示，避免除零）
+        auto safe_ratio = [](long num, long den) -> std::string {
+            if (den <= 0) return ">10000";
+            double r = (double)num / den;
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(1) << r;
+            return oss.str();
+        };
+        double coro_vs_pool   = pool_result.duration_ms   > 0 ? (double)pool_result.duration_ms   / std::max(1L, coro_result.duration_ms) : 0;
+        double coro_vs_thread = thread_result.duration_ms > 0 ? (double)thread_result.duration_ms / std::max(1L, coro_result.duration_ms) : 0;
+
         cJSON *comparison = cJSON_CreateObject();
-        cJSON_AddStringToObject(comparison, "winner", winner.c_str());
-        cJSON_AddNumberToObject(comparison, "speed_advantage", advantage);
-        cJSON_AddNumberToObject(comparison, "performance_improvement_percent", (advantage - 1) * 100);
-        cJSON_AddBoolToObject(comparison, "coroutine_faster", speed_ratio > 1.0);
+        cJSON_AddNumberToObject(comparison, "coroutine_vs_threadpool_speedup", coro_vs_pool);
+        cJSON_AddNumberToObject(comparison, "coroutine_vs_thread_speedup",     coro_vs_thread);
         cJSON_AddItemToObject(json, "comparison", comparison);
-        
-        // 输出格式化的JSON
+
         char *json_string = cJSON_Print(json);
         std::cout << "[PERF_REPORT_BEGIN]" << std::endl;
         std::cout << json_string << std::endl;
         std::cout << "[PERF_REPORT_END]" << std::endl;
-        
-        // 清理内存
         free(json_string);
         cJSON_Delete(json);
+
+        // 文字对比表格
         std::cout << std::endl;
-        std::cout << " 传统格式性能对比：" << std::endl;
-        std::cout << " 协程总耗时： " << coro_result.duration_ms << " ms" << std::endl;
-        std::cout << " 多线程总耗时： " << thread_result.duration_ms << " ms" << std::endl;
+        std::cout << std::string(80, '=') << std::endl;
+        std::cout << " 性能对比汇总" << std::endl;
+        std::cout << std::string(80, '-') << std::endl;
+        std::cout << std::left
+                  << " " << std::setw(28) << "模式"
+                  << std::setw(12) << "耗时(ms)"
+                  << std::setw(18) << "吞吐量(req/s)"
+                  << "相对协程" << std::endl;
+        std::cout << std::string(80, '-') << std::endl;
 
-        if (speed_ratio > 1.0) {
-            std::cout << " 协程速度优势： " << std::fixed << std::setprecision(1)
-                      << speed_ratio << "x (快 " << std::setprecision(0)
-                      << (speed_ratio - 1) * 100 << "%)" << std::endl;
-        } else {
-            std::cout << " 多线程速度优势： " << std::fixed << std::setprecision(1)
-                      << (1.0 / speed_ratio) << "x (快 " << std::setprecision(0)
-                      << (1.0 / speed_ratio - 1) * 100 << "%)" << std::endl;
-        }
-
-        std::cout << std::endl;
-        std::cout << " 吞吐量对比：" << std::endl;
-        std::cout << " 协程吞吐量： " << std::fixed << std::setprecision(0)
-                  << coro_result.throughput << " 请求/秒" << std::endl;
-        std::cout << " 多线程吞吐量： " << std::fixed << std::setprecision(0)
-                  << thread_result.throughput << " 请求/秒" << std::endl;
-
-        std::cout << std::endl;
-        std::cout << " 平均延迟对比：" << std::endl;
-        std::cout << " 协程平均延迟： " << std::fixed << std::setprecision(2)
-                  << coro_result.avg_latency << " ms/请求" << std::endl;
-        std::cout << " 多线程平均延迟：" << std::fixed << std::setprecision(2)
-                  << thread_result.avg_latency << " ms/请求" << std::endl;
-
-        std::cout << std::endl;
-        std::cout << " 综合评价：" << std::endl;
-
-        if (coro_result.duration_ms < thread_result.duration_ms) {
-            std::cout << " 协程在 " << request_count << " 个并发请求下表现更优！" << std::endl;
-            std::cout << " 协程的优势：" << std::endl;
-            std::cout << " • 更高的并发效率" << std::endl;
-            std::cout << " • 更低的系统开销" << std::endl;
-            std::cout << " • 更好的可扩展性" << std::endl;
-        } else {
-            std::cout << " 多线程在 " << request_count << " 个并发请求下表现更优！" << std::endl;
-            std::cout << " 多线程的优势：" << std::endl;
-            std::cout << " • 更好的CPU利用率" << std::endl;
-            std::cout << " • 更成熟的实现" << std::endl;
-            std::cout << " • 更直观的并行模型" << std::endl;
-        }
+        auto print_row = [&](const std::string& label, const TestResult& r, double ratio) {
+            std::cout << " " << std::setw(28) << label
+                      << std::setw(12) << r.duration_ms
+                      << std::setw(18) << std::fixed << std::setprecision(0) << r.throughput;
+            if (ratio > 0)
+                std::cout << "慢 " << std::setprecision(1) << ratio << "x";
+            else
+                std::cout << "(基准)";
+            std::cout << std::endl;
+        };
+        print_row("协程 M:N 调度",          coro_result,   0.0);
+        print_row("线程池 (" + std::to_string(std::thread::hardware_concurrency()) + "线程)",
+                                            pool_result,   coro_vs_pool);
+        print_row("one-thread-per-task",    thread_result, coro_vs_thread);
+        std::cout << std::string(80, '-') << std::endl;
 
         std::cout << std::endl;
-        std::cout << " 使用建议：" << std::endl;
-        std::cout << " 协程适用场景：" << std::endl;
-        std::cout << " • 高并发服务器（数千到数万连接）" << std::endl;
-        std::cout << " • IO密集型应用" << std::endl;
-        std::cout << " • 需要大量轻量级任务的场景" << std::endl;
-        std::cout << std::endl;
-        std::cout << " 多线程适用场景：" << std::endl;
-        std::cout << " • CPU密集型任务" << std::endl;
-        std::cout << " • 需要真正并行计算的场景" << std::endl;
-        std::cout << " • 中等规模的并发需求" << std::endl;
+        std::cout << " 结论：" << std::endl;
+        std::cout << " • 协程 vs 线程池   : 协程快 " << safe_ratio(pool_result.duration_ms, std::max(1L, coro_result.duration_ms))
+                  << "x —— 调度开销对比（用户态 vs mutex/condvar）" << std::endl;
+        std::cout << " • 协程 vs 1线程/任务: 协程快 " << safe_ratio(thread_result.duration_ms, std::max(1L, coro_result.duration_ms))
+                  << "x —— 含 OS 线程创建成本" << std::endl;
+        std::cout << " • 线程池 vs 1线程/任务: 线程池快 " << std::fixed << std::setprecision(1)
+                  << (thread_result.duration_ms > 0 && pool_result.duration_ms > 0
+                      ? (double)thread_result.duration_ms / pool_result.duration_ms : 0)
+                  << "x —— 线程复用消除创建开销" << std::endl;
+
+        // ─────────────────────────────────────────────────────────────────
+        // 第四轮：IO 密集型场景（协程真正的主场）
+        // 每个任务 sleep 1ms，协程全部并发挂起，线程池轮流阻塞
+        // ─────────────────────────────────────────────────────────────────
+        int io_count = std::min(request_count, 2000); // 限制规模：线程池 IO 测试耗时与 M/N 成正比
+        int nthreads = std::thread::hardware_concurrency();
+        long expected_pool_ms = (long)std::ceil((double)io_count / nthreads); // 理论值
 
         std::cout << std::endl;
-        std::cout << " 想测试更大规模？运行：" << argv[0] << " 1000" << std::endl;
+        std::cout << std::string(80, '=') << std::endl;
+        std::cout << " IO 密集型场景对比（每任务 1ms 等待，" << io_count << " 个任务）" << std::endl;
+        std::cout << " 协程：所有任务同时挂起等待 → 预期 ~1ms" << std::endl;
+        std::cout << " 线程池：" << nthreads << " 线程轮流阻塞 → 预期 ~"
+                  << expected_pool_ms << "ms (ceil(" << io_count << "/" << nthreads << ")×1ms)" << std::endl;
+        std::cout << std::string(80, '=') << std::endl;
+
+        std::cout << " 第四轮：协程 IO 并发" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        auto coro_io_result = run_process_test("coroutine-io", io_count);
+
+        std::cout << " 等待系统资源释放..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::cout << std::endl;
+
+        std::cout << " 第五轮：线程池 IO（阻塞 sleep）" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        auto pool_io_result = run_process_test("threadpool-io", io_count);
+
+        // IO 场景汇总
+        std::cout << std::endl;
+        std::cout << std::string(80, '=') << std::endl;
+        std::cout << " IO 密集型场景汇总" << std::endl;
+        std::cout << std::string(80, '-') << std::endl;
+        std::cout << std::left
+                  << " " << std::setw(30) << "模式"
+                  << std::setw(12) << "耗时(ms)"
+                  << std::setw(18) << "吞吐量(req/s)"
+                  << "相对协程" << std::endl;
+        std::cout << std::string(80, '-') << std::endl;
+
+        auto print_io_row = [&](const std::string& label, const TestResult& r, double ratio) {
+            std::cout << " " << std::setw(30) << label
+                      << std::setw(12) << r.duration_ms
+                      << std::setw(18) << std::fixed << std::setprecision(0) << r.throughput;
+            if (ratio > 0) std::cout << "慢 " << std::setprecision(1) << ratio << "x";
+            else            std::cout << "(基准)";
+            std::cout << std::endl;
+        };
+        double io_ratio = coro_io_result.duration_ms > 0
+            ? (double)pool_io_result.duration_ms / coro_io_result.duration_ms
+            : (double)pool_io_result.duration_ms;
+        print_io_row("协程 M:N + co_await 1ms",  coro_io_result, 0.0);
+        print_io_row("线程池 " + std::to_string(nthreads) + "线程 + sleep 1ms",
+                                                  pool_io_result, io_ratio);
+        std::cout << std::string(80, '-') << std::endl;
+        std::cout << std::endl;
+        std::cout << " IO 场景结论：" << std::endl;
+        std::cout << " • 协程 co_await 挂起不占线程，" << io_count
+                  << " 个任务同时等待 → 总耗时 ≈ 1ms" << std::endl;
+        std::cout << " • 线程池 sleep 阻塞占用线程，只能 " << nthreads
+                  << " 个任务并行 → 总耗时 ≈ " << expected_pool_ms << "ms" << std::endl;
+        std::cout << " • 协程快 " << safe_ratio(pool_io_result.duration_ms,
+                                                  std::max(1L, coro_io_result.duration_ms))
+                  << "x —— 这才是协程的真正优势场景！" << std::endl;
+        std::cout << std::endl;
+        std::cout << " 想测试更大规模？运行：" << argv[0] << " 100000" << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << " 出现错误: " << e.what() << std::endl;

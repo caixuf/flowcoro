@@ -13,9 +13,15 @@ struct Task<Result<T, E>> {
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+#ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
+#endif
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {}
+        promise_type()
+#ifndef NDEBUG
+            : creation_time_(std::chrono::steady_clock::now())
+#endif
+        {}
 
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
@@ -63,8 +69,12 @@ struct Task<Result<T, E>> {
         }
 
         std::chrono::milliseconds get_lifetime() const {
+#ifndef NDEBUG
             auto now = std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
+#else
+            return std::chrono::milliseconds{0};
+#endif
         }
 
         std::optional<Result<T, E>> safe_get_result() const noexcept {
@@ -253,18 +263,24 @@ struct Task<void> {
         // 增强版生命周期管理 - 与Task<T>保持一致
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+#ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
+#endif
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {
-            // 记录任务创建
+        promise_type()
+#ifndef NDEBUG
+            : creation_time_(std::chrono::steady_clock::now())
+#endif
+        {
+#ifndef NDEBUG
             PerformanceMonitor::get_instance().on_task_created();
+#endif
         }
 
         // 析构时标记销毁
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
-            
-            // 记录任务状态
+#ifndef NDEBUG
             if (has_error) {
                 PerformanceMonitor::get_instance().on_task_failed();
             } else if (is_cancelled()) {
@@ -272,6 +288,7 @@ struct Task<void> {
             } else {
                 PerformanceMonitor::get_instance().on_task_completed();
             }
+#endif
         }
 
         Task get_return_object() {
@@ -329,8 +346,12 @@ struct Task<void> {
         }
 
         std::chrono::milliseconds get_lifetime() const {
+#ifndef NDEBUG
             auto now = std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
+#else
+            return std::chrono::milliseconds{0};
+#endif
         }
 
         // 快速获取错误状态 - 去除锁
@@ -590,15 +611,23 @@ struct Task<std::unique_ptr<T>> {
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+#ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
+#endif
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {
+        promise_type()
+#ifndef NDEBUG
+            : creation_time_(std::chrono::steady_clock::now())
+#endif
+        {
+#ifndef NDEBUG
             PerformanceMonitor::get_instance().on_task_created();
+#endif
         }
 
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
-            
+#ifndef NDEBUG
             if (has_error) {
                 PerformanceMonitor::get_instance().on_task_failed();
             } else if (is_cancelled()) {
@@ -606,6 +635,7 @@ struct Task<std::unique_ptr<T>> {
             } else if (value != nullptr) {
                 PerformanceMonitor::get_instance().on_task_completed();
             }
+#endif
         }
 
         Task get_return_object() {
@@ -660,8 +690,12 @@ struct Task<std::unique_ptr<T>> {
         }
 
         std::chrono::milliseconds get_lifetime() const {
+#ifndef NDEBUG
             auto now = std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
+#else
+            return std::chrono::milliseconds{0};
+#endif
         }
 
         std::unique_ptr<T> safe_get_value() noexcept {

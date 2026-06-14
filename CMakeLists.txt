@@ -12,10 +12,31 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 编译选项 - 优化版本
+# 编译选项
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -mtune=native -flto=auto -ffast-math -funroll-loops")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG -march=native")
+
+# Release: 全力优化，不保留帧指针（让寄存器分配器自由使用 rbp）
+set(CMAKE_CXX_FLAGS_RELEASE
+    "-O3 -DNDEBUG -march=native -mtune=native -flto=auto -ffast-math -funroll-loops -fno-plt -fomit-frame-pointer"
+    CACHE STRING "Release build flags" FORCE)
+
+# RelWithDebInfo: 保留调试信息，适合 valgrind/callgrind
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+    "-O2 -g -DNDEBUG -march=native -mtune=native -fno-omit-frame-pointer"
+    CACHE STRING "RelWithDebInfo build flags" FORCE)
+
+# Profiling: 专用性能分析构建（Release 级别 + 帧指针 + 行号 + 关闭内联以便 perf/callgrind 看到真实调用栈）
+set(CMAKE_CXX_FLAGS_PROFILING
+    "-O2 -g -DNDEBUG -march=native -mtune=native -fno-omit-frame-pointer -fno-inline-functions-called-once"
+    CACHE STRING "Profiling build flags" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_PROFILING "-fno-omit-frame-pointer"
+    CACHE STRING "Profiling linker flags" FORCE)
+
+# LTO 链接器参数（Release/Profiling 时由 -flto=auto 驱动，链接器也需要同步）
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE    "-flto=auto -Wl,-O1 -Wl,--as-needed"
+    CACHE STRING "Release linker flags" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-flto=auto -Wl,-O1 -Wl,--as-needed"
+    CACHE STRING "Release shared linker flags" FORCE)
 
 # PGO (Profile-Guided Optimization) 自动支持
 option(FLOWCORO_ENABLE_PGO "Enable Profile-Guided Optimization" ON)
@@ -54,6 +75,9 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
+# 让 cmake-gui / ccmake 显示可选列表
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+    "Debug" "Release" "RelWithDebInfo" "Profiling" "MinSizeRel")
 
 # 项目选项
 option(FLOWCORO_BUILD_TESTS "Build tests" ON)
@@ -63,6 +87,11 @@ option(FLOWCORO_BUILD_DOCS "Build documentation" OFF)
 option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers" OFF)
 option(FLOWCORO_BUILD_V3 "Build FlowCoro 3.0 architecture" ON)
 option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
+
+# 线程池大小（0 = 运行时自动检测 hardware_concurrency）
+# 对于混合架构 CPU（如 Alder Lake），可手动设为物理 P-core 数量（通常 = 逻辑核数 / 2）
+set(FLOWCORO_THREAD_POOL_SIZE 0 CACHE STRING
+    "Default thread pool size (0=auto, recommend P-core count for hybrid CPUs)")
 
 # 查找依赖
 find_package(Threads REQUIRED)
@@ -209,22 +238,29 @@ target_compile_options(flowcoro_net PUBLIC
 )
 
 # 编译器特定选项
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+# 注意：-fno-omit-frame-pointer 仅在非 Release 构建时启用
+# Release 模式下让 -O3 + -fomit-frame-pointer 释放 rbp 寄存器
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(flowcoro INTERFACE
         -Wall -Wextra -Wpedantic
         -Wno-unused-parameter
-        -fno-omit-frame-pointer
-    )
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(flowcoro INTERFACE
-        -Wall -Wextra -Wpedantic
-        -Wno-unused-parameter
-        -fno-omit-frame-pointer
+        # Release 以外的构建保留帧指针，方便调试/profiling
+        $<$<NOT:$<CONFIG:Release>>:-fno-omit-frame-pointer>
     )
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_compile_options(flowcoro INTERFACE
         /W4 /permissive-
     )
+endif()
+
+# 将线程池大小编译进库（若非 0）
+if(FLOWCORO_THREAD_POOL_SIZE GREATER 0)
+    target_compile_definitions(flowcoro_net PUBLIC
+        FLOWCORO_THREAD_POOL_SIZE=${FLOWCORO_THREAD_POOL_SIZE}
+    )
+    message(STATUS "FlowCoro: fixed thread pool size = ${FLOWCORO_THREAD_POOL_SIZE}")
+else()
+    message(STATUS "FlowCoro: thread pool size = auto (hardware_concurrency)")
 endif()
 
 # Sanitizers支持

@@ -524,7 +524,7 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
                 continue; // 边沿触发下继续写
             }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                break; // 暂时不可写
+                break; // 内核发送缓冲区已满，等待下次可写事件触发后继续
             }
             // 错误
             write_promise.set_exception(

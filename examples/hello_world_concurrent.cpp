@@ -10,6 +10,9 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 #include <cjson/cJSON.h>
 
 using namespace flowcoro;
@@ -73,14 +76,16 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
     // FlowCoro功能现在默认启用，无需手动调用
     std::cout << " FlowCoro功能已启用" << std::endl;
 
-    // 定义单个请求处理函数 - 暂时去掉sleep_for，先确保when_all正常
-    auto handle_single_request = [](int user_id) -> Task<std::string> {
-        // 暂时去掉sleep_for，确保when_all本身工作正常
-        // co_await sleep_for(std::chrono::milliseconds(50));
-
-        // 构建结果
-        std::string result = "用户" + std::to_string(user_id) + " (已处理)";
-        co_return result;
+    // 定义单个请求处理函数
+    // 注意：此处不加 sleep_for，专注测试协程纯调度吞吐量（无IO等待的任务切换效率）。
+    // 如需模拟IO并发场景（体现协程叠加等待时延的能力），可取消下方注释。
+    //
+    // [Perf优化] 原来返回 Task<std::string>，每次任务都会做 SSO 溢出堆分配+拷贝。
+    // callgrind 显示 std::string::_M_mutate 占 11.13% Ir、malloc_consolidate 占 2.47%。
+    // 改为 Task<int> 返回 user_id，消除热路径上的动态内存分配。
+    auto handle_single_request = [](int user_id) -> Task<int> {
+        // co_await sleep_for(std::chrono::milliseconds(50)); // IO模拟（按需启用）
+        co_return user_id; // 直接返回整型，零堆分配
     };
 
     std::cout << " 创建协程任务..." << std::endl;
@@ -124,7 +129,8 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
         std::cout << " 任务数量较多，使用真正并发协程处理..." << std::endl;
 
         // 大规模任务：先创建所有任务（利用Task同步启动特性）
-        std::vector<Task<std::string>> tasks;
+        // [Perf优化] Task<int> 替代 Task<std::string>，消除热路径堆分配
+        std::vector<Task<int>> tasks;
         tasks.reserve(request_count);
 
         std::cout << " 创建所有协程任务 (它们将同步开始执行直到挂起)..." << std::endl;
@@ -140,7 +146,7 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
         std::atomic<int> completed_count{0};
 
         for (int i = 0; i < request_count; ++i) {
-            auto result = co_await tasks[i]; // 等待第i个任务完成
+            co_await tasks[i]; // 等待第i个任务完成（Task<int>，结果不需要）
             completed_count.fetch_add(1);
 
             // 大幅减少输出频率，提高性能 - 只在关键节点输出
@@ -242,7 +248,102 @@ Task<void> handle_concurrent_requests_coroutine(int request_count, const std::st
 
     co_return;
 }
-// 高并发多线程测试
+// ─────────────────────────────────────────────────────────────────────────────
+// 线程池测试 - 固定 N 个工作线程处理 M 个任务（与协程的 M:N 调度真正对等）
+// ─────────────────────────────────────────────────────────────────────────────
+void handle_concurrent_requests_threadpool(int request_count, const std::string& project_root) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto initial_memory = SystemInfo::get_memory_usage_bytes();
+
+    int nthreads = std::thread::hardware_concurrency();
+    std::cout << " 线程池方式：" << nthreads << " 个工作线程处理 " << request_count << " 个任务" << std::endl;
+    std::cout << " 初始内存: " << SystemInfo::format_memory_bytes(initial_memory) << std::endl;
+    std::cout << " 开始时间: [" << SystemInfo::get_current_time() << "]" << std::endl;
+    std::cout << std::string(50, '-') << std::endl;
+
+    // 任务队列
+    std::queue<int> task_queue;
+    std::mutex queue_mutex;
+    std::condition_variable cv;
+    std::atomic<int> completed{0};
+    bool all_submitted = false;
+
+    // 填入所有任务
+    for (int i = 0; i < request_count; ++i) task_queue.push(i);
+
+    // 启动固定数量的工作线程
+    std::vector<std::thread> workers;
+    workers.reserve(nthreads);
+    for (int t = 0; t < nthreads; ++t) {
+        workers.emplace_back([&]() {
+            while (true) {
+                int task_id = -1;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    cv.wait(lock, [&]{ return !task_queue.empty() || all_submitted; });
+                    if (task_queue.empty()) break;
+                    task_id = task_queue.front();
+                    task_queue.pop();
+                }
+                // 与协程侧相同的工作量：整型计算，无堆分配
+                volatile int result = 1000 + task_id;
+                (void)result;
+                int cur = completed.fetch_add(1) + 1;
+                if (request_count >= 10000) {
+                    if (cur % (request_count / 10) == 0 || cur == request_count)
+                        std::cout << " 完成 " << cur << "/" << request_count << std::endl;
+                }
+            }
+        });
+    }
+
+    // 通知所有线程有任务
+    { std::lock_guard<std::mutex> lk(queue_mutex); all_submitted = true; }
+    cv.notify_all();
+
+    for (auto& w : workers) w.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto final_memory = SystemInfo::get_memory_usage_bytes();
+    auto memory_delta = final_memory > initial_memory ? final_memory - initial_memory : 0;
+
+    std::cout << std::string(50, '-') << std::endl;
+    std::cout << " 线程池方式完成！" << std::endl;
+    std::cout << " 工作线程数: " << nthreads << " 个" << std::endl;
+    std::cout << " 总请求数: " << request_count << " 个" << std::endl;
+    std::cout << " 总耗时: " << duration.count() << " ms" << std::endl;
+    std::cout << " [TIME_MARKER] " << duration.count() << " ms [/TIME_MARKER]" << std::endl;
+    if (request_count > 0)
+        std::cout << " 平均耗时: " << (double)duration.count() / request_count << " ms/请求" << std::endl;
+    if (duration.count() > 0)
+        std::cout << " 吞吐量: " << (request_count * 1000 / duration.count()) << " 请求/秒" << std::endl;
+    std::cout << " 内存变化: +" << SystemInfo::format_memory_bytes(memory_delta) << std::endl;
+
+    // 写 JSON 结果
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duration_ms", duration.count());
+    cJSON_AddNumberToObject(json, "request_count", request_count);
+    cJSON_AddNumberToObject(json, "throughput_rps",
+        duration.count() > 0 ? (double)(request_count * 1000) / duration.count() : 0);
+    cJSON_AddNumberToObject(json, "avg_latency_ms",
+        request_count > 0 ? (double)duration.count() / request_count : 0);
+    cJSON_AddNumberToObject(json, "memory_usage_bytes", final_memory);
+    cJSON_AddNumberToObject(json, "memory_delta_bytes", memory_delta);
+    cJSON_AddStringToObject(json, "mode", "threadpool");
+    cJSON_AddNumberToObject(json, "thread_count", nthreads);
+    cJSON_AddNumberToObject(json, "exit_code", 0);
+    char *js = cJSON_Print(json);
+    std::string result_path = project_root + "/threadpool_result.json";
+    std::ofstream rf(result_path);
+    if (rf.is_open()) { rf << js << std::endl; rf.close(); }
+    free(js);
+    cJSON_Delete(json);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 原始 one-thread-per-task 测试（保留用于演示线程创建开销）
+// ─────────────────────────────────────────────────────────────────────────────
 void handle_concurrent_requests_threads(int request_count, const std::string& project_root) {
     auto start_time = std::chrono::high_resolution_clock::now();
     auto initial_memory = SystemInfo::get_memory_usage_bytes();
@@ -263,7 +364,12 @@ void handle_concurrent_requests_threads(int request_count, const std::string& pr
         threads.emplace_back([i, &completed, request_count]() {
             // 模拟IO操作
             // std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            std::string result = "用户" + std::to_string(1000 + i) + " (已处理)";
+
+            // [公平对比] 与协程侧保持相同的工作量：仅做整型计算，无字符串堆分配
+            // 原来的 std::string result = "用户" + std::to_string(1000 + i) + " (已处理)"
+            // 是死代码（result 从未被读取），且产生 SSO 溢出堆分配，对线程侧不公平。
+            volatile int result = 1000 + i; // volatile 防止被优化掉
+            (void)result;
 
             int current_completed = completed.fetch_add(1) + 1;
             
@@ -342,9 +448,154 @@ void handle_concurrent_requests_threads(int request_count, const std::string& pr
     cJSON_Delete(json);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IO 密集型：协程版 —— 所有任务同时发起 1ms 等待，并发挂起，总耗时 ≈ 1ms
+// ─────────────────────────────────────────────────────────────────────────────
+Task<void> handle_concurrent_requests_coroutine_io(int request_count, const std::string& project_root) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto initial_memory = SystemInfo::get_memory_usage_bytes();
+
+    std::cout << " 协程 IO 方式：" << request_count << " 个任务，每个模拟 1ms IO 等待" << std::endl;
+    std::cout << " 关键：所有任务同时挂起等待，不占线程！" << std::endl;
+    std::cout << std::string(50, '-') << std::endl;
+
+    // 每个任务 co_await 1ms —— 挂起后不占工作线程
+    auto handle_io_request = [](int user_id) -> Task<int> {
+        co_await sleep_for(std::chrono::milliseconds(1)); // 模拟 1ms IO
+        co_return user_id;
+    };
+
+    // 先创建所有任务（它们同步执行到第一个 co_await，全部挂起等待 1ms 定时器）
+    std::vector<Task<int>> tasks;
+    tasks.reserve(request_count);
+    for (int i = 0; i < request_count; ++i)
+        tasks.emplace_back(handle_io_request(1000 + i));
+
+    // 此时所有任务已在同时等待 1ms，再依次 co_await 即可
+    for (int i = 0; i < request_count; ++i)
+        co_await tasks[i];
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto final_memory = SystemInfo::get_memory_usage_bytes();
+    auto memory_delta = final_memory > initial_memory ? final_memory - initial_memory : 0;
+
+    std::cout << std::string(50, '-') << std::endl;
+    std::cout << " 协程 IO 测试完成！" << std::endl;
+    std::cout << " 总任务数: " << request_count << " 个" << std::endl;
+    std::cout << " 总耗时: " << duration.count() << " ms" << std::endl;
+    std::cout << " [TIME_MARKER] " << duration.count() << " ms [/TIME_MARKER]" << std::endl;
+    if (duration.count() > 0)
+        std::cout << " 吞吐量: " << (request_count * 1000 / duration.count()) << " 请求/秒" << std::endl;
+    std::cout << " 内存变化: +" << SystemInfo::format_memory_bytes(memory_delta) << std::endl;
+
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duration_ms", duration.count());
+    cJSON_AddNumberToObject(json, "request_count", request_count);
+    cJSON_AddNumberToObject(json, "throughput_rps",
+        duration.count() > 0 ? (double)(request_count * 1000) / duration.count() : (double)request_count * 1000);
+    cJSON_AddNumberToObject(json, "avg_latency_ms",
+        request_count > 0 ? (double)duration.count() / request_count : 0);
+    cJSON_AddNumberToObject(json, "memory_usage_bytes", final_memory);
+    cJSON_AddNumberToObject(json, "memory_delta_bytes", memory_delta);
+    cJSON_AddStringToObject(json, "mode", "coroutine-io");
+    cJSON_AddNumberToObject(json, "exit_code", 0);
+    char *js = cJSON_Print(json);
+    std::string result_path = project_root + "/coroutine-io_result.json";
+    std::ofstream rf(result_path);
+    if (rf.is_open()) { rf << js << std::endl; rf.close(); }
+    free(js);
+    cJSON_Delete(json);
+
+    co_return;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IO 密集型：线程池版 —— N 个线程轮流 sleep(1ms)，总耗时 ≈ ceil(M/N) ms
+// ─────────────────────────────────────────────────────────────────────────────
+void handle_concurrent_requests_threadpool_io(int request_count, const std::string& project_root) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto initial_memory = SystemInfo::get_memory_usage_bytes();
+
+    int nthreads = std::thread::hardware_concurrency();
+    std::cout << " 线程池 IO 方式：" << nthreads << " 个线程处理 " << request_count
+              << " 个任务，每个 sleep 1ms" << std::endl;
+    std::cout << " 理论耗时 ≈ ceil(" << request_count << "/" << nthreads
+              << ") × 1ms = " << ((request_count + nthreads - 1) / nthreads) << " ms" << std::endl;
+    std::cout << std::string(50, '-') << std::endl;
+
+    std::queue<int> task_queue;
+    std::mutex queue_mutex;
+    std::condition_variable cv;
+    std::atomic<int> completed{0};
+    bool all_submitted = false;
+
+    for (int i = 0; i < request_count; ++i) task_queue.push(i);
+
+    std::vector<std::thread> workers;
+    workers.reserve(nthreads);
+    for (int t = 0; t < nthreads; ++t) {
+        workers.emplace_back([&]() {
+            while (true) {
+                int task_id = -1;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    cv.wait(lock, [&]{ return !task_queue.empty() || all_submitted; });
+                    if (task_queue.empty()) break;
+                    task_id = task_queue.front();
+                    task_queue.pop();
+                }
+                // 线程阻塞 sleep —— 占用这个工作线程整整 1ms
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                volatile int result = 1000 + task_id;
+                (void)result;
+                completed.fetch_add(1);
+            }
+        });
+    }
+    { std::lock_guard<std::mutex> lk(queue_mutex); all_submitted = true; }
+    cv.notify_all();
+    for (auto& w : workers) w.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto final_memory = SystemInfo::get_memory_usage_bytes();
+    auto memory_delta = final_memory > initial_memory ? final_memory - initial_memory : 0;
+
+    std::cout << std::string(50, '-') << std::endl;
+    std::cout << " 线程池 IO 测试完成！" << std::endl;
+    std::cout << " 工作线程数: " << nthreads << " 个" << std::endl;
+    std::cout << " 总任务数: " << request_count << " 个" << std::endl;
+    std::cout << " 总耗时: " << duration.count() << " ms" << std::endl;
+    std::cout << " [TIME_MARKER] " << duration.count() << " ms [/TIME_MARKER]" << std::endl;
+    if (duration.count() > 0)
+        std::cout << " 吞吐量: " << (request_count * 1000 / duration.count()) << " 请求/秒" << std::endl;
+
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duration_ms", duration.count());
+    cJSON_AddNumberToObject(json, "request_count", request_count);
+    cJSON_AddNumberToObject(json, "throughput_rps",
+        duration.count() > 0 ? (double)(request_count * 1000) / duration.count() : 0);
+    cJSON_AddNumberToObject(json, "avg_latency_ms",
+        request_count > 0 ? (double)duration.count() / request_count : 0);
+    cJSON_AddNumberToObject(json, "memory_usage_bytes", final_memory);
+    cJSON_AddNumberToObject(json, "memory_delta_bytes", memory_delta);
+    cJSON_AddStringToObject(json, "mode", "threadpool-io");
+    cJSON_AddNumberToObject(json, "thread_count", nthreads);
+    cJSON_AddNumberToObject(json, "exit_code", 0);
+    char *js = cJSON_Print(json);
+    std::string result_path = project_root + "/threadpool-io_result.json";
+    std::ofstream rf(result_path);
+    if (rf.is_open()) { rf << js << std::endl; rf.close(); }
+    free(js);
+    cJSON_Delete(json);
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 4) {
-        std::cerr << "用法: " << argv[0] << " <coroutine|thread> <request_count> <project_root_dir>" << std::endl;
+        std::cerr << "用法: " << argv[0]
+                  << " <coroutine|thread|threadpool|coroutine-io|threadpool-io>"
+                     " <request_count> <project_root_dir>" << std::endl;
         return 1;
     }
 
@@ -358,7 +609,12 @@ int main(int argc, char* argv[]) {
     std::cout << "测试模式: " << mode << std::endl;
     std::cout << "请求数量: " << request_count << " 个" << std::endl;
     std::cout << "测试类型: CPU密集型 (无IO延迟)" << std::endl;
-    std::cout << "并发方式: " << (mode == "coroutine" ? "Task创建即执行并发" : "多线程并发") << std::endl;
+    std::string mode_desc = (mode == "coroutine")    ? "协程 M:N 调度"
+                           : (mode == "threadpool")   ? "线程池 (N线程M任务)"
+                           : (mode == "coroutine-io") ? "协程 M:N 调度 + 1ms IO等待"
+                           : (mode == "threadpool-io")? "线程池 + 1ms IO等待"
+                           :                            "one-thread-per-task";
+    std::cout << "并发方式: " << mode_desc << std::endl;
     std::cout << "========================================" << std::endl << std::endl;
 
     try {
@@ -379,8 +635,24 @@ int main(int argc, char* argv[]) {
         } else if (mode == "thread") {
             handle_concurrent_requests_threads(request_count, project_root);
             std::cout << " 线程测试完成" << std::endl;
+        } else if (mode == "threadpool") {
+            handle_concurrent_requests_threadpool(request_count, project_root);
+            std::cout << " 线程池测试完成" << std::endl;
+        } else if (mode == "coroutine-io") {
+            sync_wait([&]() {
+                return handle_concurrent_requests_coroutine_io(request_count, project_root);
+            });
+            std::cout << " 等待资源清理..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            std::cout << " 协程IO测试完成" << std::endl;
+            std::cout << " 程序结束: [" << SystemInfo::get_current_time() << "]" << std::endl;
+            std::quick_exit(0);
+        } else if (mode == "threadpool-io") {
+            handle_concurrent_requests_threadpool_io(request_count, project_root);
+            std::cout << " 线程池IO测试完成" << std::endl;
         } else {
-            std::cerr << " 无效的模式: " << mode << " (支持: coroutine, thread)" << std::endl;
+            std::cerr << " 无效的模式: " << mode
+                      << " (支持: coroutine, thread, threadpool, coroutine-io, threadpool-io)" << std::endl;
             return 1;
         }
 

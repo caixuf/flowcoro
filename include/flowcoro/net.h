@@ -2,8 +2,8 @@
  * @file net.h
  * @brief FlowCoro 网络IO层 - 异步网络编程支持
  * @author FlowCoro Team
- * @version 2.1.0
- * @date 2025-07-10
+ * @version 4.0.0
+ * @date 2026-06-14
  *
  * 提供基于epoll/kqueue的高性能异步网络IO能力:
  * - 事件驱动的异步IO

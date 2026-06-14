@@ -29,18 +29,29 @@ struct Task {
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+#ifndef NDEBUG
+        // [Perf优化] creation_time_ 仅用于诊断（get_lifetime），Release 下关掉
+        // callgrind: steady_clock::now() 每个 Task 构造都触发，2000 任务就是 2000 次 vDSO 调用
         std::chrono::steady_clock::time_point creation_time_;
+#endif
 
-        promise_type() : creation_time_(std::chrono::steady_clock::now()) {
-            // 记录任务创建
+        promise_type()
+#ifndef NDEBUG
+            : creation_time_(std::chrono::steady_clock::now())
+#endif
+        {
+#ifndef NDEBUG
+            // [Perf优化] PerformanceMonitor::get_instance() 是 static local singleton，
+            // 每次构造/析构都访问，在热路径上产生不必要的原子读。Release 下禁用。
             PerformanceMonitor::get_instance().on_task_created();
+#endif
         }
 
         // 析构时标记销毁
         ~promise_type() {
             is_destroyed_.store(true, std::memory_order_release);
-            
-            // 记录任务状态
+#ifndef NDEBUG
+            // 记录任务状态（仅 Debug/RelWithDebInfo 构建时启用）
             if (has_error.load(std::memory_order_acquire)) {
                 PerformanceMonitor::get_instance().on_task_failed();
             } else if (is_cancelled()) {
@@ -48,6 +59,7 @@ struct Task {
             } else if (value.has_value()) {
                 PerformanceMonitor::get_instance().on_task_completed();
             }
+#endif
         }
 
         Task get_return_object() {
@@ -108,8 +120,12 @@ struct Task {
         }
 
         std::chrono::milliseconds get_lifetime() const {
+#ifndef NDEBUG
             auto now = std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(now - creation_time_);
+#else
+            return std::chrono::milliseconds{0};
+#endif
         }
 
         // 快速获取值 - 去除锁，使用原子读取
