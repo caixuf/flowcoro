@@ -121,11 +121,13 @@ public:
         {
             return;
         }
-        timer_thread_stop_.store(true, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lock(timer_thread_mutex_);
-            timer_thread_cv_.notify_all();
+            // 必须使用与定时器线程 wait 调用相同的互斥量 (timer_mutex_)，
+            // 才能保证 notify_all 不会在设置 stop 标志与线程进入等待之间丢失。
+            std::lock_guard<std::mutex> lock(timer_mutex_);
+            timer_thread_stop_.store(true, std::memory_order_release);
         }
+        timer_thread_cv_.notify_all();
         if (dedicated_timer_thread_->joinable())
         {
             dedicated_timer_thread_->join();
@@ -316,9 +318,8 @@ private:
     // 专用定时器线程
     std::unique_ptr<std::thread> dedicated_timer_thread_;
     std::atomic<bool> timer_thread_stop_{false};        
-    // 定时器线程专用的条件变量（独立于现有的timer_mutex_）
+    // 专用定时器线程的条件变量（与 timer_mutex_ 配合使用）
     std::condition_variable timer_thread_cv_;    
-    mutable std::mutex timer_thread_mutex_;        
     // 定时器ID生成器
     std::atomic<uint64_t> timer_id_generator_{1};
 };
