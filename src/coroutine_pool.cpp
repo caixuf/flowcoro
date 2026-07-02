@@ -126,7 +126,7 @@ private:
             
             // 重置等待策略
             empty_iterations = 0;
-            wait_duration = std::chrono::microseconds(10);
+            wait_duration = std::chrono::nanoseconds(100);
             
             // 批量执行协程 - 添加适当的异常处理
             for (auto handle : batch) {
