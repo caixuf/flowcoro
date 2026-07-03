@@ -43,6 +43,7 @@
 #include "flowcoro/dds.h"
 #include "flowcoro/yield.h"
 #include "flowcoro/task_allocator.h"
+#include "flowcoro/coroutine_task.h"
 
 /**
  * @namespace flowcoro
