@@ -40,6 +40,7 @@
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 #include "flowcoro/channel.h"
+#include "flowcoro/dds.h"
 #include "flowcoro/yield.h"
 #include "flowcoro/task_allocator.h"
 
