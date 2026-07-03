@@ -49,6 +49,9 @@ add_executable(test_exception_propagation test_exception_propagation.cpp)
 # 网络模块专业测试套件
 add_executable(test_network_professional test_network_professional.cpp)
 
+# BusAwaitable集成层测试（覆盖Bug 1/2/3修复）
+add_executable(test_bus_awaitable test_bus_awaitable.cpp)
+
 # 链接库
 target_link_libraries(test_core
     flowcoro_net
@@ -103,6 +106,12 @@ target_link_libraries(test_network_professional
     Threads::Threads
 )
 
+# BusAwaitable测试链接库
+target_link_libraries(test_bus_awaitable
+    flowcoro_net
+    Threads::Threads
+)
+
 # 添加测试
 add_test(NAME test_core COMMAND test_core)
 add_test(NAME test_new_features COMMAND test_new_features)
@@ -114,6 +123,7 @@ add_test(NAME test_when_any COMMAND test_when_any)
 add_test(NAME test_sleep_for COMMAND test_sleep_for)
 add_test(NAME test_exception_propagation COMMAND test_exception_propagation)
 add_test(NAME test_network_professional COMMAND test_network_professional)
+add_test(NAME test_bus_awaitable      COMMAND test_bus_awaitable)
 
 # 设置测试属性
 set_tests_properties(test_core PROPERTIES
@@ -166,8 +176,13 @@ set_tests_properties(test_network_professional PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_bus_awaitable PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_network_professional PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_network_professional test_bus_awaitable PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 
