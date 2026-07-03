@@ -49,4 +49,7 @@ target_link_libraries(chat_server PRIVATE flowcoro_net)
 # 聊天客户端 - 连接指南
 add_executable(chat_client chat_client.cpp)
 
+# 自动驾驶中间件场景演示 (DDS Pub/Sub + RPC 超时降级)
+add_subdirectory(autonomous_driving)
+
 message(STATUS "FlowCoro examples configured successfully")
