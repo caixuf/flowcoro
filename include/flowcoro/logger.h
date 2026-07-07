@@ -331,8 +331,8 @@ private:
 // 全局日志器实例
 class GlobalLogger {
 private:
-    static std::unique_ptr<Logger> instance_;
-    static std::once_flag init_flag_;
+    inline static std::unique_ptr<Logger> instance_;
+    inline static std::once_flag init_flag_;
 
 public:
     static Logger& get() {
