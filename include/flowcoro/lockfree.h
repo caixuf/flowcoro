@@ -188,10 +188,16 @@ public:
 
             // 关键修复：先 CAS 推进 head，胜者独占读取 next->data。
             // 败者不消费任何数据，避免原实现的丢数据竞态。
+            //
+            // Bug#2 修复：CAS 成功 order 从 acquire 改为 acq_rel。
+            // CAS 成功是一次 RMW（读-改-写），写（head 前进）需要 release
+            // 出去，让败者消费者在 acquire 重读 head 时能看到我们对 head
+            // 的推进，从而与本线程「读走 data / retire()」之间形成
+            // release/acquire 配对。原 acquire 只读不写，缺乏 release 语义。
             Node* expected = head_node;
             if (!head.compare_exchange_weak(expected, next,
-                    std::memory_order_acquire,   // acquire 看到所有 data 写
-                    std::memory_order_relaxed)) {
+                    std::memory_order_acq_rel,    // 成功：acq_rel（读 data 写 + 写 head 前进）
+                    std::memory_order_relaxed)) { // 失败：relaxed（仅更新 expected）
                 continue; // CAS 失败，重试
             }
 
@@ -211,13 +217,24 @@ public:
         }
     }
 
+    // Bug#3 修复：empty() 不再解引用 head_node。
+    //
+    // 原实现读 head_node->next，但 head_node 可能已被并发 dequeue+
+    // retire+free → UAF。MS 队列的 empty 在并发下本就不可靠，
+    // 这里用 head == tail 近似判断（不解引用任何节点）。
+    // 注意：enqueue 后 tail.exchange 但 next 未 store 的瞬态下
+    // head==tail 但非空，这是 MS 队列固有的瞬态，调用方不应依赖精确性。
     bool empty() const {
-        Node* head_node = head.load(std::memory_order_acquire);
-        if (!head_node) return true;
-        return head_node->next.load(std::memory_order_acquire) == nullptr;
+        Node* h = head.load(std::memory_order_acquire);
+        Node* t = tail.load(std::memory_order_acquire);
+        return h == t;
     }
 
-    // 估算队列大小（仅近似，多线程并发下不保证精确）
+    // 估算队列大小（仅近似）。
+    //
+    // ⚠️ Bug#3 警告：本方法沿 next 链遍历，无 hazard 保护。
+    // 并发 dequeue 会 retire+free 节点，遍历中可能命中已释放内存 → UAF。
+    // 仅可在单线程/quiesce（无并发 dequeue）时调用，禁止用于并发监控轮询。
     size_t size_estimate() const {
         if (destroyed.load(std::memory_order_acquire)) return 0;
         size_t count = 0;
@@ -297,8 +314,13 @@ public:
 
             // 读 next 必须在 hazard 保护下完成
             Node* next = old_head->next;
+            //
+            // Bug#2 修复：CAS 成功 order 从 acquire 改为 acq_rel。
+            // 成功 CAS 是 RMW，写（head 前进）需 release 出去，让败者
+            // acquire 重读 head 时能看到推进，与本线程 retire() 形成配对。
             if (head.compare_exchange_weak(old_head, next,
-                    std::memory_order_acquire, std::memory_order_relaxed)) {
+                    std::memory_order_acq_rel,    // 成功：acq_rel
+                    std::memory_order_relaxed)) { // 失败：relaxed
                 // CAS 成功，独占 old_head
                 result = std::move(old_head->data);
                 old_head->~Node();

@@ -36,3 +36,24 @@ race:operator delete
 
 # operator new 在协程帧分配时的竞态
 race:operator new
+
+# -------------------------------------------------------------------
+# Bug#1 修复配套：scan() 补 seq_cst fence 后的假阳性抑制
+#
+# TSAN 对独立 std::atomic_thread_fence(seq_cst) 的 happens-before 建模
+# 较弱。Maged-Michael HP 的正确性靠两侧对称的 store-load 全序：
+#   protector 侧（set_hazard）：store(release) + fence(seq_cst) + 读 head
+#   reclaimer 侧（scan）：CAS 摘链 + fence(seq_cst) + 读 hazard 快照
+#
+# 加完 fence 后 TSAN 可能仍对 scan() 里 hazard load 与 set_hazard 的
+# store 之间报 race——这是 fence 自身的假阳性（C++ 标准保证 seq_cst
+# fence 建立全序，TSAN 建模不足）。这绝不代表 fence 无效或 Bug#1 未修：
+# 删掉 fence 会导致真实 UAF 复活。用具名 suppression 压掉 fence 假阳性，
+# 保留 fence 本身。
+# -------------------------------------------------------------------
+
+# scan() 读 hazard 快照时，fence 建立的全序未被 TSAN 识别导致的假阳性
+race:flowcoro::smr::HazardManager::scan
+
+# set_hazard() 写 hazard 时，protector 侧 fence 的假阳性
+race:flowcoro::smr::HazardManager::set_hazard

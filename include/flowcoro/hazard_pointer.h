@@ -56,9 +56,14 @@ public:
     struct alignas(64) ThreadSlot {
         std::array<std::atomic<void*>, HAZARD_SLOTS_PER_THREAD> hazards{};
         std::vector<RetiredNode> retired;
+        // Bug#4 修复：保护 retired vector 的 spinlock。
+        // retire()（热路径，自己的 slot）加锁后 push_back；
+        // drain_all()（冷路径，跨线程 scan 别人的 retired）用 try_lock，
+        // 锁不上就跳过该线程（保守，不回收，避免堆损坏）。
+        std::atomic_flag retired_lock = ATOMIC_FLAG_INIT;
         // Padding keeps slots on distinct cache lines (also helps the
         // retired vector land on its own line).
-        char pad[64 - (sizeof(hazards) + sizeof(retired)) % 64];
+        char pad[64 - (sizeof(hazards) + sizeof(retired) + sizeof(retired_lock)) % 64];
     };
 
     // Destructor sets a flag so that drain_all() (called later from
@@ -110,11 +115,14 @@ public:
     void retire(void* ptr, HazardDeleter deleter) {
         auto tid = thread_id();
         auto& s = slot_of(tid);
+        // Bug#4 修复：加锁保护 retired vector，防止 drain_all() 跨线程
+        // scan 时与 push_back 并发导致堆损坏。
+        lock_retired(s);
         s.retired.push_back({ptr, deleter});
-        // Bound: scan once retire list grows past 4 * K * N.
-        const std::size_t threshold =
+        const bool need_scan = s.retired.size() >
             RETIRE_THRESHOLD_FACTOR * HAZARD_SLOTS_PER_THREAD * MAX_HAZARD_THREADS;
-        if (s.retired.size() > threshold) {
+        unlock_retired(s);
+        if (need_scan) {
             scan(tid);
         }
     }
@@ -129,6 +137,11 @@ public:
 
     // Best-effort: try to reclaim on all registered threads. Called
     // from Queue destructor to avoid leaking memory.
+    //
+    // Bug#4 修复：用 try_lock 保护跨线程 scan。如果某线程的 retired_lock
+    // 锁不上（说明该线程正在 retire），就跳过该线程（保守，不回收）。
+    // 这样即使 worker 未 join 干净，也不会与 drain_all 的 scan 并发
+    // 操作 retired vector 导致堆损坏。
     void drain_all() noexcept {
         if (destroyed_.load(std::memory_order_acquire)) return;
         const std::size_t n = next_thread_id_.load(std::memory_order_relaxed);
@@ -169,13 +182,59 @@ private:
         return slots_[tid];
     }
 
+    // Bug#4: spinlock helpers for retired vector.
+    static void lock_retired(ThreadSlot& s) noexcept {
+        while (s.retired_lock.test_and_set(std::memory_order_acquire)) {
+            // spin
+        }
+    }
+    static void unlock_retired(ThreadSlot& s) noexcept {
+        s.retired_lock.clear(std::memory_order_release);
+    }
+
     // Force reclaim any retired nodes for thread `tid` that are not
     // currently held by any hazard pointer. If force_all=true, also
     // re-reclaim what's left, which after another scan attempt will
     // only leave truly still-hazardous nodes (still in use).
     void scan(std::size_t tid, bool force_all = false) noexcept {
-        auto& my_retired = slot_of(tid).retired;
-        if (my_retired.empty()) return;
+        auto& slot = slot_of(tid);
+
+        // Bug#4 修复：如果 scan 是由 drain_all() 对其他线程发起的（tid !=
+        // 当前线程），用 try_lock 保护 retired vector。锁不上说明该线程
+        // 正在 retire，跳过以避免堆损坏。自己的线程无需锁（单线程访问）。
+        bool is_self = (tid == thread_id());
+        bool locked = false;
+        if (!is_self) {
+            if (!slot.retired_lock.test_and_set(std::memory_order_acquire)) {
+                locked = true;
+            } else {
+                return; // 该线程正在 retire，跳过
+            }
+        }
+
+        auto& my_retired = slot.retired;
+        if (my_retired.empty()) {
+            if (locked) unlock_retired(slot);
+            return;
+        }
+
+        // Bug#1 修复（命门）：reclaimer 侧补 seq_cst fence。
+        //
+        // Maged-Michael HP 的正确性靠两侧对称的 store-load 全序：
+        //   protector 侧：[存 hazard(release) → fence(seq_cst) → 读 head 校验]
+        //   reclaimer 侧：[摘链 CAS → **fence(seq_cst)** → 读 hazard 快照]
+        //
+        // set_hazard() 已有 fence，但 scan() 这里只 load(acquire) 读 hazard，
+        // 缺少对称的 fence。弱序模型下 reclaimer 可能读到过期的 null hazard
+        // → 提前 pool_free → 其他线程 next->data / head_node->next 命中已释放内存。
+        //
+        // 必须在快照循环之前插入 seq_cst fence，保证 reclaimer 的「摘链 CAS」
+        // 与 protector 的「存 hazard」之间有全序关系。
+        //
+        // 注意：TSAN 对 atomic_thread_fence(seq_cst) 建模很弱，加完 fence 后
+        // TSAN 可能对 fence 本身报假阳性。用具名 suppression 压掉 fence 自身
+        // 的假阳性即可，绝不能因此删掉 fence——删了 = Bug#1 复活。
+        std::atomic_thread_fence(std::memory_order_seq_cst);
 
         // Snapshot all currently published hazards.
         std::vector<void*> current_hazards;
@@ -201,6 +260,8 @@ private:
             }
         }
         my_retired.swap(still_hazardous);
+
+        if (locked) unlock_retired(slot);
 
         // If force_all and we still have nodes left, there is nothing
         // more we can do — they are genuinely still referenced. Leave

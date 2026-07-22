@@ -163,9 +163,20 @@ public:
         return stop_.load(std::memory_order_acquire);
     }
 
-    // 新增：获取队列中任务数量的估计
+    // Bug#3 修复：estimated_queue_size() 从并发路径摘掉。
+    //
+    // 原 size_estimate() 沿 next 链遍历无 hazard 保护，并发 dequeue 会
+    // retire+free 节点 → 遍历命中已释放内存 → UAF（活的 bug）。
+    // 现标注为 quiesce-only：仅在确认无并发 dequeue 时（如线程池已停止、
+    // 所有 worker 已 join）可调。禁止用于运行时监控轮询。
+    //
+    // 返回 0 表示「并发下不可用」——调用方不应依赖此值的精确性。
     size_t estimated_queue_size() const {
-        // 注意：这只是一个估计值，无锁队列很难精确计算
+        // 并发运行时返回 0（不安全，不解引用节点）
+        if (!stop_.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        // 仅在线程池已停止（quiesce）时才遍历
         return task_queue_.size_estimate();
     }
 
@@ -174,7 +185,9 @@ public:
         std::cout << "ThreadPool Status:" << std::endl;
         std::cout << "  Active threads: " << active_thread_count() << std::endl;
         std::cout << "  Is stopped: " << (is_stopped() ? "true" : "false") << std::endl;
-        std::cout << "  Estimated queue size: " << estimated_queue_size() << std::endl;
+        // estimated_queue_size() 在运行时返回 0（quiesce-only，避免 UAF）
+        std::cout << "  Estimated queue size: " << estimated_queue_size()
+                  << (is_stopped() ? "" : " (N/A while running)") << std::endl;
     }
 
 private:
