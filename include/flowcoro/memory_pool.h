@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <type_traits>
 #include <array>
 #include <cstdlib>
 #include <cstddef>
@@ -243,6 +244,21 @@ public:
 
     void deallocate(T* ptr, size_t) noexcept {
         pool_free(ptr);
+    }
+
+    // 显式提供 construct/destroy 成员：让 allocator_traits 走 placement-new，
+    // 而非 C++20 的 std::construct_at。libc++-14 的 construct_at 对部分类型
+    // （如 std::packaged_task 从 std::bind 结果构造）匹配失败，导致
+    // allocate_shared 编译报错。placement-new 语义等价且更宽松，跨 stdlib 兼容。
+    template<typename U, typename... Args>
+    void construct(U* p, Args&&... args)
+        noexcept(std::is_nothrow_constructible_v<U, Args...>) {
+        ::new(static_cast<void*>(p)) U(std::forward<Args>(args)...);
+    }
+
+    template<typename U>
+    void destroy(U* p) noexcept(std::is_nothrow_destructible_v<U>) {
+        p->~U();
     }
 
     template<typename U>
