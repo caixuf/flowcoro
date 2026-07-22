@@ -3,6 +3,7 @@
 #include "memory_pool.h"
 #include <thread>
 #include <atomic>
+#include <iostream>
 #include <vector>
 #include <functional>
 #include <future>

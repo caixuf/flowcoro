@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.16)
 project(FlowCoro
     VERSION 4.0.0
     DESCRIPTION "Modern C++20 Coroutine Library - Streamlined Core Implementation"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # 设置C++标准
@@ -200,6 +200,7 @@ add_library(flowcoro_net STATIC
     src/net_impl.cpp
     src/globals.cpp
     src/coroutine_pool.cpp
+    src/c_api.cpp
 )
 
 target_include_directories(flowcoro_net PUBLIC

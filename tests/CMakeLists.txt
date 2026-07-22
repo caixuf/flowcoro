@@ -80,6 +80,10 @@ add_executable(test_cancellation test_cancellation.cpp)
 # with_timeout 可组合超时回归测试
 add_executable(test_timeout test_timeout.cpp)
 
+# C ABI 冒烟测试（纯 C 编译，验证 C 接口可被 C 项目直接调用）
+add_executable(test_c_api test_c_api.c)
+target_link_libraries(test_c_api flowcoro_net Threads::Threads)
+
 # 链接库
 target_link_libraries(test_core
     flowcoro_net
@@ -177,6 +181,7 @@ add_test(NAME test_lockfree_stress   COMMAND test_lockfree_stress)
 add_test(NAME test_when_any_v2       COMMAND test_when_any_v2)
 add_test(NAME test_cancellation      COMMAND test_cancellation)
 add_test(NAME test_timeout           COMMAND test_timeout)
+add_test(NAME test_c_api             COMMAND test_c_api)
 
 # 设置测试属性
 set_tests_properties(test_core PROPERTIES
@@ -258,8 +263,13 @@ set_tests_properties(test_timeout PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_c_api PROPERTIES
+    TIMEOUT 30
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 
