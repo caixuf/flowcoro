@@ -24,14 +24,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build \
+          sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
 
       - name: Configure (GCC, Release)
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=g++-13 \
             -DFLOWCORO_BUILD_BENCHMARKS=OFF \
             -DFLOWCORO_BUILD_EXAMPLES=OFF \
             -DFLOWCORO_ENABLE_DATABASE=ON
@@ -96,14 +96,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build \
+          sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
 
       - name: Configure with TSAN
         run: |
           cmake -S . -B build-tsan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=g++-13 \
             -DFLOWCORO_ENABLE_TSAN=ON \
             -DFLOWCORO_BUILD_BENCHMARKS=OFF \
             -DFLOWCORO_BUILD_EXAMPLES=OFF \
@@ -144,14 +144,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build \
+          sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
 
       - name: Configure with ASAN+UBSAN
         run: |
           cmake -S . -B build-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=g++-13 \
             -DFLOWCORO_ENABLE_SANITIZERS=ON \
             -DFLOWCORO_BUILD_BENCHMARKS=OFF \
             -DFLOWCORO_BUILD_EXAMPLES=OFF \
