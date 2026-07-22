@@ -1,109 +1,185 @@
 #pragma once
 #include <tuple>
 #include <any>
+#include <memory>
+#include <atomic>
 #include <utility>
 #include <type_traits>
+#include <exception>
 #include "task.h"
 #include "awaiter.h"
+#include "coroutine_manager.h"
 
 namespace flowcoro {
 
-// when_all实现 - 等待所有task完成
+// =====================================================================
+// when_all 实现 - 等待所有 task 完成（保留原实现）
+// =====================================================================
 template<typename... Tasks>
 Task<std::tuple<decltype(std::declval<Tasks>().get())...>> when_all(Tasks&&... tasks) {
-    // 使用fold expression和参数展开
     auto execute_all = []<typename... Ts>(Ts&&... ts) -> Task<std::tuple<decltype(ts.get())...>> {
-        // 创建一个tuple来存储所有结果
         std::tuple<decltype(ts.get())...> results;
-
-        // 使用索引展开来逐个等待每个task
         auto await_task = [&]<std::size_t... Is>(std::index_sequence<Is...>) -> Task<void> {
-            // 使用fold expression按顺序等待所有task
             ((std::get<Is>(results) = co_await std::forward<Ts>(ts)), ...);
             co_return;
         };
-
-        // 等待所有task完成
         co_await await_task(std::index_sequence_for<Ts...>{});
-
-        // 返回所有结果
         co_return std::move(results);
     };
-
-    // 调用执行函数
     co_return co_await execute_all(std::forward<Tasks>(tasks)...);
 }
 
-// 检查单个任务的辅助函数模板
-template<std::size_t Index, typename Task>
-bool check_single_task(Task& task, bool& found, std::size_t& winner_index, std::any& result) {
-    if (found) return false; // 已找到完成的任务
-    
-    if (task.await_ready()) {
-        // 任务已完成，获取结果
-        try {
-            auto task_result = task.await_resume();
-            result = std::make_any<std::decay_t<decltype(task_result)>>(std::move(task_result));
-            winner_index = Index;
-            found = true;
+namespace detail {
+
+// =====================================================================
+// when_any 共享状态
+// 由 when_any 调用者和 N 个 selector 协程共享。
+// 通过 CAS 决出唯一胜者，避免数据竞争。
+// =====================================================================
+struct WhenAnyState {
+    std::atomic<bool> winner_set{false};
+    std::atomic<std::size_t> winner_index{static_cast<std::size_t>(-1)};
+    std::any result;
+    // 等待者协程地址，由 selector 在胜出后通过 exchange 取走并调度恢复
+    std::atomic<void*> waiter{nullptr};
+
+    // 原子地尝试成为胜者
+    bool try_win(std::size_t index) noexcept {
+        bool expected = false;
+        if (winner_set.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel)) {
+            winner_index.store(index, std::memory_order_release);
             return true;
-        } catch (...) {
-            // 如果有异常，也算完成
-            winner_index = Index;
-            found = true;
-            // 可以在这里设置异常信息到result中
-            return true;
+        }
+        return false;
+    }
+
+    // 唤醒等待者（若已注册）
+    void resume_waiter() noexcept {
+        void* w = waiter.exchange(nullptr, std::memory_order_acq_rel);
+        if (w) {
+            auto h = std::coroutine_handle<>::from_address(w);
+            // 通过管理器调度恢复，避免直接 resume 触发栈溢出
+            flowcoro::CoroutineManager::get_instance().schedule_resume(h);
         }
     }
-    return false;
+};
+
+// =====================================================================
+// selector 协程
+// 持有并 await 一个原始 task，完成后尝试 CAS 成为胜者
+// =====================================================================
+template<std::size_t Index, typename TaskT>
+Task<void> selector(TaskT task, std::shared_ptr<WhenAnyState> state) {
+    using R = std::decay_t<decltype(std::declval<TaskT>().get())>;
+    try {
+        if constexpr (std::is_void_v<R>) {
+            co_await std::move(task);
+            if (state->try_win(Index)) {
+                state->result = std::any{};
+                state->resume_waiter();
+            }
+        } else {
+            auto val = co_await std::move(task);
+            if (state->try_win(Index)) {
+                state->result = std::make_any<R>(std::move(val));
+                state->resume_waiter();
+            }
+        }
+    } catch (...) {
+        // 异常也视为完成：把异常存入 any
+        if (state->try_win(Index)) {
+            state->result = std::make_any<std::exception_ptr>(std::current_exception());
+            state->resume_waiter();
+        }
+    }
+    co_return;
 }
 
-// when_any实现 - 等待任意一个task完成
+// =====================================================================
+// when_any 的等待器
+// 在 await_suspend 中注册 caller，然后原子地处理 "selector 先赢" 的竞态
+// =====================================================================
+struct WhenAnyAwaiter {
+    std::shared_ptr<WhenAnyState> state;
+
+    bool await_ready() const noexcept {
+        // 若已有胜者，直接走 await_resume 不挂起
+        return state->winner_set.load(std::memory_order_acquire);
+    }
+
+    void await_suspend(std::coroutine_handle<> caller) noexcept {
+        // 注册 caller 为等待者
+        state->waiter.store(caller.address(), std::memory_order_release);
+
+        // 防止 selector 在 await_ready 与 await_suspend 之间胜出：
+        // 再次检查 winner_set，若已赢则尝试自行唤醒
+        if (state->winner_set.load(std::memory_order_acquire)) {
+            void* expected = caller.address();
+            if (state->waiter.compare_exchange_strong(
+                    expected, nullptr, std::memory_order_acq_rel)) {
+                // selector 没机会唤醒我们，自行调度
+                flowcoro::CoroutineManager::get_instance().schedule_resume(caller);
+            }
+            // 否则 selector 正在唤醒我们，无需操作
+        }
+        // 否则等待 selector 唤醒
+    }
+
+    void await_resume() const noexcept {}
+};
+
+} // namespace detail
+
+// =====================================================================
+// when_any 实现 - 事件驱动版本（替代轮询）
+//
+// 原实现使用 1ms 轮询 (co_await ClockAwaiter(1ms))，存在两个问题：
+//   1) 延迟下限 1ms — 实时性差
+//   2) CPU 空转 — 任务密集时浪费 cycles
+//
+// 修复：为每个 task 创建一个 selector 协程。selector 持有 task
+// 并 co_await 它；任何 task 完成即立刻唤醒其 selector，selector 通过
+// CAS 决出胜者，胜者立刻 schedule_resume(when_any caller)。延迟接近 0，
+// 无轮询，无 CPU 空转。
+//
+// 落败的 selector 在 when_any 返回时被其 Task 析构函数安全销毁
+// （Task::safe_destroy 会调用 manager.schedule_destroy 延迟回收）。
+// =====================================================================
 template<typename... Tasks>
 Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
-    // 使用fold expression和参数展开，参考when_all的实现方式
-    auto execute_any = []<typename... Ts>(Ts&&... ts) -> Task<std::pair<std::size_t, std::any>> {
-        // 将所有tasks存储在tuple中，避免引用问题
-        std::tuple<Ts...> task_tuple(std::forward<Ts>(ts)...);
-        
-        // 启动所有任务的轮询检查
-        while (true) {
-            // 检查每个任务是否完成
-            std::size_t winner_index = std::size_t(-1);
-            std::any result;
-            bool found = false;
-            
-            // 使用索引展开来检查每个task
-            auto check_tasks = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                // 使用fold expression检查所有任务
-                (check_single_task<Is>(std::get<Is>(task_tuple), found, winner_index, result) || ...);
-            };
-            
-            check_tasks(std::index_sequence_for<Ts...>{});
-            
-            if (found) {
-                co_return std::make_pair(winner_index, std::move(result));
-            }
-            
-            // 短暂休眠避免忙等待
-            // 注意：这是一个简化实现，使用轮询机制
-            // TODO: 考虑使用事件驱动或条件变量以提高效率和降低CPU使用
-            co_await ClockAwaiter(std::chrono::milliseconds(1));
-        }
-    };
+    auto state = std::make_shared<detail::WhenAnyState>();
 
-    // 调用执行函数
-    co_return co_await execute_any(std::forward<Tasks>(tasks)...);
+    // 用 lambda 创建 N 个 selector，存储于 tuple 中作为本协程局部变量
+    auto launch = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+        return std::make_tuple(
+            detail::selector<Is>(
+                std::forward<Tasks>(tasks), state)...
+        );
+    };
+    auto selectors = launch(std::index_sequence_for<Tasks...>{});
+
+    // 事件等待：若有 selector 在 await_ready 之前已胜出，则不挂起
+    co_await detail::WhenAnyAwaiter{state};
+
+    // 读出胜者信息
+    auto winner_idx = state->winner_index.load(std::memory_order_acquire);
+    co_return std::make_pair(winner_idx, std::move(state->result));
 }
 
-// 便捷的when_any重载 - 支持超时
-template<typename TaskType, typename Duration>
-auto when_any_timeout(TaskType&& task, Duration timeout) {
+// =====================================================================
+// 便捷重载：when_any_timeout
+// 将超时也建模为一个 task，与原任务做 when_any race。
+// 胜者索引 0 -> 原任务完成；胜者索引 1 -> 超时。
+// =====================================================================
+template<typename TaskType, typename Rep, typename Period>
+auto when_any_timeout(TaskType&& task, std::chrono::duration<Rep, Period> timeout) {
     auto timeout_task = [timeout]() -> Task<bool> {
-        co_await ClockAwaiter(timeout);
-        co_return false; // 超时返回false
+        co_await ClockAwaiter(
+            std::chrono::duration_cast<std::chrono::milliseconds>(timeout));
+        co_return false; // 超时返回 false
     }();
-    
+
     return when_any(std::forward<TaskType>(task), std::move(timeout_task));
 }
 

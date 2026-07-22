@@ -9,7 +9,7 @@
 #include <atomic>
 #include <array>
 #include <vector>
-#include <algorithm>
+#include <unordered_set>
 #include "load_balancer.h"
 #include "performance_monitor.h"
 #include "logger.h"
@@ -19,6 +19,18 @@ namespace flowcoro {
 // 前向声明调度器API
 void schedule_coroutine_enhanced(std::coroutine_handle<> handle);
 void drive_coroutine_pool();
+
+// 定时器条目：携带 timer_id 以支持取消
+struct TimerEntry {
+    std::chrono::steady_clock::time_point when;
+    uint64_t timer_id;
+    std::coroutine_handle<> handle;
+
+    // 最小堆：按 when 升序
+    bool operator>(const TimerEntry& other) const noexcept {
+        return when > other.when;
+    }
+};
 
 // 协程管理器
 class CoroutineManager {
@@ -47,9 +59,21 @@ public:
     }
 
     // 添加定时器
-    void add_timer(std::chrono::steady_clock::time_point when, std::coroutine_handle<> handle) {
+    // 返回生成的 timer_id，供调用方在需要时取消该定时器
+    uint64_t add_timer(std::chrono::steady_clock::time_point when, std::coroutine_handle<> handle) {
         std::lock_guard<std::mutex> lock(timer_mutex_);
-        timer_queue_.emplace(when, handle);
+        uint64_t id = timer_id_generator_.fetch_add(1, std::memory_order_relaxed);
+        timer_queue_.emplace(when, id, handle);
+        return id;
+    }
+
+    // 取消定时器
+    // 标记 timer_id 为已取消；下次扫描队列时跳过。
+    // 线程安全：持有 timer_mutex_。即使定时器线程正在处理也无害。
+    void cancel_timer(uint64_t timer_id) {
+        if (timer_id == 0) return; // 0 表示无定时器
+        std::lock_guard<std::mutex> lock(timer_mutex_);
+        cancelled_timers_.insert(timer_id);
     }
 
     // 调度协程恢复 - 集成协程池和智能负载均衡
@@ -136,6 +160,7 @@ public:
         LOG_INFO("Dedicated timer thread stopped");
     }
     // 增强版添加定时器 - 支持专用线程
+    // 返回的 timer_id 与队列中条目的 id 一致，可用于 cancel_timer。
     uint64_t add_timer_enhanced(std::chrono::steady_clock::time_point when,
                                 std::coroutine_handle<> handle)
     {
@@ -144,22 +169,21 @@ public:
             LOG_ERROR("Invalid handle in add_timer_enhanced");
             return 0;
         }
-        uint64_t timer_id = timer_id_generator_.fetch_add(1, std::memory_order_relaxed);
-        
+
         // 记录定时器事件
         PerformanceMonitor::get_instance().on_timer_event();
-        
+
         // 如果专用定时器线程启动了，使用它
         if (dedicated_timer_thread_)
         {
             std::lock_guard<std::mutex> lock(timer_mutex_);
-            timer_queue_.emplace(when, handle);
+            uint64_t timer_id = timer_id_generator_.fetch_add(1, std::memory_order_relaxed);
+            timer_queue_.emplace(when, timer_id, handle);
             timer_thread_cv_.notify_one(); // 通知专用线程
             return timer_id;
         }
-        // 否则使用原有方式
-        add_timer(when, handle);
-        return timer_id;
+        // 否则使用原有方式 — add_timer 生成并返回真正入队的 timer_id
+        return add_timer(when, handle);
     }
 
     // 公开的队列处理方法 - 用于外部驱动
@@ -173,13 +197,17 @@ public:
 
         // 批量处理到期的定时器
         while (!timer_queue_.empty() && batch_count < BATCH_SIZE) {
-            const auto& [when, handle] = timer_queue_.top();
-            if (when > now) break;
+            const auto& entry = timer_queue_.top();
+            if (entry.when > now) break;
 
-            // 收集到批处理数组中
-            if (handle && !handle.done()) {
-                batch[batch_count++] = handle;
+            // 跳过已取消的定时器，并从取消集合中移除（条目已出队）
+            if (cancelled_timers_.erase(entry.timer_id) == 0) {
+                // 未被取消 — 正常调度
+                if (entry.handle && !entry.handle.done()) {
+                    batch[batch_count++] = entry.handle;
+                }
             }
+            // 已取消的条目：静默丢弃
             timer_queue_.pop();
         }
         
@@ -268,19 +296,31 @@ private:
                 continue;
             }
             auto now = std::chrono::steady_clock::now();
-            const auto &[when, handle] = timer_queue_.top();
-            if (when <= now)
+            const auto& top = timer_queue_.top();
+            if (top.when <= now)
             {
                 // 批量处理到期的定时器
-                std::vector<std::coroutine_handle<>> expired_handles;
-                while (!timer_queue_.empty() && timer_queue_.top().first <= now)
+                std::vector<TimerEntry> expired;
+                while (!timer_queue_.empty() && timer_queue_.top().when <= now)
                 {
-                    expired_handles.push_back(timer_queue_.top().second);
+                    expired.push_back(std::move(const_cast<TimerEntry&>(timer_queue_.top())));
                     timer_queue_.pop();
                 }
                 lock.unlock(); // 释放锁，避免在恢复协程时阻塞
+
+                // 过滤已取消的定时器
+                std::vector<std::coroutine_handle<>> to_resume;
+                {
+                    std::lock_guard<std::mutex> lk2(timer_mutex_);
+                    for (auto& e : expired) {
+                        if (cancelled_timers_.erase(e.timer_id) > 0) {
+                            continue; // 已取消，跳过
+                        }
+                        to_resume.push_back(e.handle);
+                    }
+                }
                 // 批量恢复协程（通过线程池异步执行）
-                for (auto h : expired_handles)
+                for (auto h : to_resume)
                 {
                     if (h && !h.done())
                     {
@@ -292,20 +332,21 @@ private:
             else
             {
                 // 精确等待到下一个定时器时间
-                timer_thread_cv_.wait_until(lock, when, [this]
+                timer_thread_cv_.wait_until(lock, top.when, [this]
                                             { return timer_thread_stop_.load(std::memory_order_acquire); });
             }
         }
         LOG_INFO("Dedicated timer thread stopped");
     }
 
-    // 定时器队列（最小堆）
-    std::priority_queue<
-        std::pair<std::chrono::steady_clock::time_point, std::coroutine_handle<>>,
-        std::vector<std::pair<std::chrono::steady_clock::time_point, std::coroutine_handle<>>>,
-        std::greater<>
-    > timer_queue_;
+    // 定时器队列（最小堆）— 条目携带 timer_id 以支持取消
+    std::priority_queue<TimerEntry,
+        std::vector<TimerEntry>,
+        std::greater<TimerEntry>> timer_queue_;
     std::mutex timer_mutex_;
+
+    // 已取消的定时器 ID 集合 — 由 timer_mutex_ 保护
+    std::unordered_set<uint64_t> cancelled_timers_;
 
     // 就绪队列
     std::queue<std::coroutine_handle<>> ready_queue_;

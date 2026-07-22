@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Regular build + run all tests on Ubuntu with GCC
+  # ─────────────────────────────────────────────────────────────────────────
+  build-and-test-gcc:
+    name: Build & Test (GCC, Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build \
+                                  libmysqlclient-dev libhiredis-dev libjsoncpp-dev
+
+      - name: Configure (GCC, Release)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF \
+            -DFLOWCORO_ENABLE_DATABASE=ON
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure --parallel 4 --label-exclude network_external
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Clang build for portability
+  # ─────────────────────────────────────────────────────────────────────────
+  build-clang:
+    name: Build & Test (Clang, Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build clang libc++-dev libc++abi-dev \
+                                  libmysqlclient-dev libhiredis-dev libjsoncpp-dev
+
+      - name: Configure (Clang, RelWithDebInfo)
+        run: |
+          cmake -S . -B build-clang -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF \
+            -DFLOWCORO_ENABLE_DATABASE=OFF
+
+      - name: Build
+        run: cmake --build build-clang --parallel 4
+
+      - name: Run tests
+        run: ctest --test-dir build-clang --output-on-failure --parallel 4 --label-exclude network_external
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ThreadSanitizer — the headline job for this round of fixes.
+  # Verifies that the hazard-pointer-based lockfree::Queue/Stack and the
+  # event-driven when_any are race-free. If this job is green, downstream
+  # projects (e.g. FlowEngine) no longer need to disable TSAN.
+  # ─────────────────────────────────────────────────────────────────────────
+  tsan:
+    name: ThreadSanitizer
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1 report_atomic_races=1 verbosity=0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build \
+                                  libmysqlclient-dev libhiredis-dev libjsoncpp-dev
+
+      - name: Configure with TSAN
+        run: |
+          cmake -S . -B build-tsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DFLOWCORO_ENABLE_TSAN=ON \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF \
+            -DFLOWCORO_ENABLE_DATABASE=OFF
+
+      - name: Build
+        run: cmake --build build-tsan --parallel 4
+
+      - name: Run TSAN-targeted concurrency regression tests
+        run: |
+          ctest --test-dir build-tsan --output-on-failure \
+                -R 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread' \
+                --parallel 2
+
+      - name: Run remaining test suite under TSAN
+        run: |
+          ctest --test-dir build-tsan --output-on-failure \
+                --parallel 2 \
+                --label-exclude network_external \
+                --exclude-regex 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread'
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # AddressSanitizer + UBSAN — catches memory errors and UB
+  # ─────────────────────────────────────────────────────────────────────────
+  asan-ubsan:
+    name: AddressSanitizer + UBSAN
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      ASAN_OPTIONS: "halt_on_error=1 detect_leaks=1 abort_on_error=1 verbosity=0"
+      UBSAN_OPTIONS: "halt_on_error=1 print_stacktrace=1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build \
+                                  libmysqlclient-dev libhiredis-dev libjsoncpp-dev
+
+      - name: Configure with ASAN+UBSAN
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DFLOWCORO_ENABLE_SANITIZERS=ON \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF \
+            -DFLOWCORO_ENABLE_DATABASE=OFF
+
+      - name: Build
+        run: cmake --build build-asan --parallel 4
+
+      - name: Run tests under ASAN+UBSAN
+        run: ctest --test-dir build-asan --output-on-failure --parallel 2 --label-exclude network_external
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Optional: macOS build (no sanitizers — just verify portability)
+  # ─────────────────────────────────────────────────────────────────────────
+  build-macos:
+    name: Build (macOS, Apple Clang)
+    runs-on: macos-13
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake ninja
+
+      - name: Configure (Apple Clang, Release)
+        run: |
+          cmake -S . -B build-mac -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF \
+            -DFLOWCORO_ENABLE_DATABASE=OFF
+
+      - name: Build
+        run: cmake --build build-mac --parallel 4
+
+      - name: Run core tests (exclude platform-specific)
+        run: |
+          ctest --test-dir build-mac --output-on-failure --parallel 4 \
+                --label-exclude network_external \
+                --exclude-regex 'test_database|test_rpc|test_network_professional'
