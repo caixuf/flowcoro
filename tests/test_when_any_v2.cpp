@@ -70,8 +70,9 @@ TEST_CASE(when_any_v2_low_latency) {
         std::cout << "  winner=" << result.first
                   << " elapsed=" << elapsed.count() << "us\n";
         TEST_EXPECT_EQ(result.first, std::size_t(0));
-        // 5ms task + scheduling overhead. Should be < 30ms.
-        TEST_EXPECT_TRUE(elapsed < milliseconds(30));
+        // 5ms task + scheduling overhead. TSAN/ASAN 插桩会增加调度延迟，
+        // 给足余量避免 sanitizer 构建下的 flaky 失败。
+        TEST_EXPECT_TRUE(elapsed < milliseconds(150));
         auto v = std::any_cast<int>(result.second);
         TEST_EXPECT_EQ(v, 10);
     }();

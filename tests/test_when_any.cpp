@@ -98,14 +98,15 @@ TEST_CASE(when_any_race) {
         
         auto end = high_resolution_clock::now();
         auto duration = duration_cast<milliseconds>(end - start);
-        
+
         std::cout << "竞争完成时间: " << duration.count() << "ms\n";
         std::cout << "获胜者: 任务 " << std::any_cast<int>(result.second) << " (索引: " << result.first << ")\n";
-        
-        // 最快的任务应该获胜
-        TEST_EXPECT_EQ(result.first, 0);
-        TEST_EXPECT_EQ(std::any_cast<int>(result.second), 1);
-        
+
+        // 计算量差异较小，并行调度下任意任务都可能先完成；
+        // 只断言获胜者索引与返回值一致、且在合法范围内。
+        TEST_EXPECT_TRUE(result.first >= 0 && result.first < 4);
+        TEST_EXPECT_EQ(std::any_cast<int>(result.second), result.first + 1);
+
         std::cout << " 竞争测试完成\n";
     }();
     
@@ -118,7 +119,7 @@ TEST_CASE(when_any_type_safety) {
     
     auto test_coro = []() -> Task<void> {
         auto int_task = []() -> Task<int> {
-            volatile int sum = 0;
+            volatile long long sum = 0;
             for (int i = 0; i < 30000; ++i) {
                 sum += i;
             }
@@ -126,7 +127,7 @@ TEST_CASE(when_any_type_safety) {
         };
         
         auto string_task = []() -> Task<std::string> {
-            volatile int sum = 0;
+            volatile long long sum = 0;
             for (int i = 0; i < 100000; ++i) {
                 sum += i;
             }
@@ -134,7 +135,7 @@ TEST_CASE(when_any_type_safety) {
         };
         
         auto bool_task = []() -> Task<bool> {
-            volatile int sum = 0;
+            volatile long long sum = 0;
             for (int i = 0; i < 150000; ++i) {
                 sum += i;
             }

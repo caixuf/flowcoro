@@ -13,6 +13,7 @@ struct Task<Result<T, E>> {
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+        std::atomic<bool> completed_{false};
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -31,7 +32,20 @@ struct Task<Result<T, E>> {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_never initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+        // 用自定义 final_suspend 设置 completed_ 标志
+        auto final_suspend() noexcept {
+            struct final_awaiter {
+                bool await_ready() const noexcept { return false; }
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) const noexcept {
+                    return std::noop_coroutine();
+                }
+                void await_resume() const noexcept {}
+            };
+            // 在 final_suspend 入口设置 completed_（release），让 get()
+            // 的 load(acquire) 能观察到完成状态。
+            completed_.store(true, std::memory_order_release);
+            return final_awaiter{};
+        }
 
         void return_value(Result<T, E> r) noexcept {
             // 快速路径：通常情况下协程没有被取消
@@ -66,6 +80,10 @@ struct Task<Result<T, E>> {
 
         bool is_destroyed() const {
             return is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        bool is_completed() const noexcept {
+            return completed_.load(std::memory_order_acquire);
         }
 
         std::chrono::milliseconds get_lifetime() const {
@@ -263,6 +281,11 @@ struct Task<void> {
         // 增强版生命周期管理 - 与Task<T>保持一致
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+        // 协程是否已到达 final_suspend（已完成）。
+        // 在 final_suspend::await_ready 里 store(true, release)，
+        // 让 get() 可以用 load(acquire) 代替 handle.done() 跨线程检测完成，
+        // 规避 GCC coroutine_handle::done() 非线程安全的问题。
+        std::atomic<bool> completed_{false};
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -300,9 +323,14 @@ struct Task<void> {
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* promise;
-                
-                bool await_ready() const noexcept { return false; }
-                
+
+                bool await_ready() const noexcept {
+                    // 标记协程已完成（release），让 get() 的 load(acquire)
+                    // 能观察到完成状态，无需调用 handle.done()。
+                    promise->completed_.store(true, std::memory_order_release);
+                    return false;
+                }
+
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
                     // 如果有continuation，恢复它
                     if (promise->continuation) {
@@ -310,7 +338,7 @@ struct Task<void> {
                     }
                     return std::noop_coroutine();
                 }
-                
+
                 void await_resume() const noexcept {}
             };
             return final_awaiter{this};
@@ -343,6 +371,10 @@ struct Task<void> {
 
         bool is_destroyed() const {
             return is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        bool is_completed() const noexcept {
+            return completed_.load(std::memory_order_acquire);
         }
 
         std::chrono::milliseconds get_lifetime() const {
@@ -396,6 +428,12 @@ struct Task<void> {
         safe_destroy();
     }
 
+    // 放弃对协程帧的所有权：置空 handle，析构时不调用 safe_destroy。
+    // 语义同 Task<T>::detach()，用于 when_any 等跨线程场景。
+    void detach() noexcept {
+        handle = nullptr;
+    }
+
     // 安全销毁方法 - 与Task<T>保持一致
     void safe_destroy() {
         if (handle && handle.address()) {
@@ -404,12 +442,11 @@ struct Task<void> {
                 // 标记为销毁状态
                 handle.promise().is_destroyed_.store(true, std::memory_order_release);
             }
-            // 直接销毁，不检查done状态
-            if (handle.address() != nullptr) {
-                handle.destroy();
-            } else {
-                LOG_ERROR("Task<void>::safe_destroy: handle address is null");
-            }
+            // 统一用延迟销毁：不在此处调用 handle.destroy() 或 handle.done()。
+            // 原因：GCC 的 coroutine_handle::destroy()/done() 会读取协程帧
+            // 内部的 __resume_index 字段，跨线程访问是 data race（TSAN 报警）。
+            // schedule_destroy 把帧入队，由 CoroutineManager 在安全线程处理。
+            CoroutineManager::get_instance().schedule_destroy(handle);
             handle = nullptr;
         }
     }
@@ -473,7 +510,9 @@ struct Task<void> {
         }
 
         // 关键修复：先检查是否已完成（suspend_never 情况下协程会同步执行直到挂起）
-        if (handle.done()) {
+        // 用 is_completed() 代替 handle.done()：前者用原子 load(acquire)，
+        // 后者读取协程帧内部 __resume_index，跨线程不安全（TSAN 报警）。
+        if (handle.promise().is_completed()) {
             // 重新抛出异常（如果有）
             handle.promise().rethrow_if_exception();
             return;
@@ -495,7 +534,7 @@ struct Task<void> {
             size_t spin_count = 0;
             const size_t max_spins = 100;
             
-            while (!handle.done() && !handle.promise().is_cancelled()) {
+            while (!handle.promise().is_completed() && !handle.promise().is_cancelled()) {
                 // 超时检查
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
@@ -611,6 +650,7 @@ struct Task<std::unique_ptr<T>> {
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+        std::atomic<bool> completed_{false};
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -646,16 +686,19 @@ struct Task<std::unique_ptr<T>> {
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* promise;
-                
-                bool await_ready() const noexcept { return false; }
-                
+
+                bool await_ready() const noexcept {
+                    promise->completed_.store(true, std::memory_order_release);
+                    return false;
+                }
+
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
                     if (promise->continuation) {
                         return promise->continuation;
                     }
                     return std::noop_coroutine();
                 }
-                
+
                 void await_resume() const noexcept {}
             };
             return final_awaiter{this};
@@ -687,6 +730,10 @@ struct Task<std::unique_ptr<T>> {
 
         bool is_destroyed() const {
             return is_destroyed_.load(std::memory_order_acquire);
+        }
+
+        bool is_completed() const noexcept {
+            return completed_.load(std::memory_order_acquire);
         }
 
         std::chrono::milliseconds get_lifetime() const {
@@ -745,6 +792,12 @@ struct Task<std::unique_ptr<T>> {
         safe_destroy();
     }
 
+    // 放弃对协程帧的所有权：置空 handle，析构时不调用 safe_destroy。
+    // 语义同 Task<T>::detach()，用于 when_any 等跨线程场景。
+    void detach() noexcept {
+        handle = nullptr;
+    }
+
     void cancel() {
         if (handle && !handle.done() && !handle.promise().is_destroyed()) {
             handle.promise().request_cancellation();
@@ -785,11 +838,8 @@ struct Task<std::unique_ptr<T>> {
                 handle.promise().is_destroyed_.store(true, std::memory_order_release);
             }
 
-            if (handle.done()) {
-                handle.destroy();
-            } else {
-                manager.schedule_destroy(handle);
-            }
+            // 统一用延迟销毁，不调用 handle.done()/destroy()（跨线程不安全）
+            manager.schedule_destroy(handle);
             handle = nullptr;
         }
     }
@@ -808,7 +858,7 @@ struct Task<std::unique_ptr<T>> {
         if (!handle.done() && !handle.promise().is_cancelled()) {
             auto& manager = CoroutineManager::get_instance();
             
-            while (!handle.done() && !handle.promise().is_cancelled()) {
+            while (!handle.promise().is_completed() && !handle.promise().is_cancelled()) {
                 manager.drive();
                 // 快速检查几次
                 for (int i = 0; i < 100 && !handle.done() && !handle.promise().is_cancelled(); ++i) {

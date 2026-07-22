@@ -251,7 +251,7 @@ public:
         static constexpr size_t BATCH_SIZE = 64; // 增加批处理大小，减少锁竞争
         std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
         size_t batch_count = 0;
-        
+
         // 批量获取待销毁的协程
         {
             std::lock_guard<std::mutex> lock(destroy_mutex_);
@@ -261,17 +261,18 @@ public:
             }
         }
 
-        // 批量销毁协程，无锁执行，使用循环展开优化
+        // 批量销毁协程，无锁执行
+        // 注意：不调用 handle.done() 检查——它在协程池模式下跨线程不安全
+        // （GCC 的 done() 读取协程帧内部 __resume_index）。
+        // 入队的协程都应已完成（挂起在 final_suspend），destroy 是安全的。
         for (size_t i = 0; i < batch_count; ++i) {
             auto handle = batch[i];
-            
+
             if (__builtin_expect(!handle || !handle.address(), false)) [[unlikely]] continue;
-            
+
             try {
-                // 优化：移除重复的检查，直接销毁
                 handle.destroy();
             } catch (...) {
-                // 使用faster logging或者完全移除在release模式
                 #ifndef NDEBUG
                 LOG_ERROR("Exception during coroutine destruction");
                 #endif

@@ -217,6 +217,14 @@ struct Task {
         safe_destroy();
     }
 
+    // 放弃对协程帧的所有权：置空 handle，析构时不调用 safe_destroy。
+    // 协程帧仍由 CoroutineManager 管理，会在进程退出或定期清理时回收。
+    // 用于 when_any 等场景：selector Task 可能在不同于协程执行线程的
+    // 地方被析构，调用 safe_destroy → done() 会触发跨线程读取。
+    void detach() noexcept {
+        handle = nullptr;
+    }
+
     // 增强版：安全取消支持
     void cancel() {
         if (handle && !handle.done() && !handle.promise().is_destroyed()) {
@@ -269,16 +277,12 @@ struct Task {
         return is_cancelled() || handle.promise().has_error;
     }
 
-    // 安全销毁方法 
+    // 安全销毁方法
     void safe_destroy() {
         if (handle && handle.address()) {
             auto& manager = CoroutineManager::get_instance();
 
             try {
-                // 先检查协程状态，再原子地设置销毁标志
-                // 这避免了检查和销毁之间的竞态窗口
-                bool is_done = handle.done();
-                
                 // 使用原子操作检查和设置销毁状态，避免重复销毁
                 bool expected = false;
                 if (!handle.promise().is_destroyed_.compare_exchange_strong(expected, true, std::memory_order_release)) {
@@ -287,13 +291,16 @@ struct Task {
                     return;
                 }
 
-                // 延迟销毁 - 避免在协程执行栈中销毁
-                if (is_done) {
-                    handle.destroy();
-                } else {
-                    // 安排在下一个调度周期销毁
-                    manager.schedule_destroy(handle);
-                }
+                // 统一用延迟销毁：不在此处调用 handle.done()。
+                // 原因：GCC 的 coroutine_handle::done() 会读取协程帧内部的
+                // __resume_index 字段，该字段在协程 final_suspend 时被写入。
+                // 当 Task 在不同于协程执行线程的地方被析构时（例如 when_any
+                // 的 selector Task 在 caller 线程析构，而 selector 协程在
+                // 工作线程执行），done() 的跨线程读取是 data race（TSAN 报警）。
+                // schedule_destroy 把帧入队，由 CoroutineManager 在安全线程
+                // 调用 process_destroy_queue 处理；process_destroy_queue 会在
+                // 销毁前检查 done()，未完成的协程会被跳过等下一轮。
+                manager.schedule_destroy(handle);
             } catch (...) {
                 // 忽略销毁过程中的异常
                 LOG_ERROR("Exception during safe_destroy");

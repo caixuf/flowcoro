@@ -164,6 +164,26 @@ Task<std::pair<std::size_t, std::any>> when_any(Tasks&&... tasks) {
 
     // 读出胜者信息
     auto winner_idx = state->winner_index.load(std::memory_order_acquire);
+
+    // 在 co_return 之前，把所有 selector Task 显式移交给
+    // CoroutineManager 延迟销毁。这里不调用 selector.cancel() 或
+    // handle.done()——两者都会跨线程访问 selector 协程帧，触发 TSAN
+    // data race。改为通过 detach（置空 handle）放弃所有权，让 selector
+    // 协程自然完成并挂起在 final_suspend，之后由 CoroutineManager 的
+    // 定期清理或进程退出处理。
+    //
+    // 注意：此处只是把 Task 的 handle 置空，不触发 safe_destroy。
+    // selector 协程帧仍由 CoroutineManager 管理（selector 协程完成时
+    // 会调用 resume_waiter → schedule_resume caller，自身挂起在
+    // final_suspend，帧不会被自动回收）。这是有意的——在协程池模式下
+    // 这些帧会在进程退出时被统一清理。
+    auto detach_selectors = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+        // 把 selector Task 的 handle 置空，避免 Task 析构时调用
+        // safe_destroy → handle.done() 的跨线程读取
+        ((std::get<Is>(selectors).detach()), ...);
+    };
+    detach_selectors(std::index_sequence_for<Tasks...>{});
+
     co_return std::make_pair(winner_idx, std::move(state->result));
 }
 

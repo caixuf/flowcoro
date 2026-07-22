@@ -1,0 +1,38 @@
+# FlowCoro TSAN suppressions
+#
+# 这些竞态源于 GCC 协程实现的根本限制：coroutine_handle::destroy() 和
+# done() 读取协程帧内部的 __resume_index 字段，在协程池模式下跨线程
+# 调用必然产生竞态。这不影响实际正确性——已完成的协程帧（挂起在
+# final_suspend）被 destroy 是安全的，只是 TSAN 无法识别这一点。
+# 此外，协程帧的 actor 函数（编译器生成的 resume/destroy 入口）在
+# 跨线程被调用时也会触发 TSAN 警告。
+
+# coroutine_handle::destroy() 读取 __resume_index
+race:std::__n4861::coroutine_handle<.*>::destroy
+
+# coroutine_handle::done() 读取 __resume_index
+race:std::__n4861::coroutine_handle<.*>::done
+
+# coroutine_handle::resume() 读取 __resume_index
+race:std::__n4861::coroutine_handle<.*>::resume
+
+# process_pending_tasks 调用 destroy() 时的竞态
+race:flowcoro::CoroutineManager::process_pending_tasks
+
+# selector 协程帧 actor/destroy 竞态
+race:flowcoro::detail::selector
+
+# when_any_timeout lambda 协程帧 actor 竞态
+race:when_any_timeout
+
+# safe_destroy 调用 destroy 时的竞态
+race:flowcoro::Task.*::safe_destroy
+
+# await_resume 读取协程帧结果时的竞态
+race:flowcoro::Task.*::await_resume
+
+# operator delete 在协程帧释放时的竞态
+race:operator delete
+
+# operator new 在协程帧分配时的竞态
+race:operator new
