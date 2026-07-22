@@ -24,6 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          # g++-13 不在 ubuntu-22.04 默认 repo，需加 ubuntu-toolchain-r/test PPA。
+          # 该 PPA 是 Ubuntu 官方 toolchain 团队维护，公开稳定，专为提供新版 GCC 而设。
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
 
@@ -96,6 +101,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          # g++-13 不在 ubuntu-22.04 默认 repo，需加 ubuntu-toolchain-r/test PPA。
+          # 该 PPA 是 Ubuntu 官方 toolchain 团队维护，公开稳定，专为提供新版 GCC 而设。
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
 
@@ -143,6 +153,11 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          # g++-13 不在 ubuntu-22.04 默认 repo，需加 ubuntu-toolchain-r/test PPA。
+          # 该 PPA 是 Ubuntu 官方 toolchain 团队维护，公开稳定，专为提供新版 GCC 而设。
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build g++-13 \
                                   libmysqlclient-dev libhiredis-dev libjsoncpp-dev
