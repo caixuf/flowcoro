@@ -3,6 +3,7 @@
 #include <memory>
 #include <type_traits>
 #include "memory_pool.h"
+#include "hazard_pointer.h"
 
 namespace lockfree {
 
@@ -10,7 +11,24 @@ namespace lockfree {
 using flowcoro::pool_malloc;
 using flowcoro::pool_free;
 
-// 无锁队列实现
+// =====================================================================
+// 无锁队列 (Michael-Scott Queue) — 修复版
+//
+// 原实现存在两个严重bug：
+//   1) ABA / use-after-free: dequeue_unsafe 在 head.compare_exchange
+//      成功后立即 pool_free(head_node)，但其他败者消费者可能仍在读
+//      head_node->next 或 head_node->data。内存被 pool_malloc 立即复用
+//      后即触发 UAF。
+//   2) 数据丢失竞态: 多个消费者同时执行 next->data.exchange(nullptr)
+//      取走数据，但只有一个能 CAS 成功。败者丢失了数据但没推进 head。
+//
+// 修复策略：
+//   - 引入 hazard pointer (flowcoro::smr::HazardManager) 延迟回收节点，
+//     节点只有在没有任何线程持有 hazard 时才会真正释放，根治 UAF。
+//   - 调整 dequeue 顺序为 "CAS 先行 + 胜者独占读取数据"，败者只重试而
+//     不会消费数据，消除数据丢失竞态。
+// =====================================================================
+
 template<typename T>
 class Queue {
 private:
@@ -20,15 +38,17 @@ private:
 
         Node() = default;
         ~Node() {
-            T* data_ptr = data.load();
+            // 兜底：若析构时仍有 data，销毁之（不应发生在正常路径）
+            T* data_ptr = data.load(std::memory_order_acquire);
             if (data_ptr) {
-                data_ptr->~T(); // 显式调用析构函数
-                pool_free(data_ptr); // 使用内存池释放
+                data_ptr->~T();
+                // 不在此处 pool_free —— data 嵌在 NodeWithData 块中
+                // 由 reclaim_node 统一释放
             }
         }
     };
 
-    // NodeWithData结构定义移到类级别，以便整个类都能使用
+    // 单块分配 Node + T 数据，提高缓存局部性
     struct NodeWithData {
         Node node;
         alignas(T) char data_storage[sizeof(T)];
@@ -36,187 +56,267 @@ private:
 
     alignas(64) std::atomic<Node*> head;
     alignas(64) std::atomic<Node*> tail;
-    alignas(64) std::atomic<bool> destroyed{false}; // 添加析构标志
+    alignas(64) std::atomic<bool> destroyed{false};
+
+    // 计算 Node* 对应的 NodeWithData* 块地址
+    static NodeWithData* block_of(Node* n) noexcept {
+        return reinterpret_cast<NodeWithData*>(
+            reinterpret_cast<char*>(n) - offsetof(NodeWithData, node));
+    }
+
+    // hazard pointer 用的回收函数：销毁 Node 并归还整块内存
+    static void reclaim_node(void* p) noexcept {
+        if (!p) return;
+        Node* n = static_cast<Node*>(p);
+        n->~Node();
+        pool_free(block_of(n));
+    }
+
+    // 不带 SMR 的内部 drain，仅供析构使用（单线程上下文）
+    bool drain_one(T& result) {
+        Node* head_node = head.load(std::memory_order_acquire);
+        if (!head_node) return false;
+        Node* next = head_node->next.load(std::memory_order_acquire);
+        if (!next) return false;
+        T* data_ptr = next->data.exchange(nullptr, std::memory_order_acquire);
+        if (!data_ptr) return false;
+        result = std::move(*data_ptr);
+        data_ptr->~T();
+        Node* expected = head_node;
+        if (head.compare_exchange_strong(expected, next,
+                std::memory_order_acquire, std::memory_order_relaxed)) {
+            head_node->~Node();
+            pool_free(block_of(head_node));
+        }
+        return true;
+    }
 
 public:
     Queue() {
-        // 使用NodeWithData分配虚拟节点，保持分配一致性
-        // 这样所有节点都使用相同的内存布局，pointer arithmetic才安全
-        NodeWithData* dummy_block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
+        NodeWithData* dummy_block = static_cast<NodeWithData*>(
+            pool_malloc(sizeof(NodeWithData)));
         new(&dummy_block->node) Node();
         head.store(&dummy_block->node);
         tail.store(&dummy_block->node);
-        destroyed.store(false);
+        destroyed.store(false, std::memory_order_release);
     }
 
     ~Queue() {
-        // 设置析构标志
+        // 标记析构，阻止新的 enqueue/dequeue
         destroyed.store(true, std::memory_order_release);
 
-        // 先清理所有数据，避免析构时访问无效内存
-        T unused_item;
-        while (dequeue_unsafe(unused_item)) {
-            // 清空队列
+        // 单线程 drain 剩余节点（不需要 SMR）
+        T unused{};
+        while (drain_one(unused)) {}
+
+        // 释放 dummy
+        Node* h = head.load(std::memory_order_acquire);
+        if (h) {
+            h->~Node();
+            pool_free(block_of(h));
+            head.store(nullptr, std::memory_order_release);
         }
 
-        // 然后清理节点链表 - 使用NodeWithData释放
-        Node* current = head.load();
-        while (current) {
-            Node* next = current->next.load();
-            current->~Node(); // 显式调用析构函数
-            
-            // 计算包含Node的完整块地址并释放
-            NodeWithData* block = reinterpret_cast<NodeWithData*>(
-                reinterpret_cast<char*>(current) - offsetof(NodeWithData, node));
-            pool_free(block); // 释放整个块
-            
-            current = next;
-        }
+        // 尽力回收所有线程的 retired 节点
+        flowcoro::smr::HazardManager::instance().drain_all();
     }
 
     void enqueue(T item) {
         if (destroyed.load(std::memory_order_acquire)) {
-            return; // 队列已析构，丢弃任务
+            return; // 队列已析构，丢弃
         }
 
-        // 优化：一次分配包含Node和数据的内存块
-        NodeWithData* block = static_cast<NodeWithData*>(pool_malloc(sizeof(NodeWithData)));
+        NodeWithData* block = static_cast<NodeWithData*>(
+            pool_malloc(sizeof(NodeWithData)));
         new(&block->node) Node();
-        
-        T* data_ptr = reinterpret_cast<T*>(block->data_storage);
-        new(data_ptr) T(std::move(item)); // placement new for data
-        block->node.data.store(data_ptr);
 
-        Node* prev_tail = tail.exchange(&block->node);
+        T* data_ptr = reinterpret_cast<T*>(block->data_storage);
+        new(data_ptr) T(std::move(item));
+        // 在链接到链表前完成 data 的写入，确保消费者看到 next 时 data 已就绪
+        block->node.data.store(data_ptr, std::memory_order_release);
+
+        // MS enqueue: tail.exchange 后立刻设置 prev_tail->next
+        // 期间消费者可能看到 head != tail 但 next == nullptr 的瞬态，
+        // dequeue 会通过 retry + 帮助推进 tail 的方式正确处理
+        Node* prev_tail = tail.exchange(&block->node, std::memory_order_acq_rel);
         if (prev_tail) {
-            prev_tail->next.store(&block->node);
+            prev_tail->next.store(&block->node, std::memory_order_release);
         }
     }
 
     bool dequeue(T& result) {
         if (destroyed.load(std::memory_order_acquire)) {
-            return false; // 队列已析构
+            return false;
         }
 
-        return dequeue_unsafe(result);
+        // 使用两个 hazard slot：
+        //   slot 0 -> head_node (旧 dummy，将回收)
+        //   slot 1 -> next      (新 dummy，将读取其 data)
+        flowcoro::smr::HazardGuard h0(0), h1(1);
+
+        while (true) {
+            Node* head_node = head.load(std::memory_order_acquire);
+            if (!head_node) return false;
+            h0.protect(head_node);
+            // 防止 TOCTOU：protect 后必须重新确认 head 未变
+            if (head.load(std::memory_order_acquire) != head_node) continue;
+
+            Node* tail_node = tail.load(std::memory_order_acquire);
+            Node* next = head_node->next.load(std::memory_order_acquire);
+
+            if (head_node == tail_node) {
+                // head == tail
+                if (!next) {
+                    // 真正的空队列
+                    return false;
+                }
+                // tail 落后，帮助推进
+                tail.compare_exchange_strong(tail_node, next,
+                    std::memory_order_release, std::memory_order_relaxed);
+                continue;
+            }
+
+            // head != tail：next 必然非空（除 producer 瞬态外）
+            if (!next) {
+                // producer 正在执行 tail.exchange 但 prev_tail->next.store
+                // 尚未完成。retry。
+                continue;
+            }
+            h1.protect(next);
+            // 再次确认 head 未被其他消费者改掉
+            if (head.load(std::memory_order_acquire) != head_node) continue;
+
+            // 关键修复：先 CAS 推进 head，胜者独占读取 next->data。
+            // 败者不消费任何数据，避免原实现的丢数据竞态。
+            Node* expected = head_node;
+            if (!head.compare_exchange_weak(expected, next,
+                    std::memory_order_acquire,   // acquire 看到所有 data 写
+                    std::memory_order_relaxed)) {
+                continue; // CAS 失败，重试
+            }
+
+            // CAS 成功：现在 next 是新 dummy，由我们独占。
+            // 无人能再 next->data.exchange(nullptr)，因为其他消费者都
+            // CAS 失败并在重试（它们读到的是新的 head）。
+            T* data_ptr = next->data.exchange(nullptr, std::memory_order_acquire);
+            if (data_ptr) {
+                result = std::move(*data_ptr);
+                data_ptr->~T();
+            }
+            // 安全回收旧 dummy：必须延迟到无任何线程持有 hazard
+            flowcoro::smr::HazardManager::instance().retire(
+                head_node, &Queue::reclaim_node);
+
+            return data_ptr != nullptr;
+        }
     }
-
-private:
-    bool dequeue_unsafe(T& result) {
-        Node* head_node = head.load();
-        if (!head_node) {
-            return false; // 队列已被析构
-        }
-
-        Node* next = head_node->next.load();
-        if (next == nullptr) {
-            return false; // 队列为空
-        }
-
-        T* data_ptr = next->data.exchange(nullptr);
-        if (data_ptr == nullptr) {
-            return false; // 数据已被其他线程取走
-        }
-
-        result = *data_ptr;
-        data_ptr->~T(); // 显式调用析构函数
-
-        // 尝试更新head，如果失败也不要紧，下次调用会重试
-        Node* expected = head_node;
-        if (head.compare_exchange_weak(expected, next)) {
-            head_node->~Node(); // 显式调用析构函数
-            
-            // 计算包含Node的完整块地址并释放
-            // 现在所有节点（包括虚拟节点）都使用NodeWithData分配，所以这是安全的
-            NodeWithData* block = reinterpret_cast<NodeWithData*>(
-                reinterpret_cast<char*>(head_node) - offsetof(NodeWithData, node));
-            pool_free(block); // 释放整个块
-        }
-
-        return true;
-    }
-
-public:
 
     bool empty() const {
-        Node* head_node = head.load();
-        return head_node->next.load() == nullptr;
+        Node* head_node = head.load(std::memory_order_acquire);
+        if (!head_node) return true;
+        return head_node->next.load(std::memory_order_acquire) == nullptr;
     }
 
-    // 估算队列大小（注意：这只是估计值，可能不准确）
+    // 估算队列大小（仅近似，多线程并发下不保证精确）
     size_t size_estimate() const {
-        if (destroyed.load(std::memory_order_acquire)) {
-            return 0;
-        }
-        
+        if (destroyed.load(std::memory_order_acquire)) return 0;
         size_t count = 0;
-        Node* current = head.load();
+        Node* current = head.load(std::memory_order_acquire);
         if (current) {
-            current = current->next.load(); // 跳过虚拟头节点
-            while (current && count < 10000) { // 限制最大计数以避免长时间循环
-                current = current->next.load();
-                count++;
+            current = current->next.load(std::memory_order_acquire);
+            while (current && count < 10000) {
+                current = current->next.load(std::memory_order_acquire);
+                ++count;
             }
         }
         return count;
     }
 };
 
-// 无锁栈实现 (Treiber Stack) - 优化内存分配
+// =====================================================================
+// 无锁栈 (Treiber Stack) — 修复版
+//
+// 原实现：pop 成功后立即 pool_free，但其他 pop 中途读取了该节点
+// 会触发 UAF；ABA 也存在（节点 push 回来后 cmpxchg 误判）。
+// 修复：使用 hazard pointer 保护 head，并在 pop 成功后 retire 节点
+// 而非立即释放。
+// =====================================================================
+
 template<typename T>
 class Stack {
 private:
     struct Node {
         T data;
         Node* next;
-
-        Node(T&& item) : data(std::move(item)), next(nullptr) {}
+        explicit Node(T&& item) : data(std::move(item)), next(nullptr) {}
     };
 
     alignas(64) std::atomic<Node*> head{nullptr};
 
+    static void reclaim_node(void* p) noexcept {
+        if (!p) return;
+        Node* n = static_cast<Node*>(p);
+        n->~Node();
+        pool_free(n);
+    }
+
 public:
     ~Stack() {
-        while (Node* old_head = head.load()) {
-            head.store(old_head->next);
-            old_head->~Node(); // 显式调用析构函数
-            pool_free(old_head); // 使用内存池释放
+        // 单线程 drain
+        Node* h = head.load(std::memory_order_acquire);
+        while (h) {
+            Node* next = h->next;
+            h->~Node();
+            pool_free(h);
+            h = next;
         }
+        head.store(nullptr, std::memory_order_release);
+        // 尽力回收 retired
+        flowcoro::smr::HazardManager::instance().drain_all();
     }
 
     void push(T item) {
-        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node))); // 使用内存池
-        new(new_node) Node(std::move(item)); // placement new
-        new_node->next = head.load();
-
-        while (!head.compare_exchange_weak(new_node->next, new_node)) {
-            // 重试
-        }
+        Node* new_node = static_cast<Node*>(pool_malloc(sizeof(Node)));
+        new(new_node) Node(std::move(item));
+        Node* old_head = head.load(std::memory_order_acquire);
+        do {
+            new_node->next = old_head;
+        } while (!head.compare_exchange_weak(
+            old_head, new_node,
+            std::memory_order_release, std::memory_order_acquire));
     }
 
     bool pop(T& result) {
-        Node* old_head = head.load();
+        flowcoro::smr::HazardGuard h0(0);
+        while (true) {
+            Node* old_head = head.load(std::memory_order_acquire);
+            if (!old_head) return false;
+            h0.protect(old_head);
+            // 重新确认 head 未变（防止读到已被释放的节点）
+            if (head.load(std::memory_order_acquire) != old_head) continue;
 
-        while (old_head && !head.compare_exchange_weak(old_head, old_head->next)) {
-            // 重试
+            // 读 next 必须在 hazard 保护下完成
+            Node* next = old_head->next;
+            if (head.compare_exchange_weak(old_head, next,
+                    std::memory_order_acquire, std::memory_order_relaxed)) {
+                // CAS 成功，独占 old_head
+                result = std::move(old_head->data);
+                old_head->~Node();
+                // 延迟回收：可能还有并发 pop 正在读 old_head
+                flowcoro::smr::HazardManager::instance().retire(
+                    old_head, &Stack::reclaim_node);
+                return true;
+            }
+            // CAS 失败，重试
         }
-
-        if (old_head) {
-            result = std::move(old_head->data);
-            old_head->~Node(); // 显式调用析构函数
-            pool_free(old_head); // 使用内存池释放
-            return true;
-        }
-
-        return false;
     }
 
     bool empty() const {
-        return head.load() == nullptr;
+        return head.load(std::memory_order_acquire) == nullptr;
     }
 };
 
-// 无锁环形缓冲区 (SPSC Ring Buffer)
+// 无锁环形缓冲区 (SPSC Ring Buffer) — 未改动，原实现正确
 template<typename T, size_t Size>
 class RingBuffer {
 private:
@@ -277,7 +377,7 @@ public:
     }
 };
 
-// 高性能原子计数器
+// 高性能原子计数器 — 未改动
 class AtomicCounter {
 private:
     alignas(64) std::atomic<size_t> count_{0};
@@ -300,5 +400,4 @@ public:
     }
 };
 
-// 静态成员定义
 } // namespace lockfree

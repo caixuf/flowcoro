@@ -45,6 +45,12 @@
 #include "flowcoro/task_allocator.h"
 #include "flowcoro/coroutine_task.h"
 
+// 并发原语：取消/超时/可组合 awaitable
+#include "flowcoro/hazard_pointer.h"
+#include "flowcoro/cancellation.h"
+#include "flowcoro/timeout.h"
+#include "flowcoro/when_any.h"
+
 /**
  * @namespace flowcoro
  * @brief FlowCoro库的主命名空间

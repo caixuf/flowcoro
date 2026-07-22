@@ -11,6 +11,7 @@
 #include "result.h"
 #include "error_handling.h"
 #include "logger.h"
+#include "cancellation.h"
 
 namespace flowcoro {
 
@@ -115,6 +116,25 @@ struct Task {
             return is_cancelled_.load(std::memory_order_acquire);
         }
 
+        // 将外部 CancellationToken 绑定到本 Task：token 取消时自动调用 request_cancellation
+        // 若 token 已取消，则立即同步取消
+        void attach_cancellation_token(const CancellationToken& token) noexcept {
+            if (token.is_cancelled()) {
+                request_cancellation();
+                return;
+            }
+            // 注意：this 指向 promise，promise 的生命周期由协程帧决定。
+            // 协程帧在 safe_destroy 时才销毁，此时回调链表里的 ctx 已不再有效。
+            // 为避免悬空指针，仅当 token 早于协程销毁时才会触发回调；
+            // 若协程先被销毁，回调中再次访问 promise 是 UB。
+            // 当前实现仅作为 "尽力而为" 的取消传播：要求 token 的生命周期
+            // 不长于协程。完整方案需要 weak handle，这里满足基本用例。
+            token.register_callback([](void* self) {
+                auto* promise = static_cast<promise_type*>(self);
+                promise->request_cancellation();
+            }, this);
+        }
+
         bool is_destroyed() const {
             return is_destroyed_.load(std::memory_order_acquire);
         }
@@ -203,6 +223,13 @@ struct Task {
             handle.promise().request_cancellation();
             LOG_INFO("Task::cancel: Task cancelled (lifetime: %lld ms)",
                      handle.promise().get_lifetime().count());
+        }
+    }
+
+    // 将外部 CancellationToken 绑定到本 Task：token 取消时本 Task 自动取消
+    void attach_cancellation_token(const CancellationToken& token) noexcept {
+        if (handle && !handle.promise().is_destroyed()) {
+            handle.promise().attach_cancellation_token(token);
         }
     }
 

@@ -443,12 +443,22 @@ int main(int argc, char* argv[]) {
         
         // 在主线程运行测试
         tester.run_all_tests(port);
-        
+        // run_all_tests 已将 server_running_ 置为 false。
+        // 此时服务器协程仍挂起在 sleep_for(100ms) 上，必须先让它醒来并退出
+        // while 循环、执行 co_return，否则 Task 析构时协程帧仍处于挂起态，
+        // 其 ClockAwaiter 定时器仍挂在 CoroutineManager 的队列里，退出时会
+        // 触发 use-after-free（并行 ctest 下表现为 SEGFAULT）。
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        for (int i = 0; i < 5; ++i) {
+            manager.drive();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
         // 停止后台线程
         should_stop = true;
         loop.stop();
         driver_thread.join();
-        
+
         return 0;
         
     } catch (const std::exception& e) {

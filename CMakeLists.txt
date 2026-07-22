@@ -84,7 +84,8 @@ option(FLOWCORO_BUILD_TESTS "Build tests" ON)
 option(FLOWCORO_BUILD_EXAMPLES "Build examples" ON)
 option(FLOWCORO_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(FLOWCORO_BUILD_DOCS "Build documentation" OFF)
-option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers" OFF)
+option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers (address+undefined)" OFF)
+option(FLOWCORO_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with ASAN)" OFF)
 option(FLOWCORO_BUILD_V3 "Build FlowCoro 3.0 architecture" ON)
 option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
 
@@ -264,14 +265,48 @@ else()
 endif()
 
 # Sanitizers支持
-if(FLOWCORO_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+# - FLOWCORO_ENABLE_SANITIZERS: AddressSanitizer + UndefinedBehaviorSanitizer
+# - FLOWCORO_ENABLE_TSAN:        ThreadSanitizer（与 ASAN 互斥，CI 用于检测数据竞争）
+#
+# TSAN 不能与 ASAN 同时启用；若两者都被开启，TSAN 优先（用于线程安全回归测试）。
+if(FLOWCORO_ENABLE_TSAN)
+    if(FLOWCORO_ENABLE_SANITIZERS)
+        message(WARNING "FLOWCORO_ENABLE_TSAN and FLOWCORO_ENABLE_SANITIZERS are both ON; "
+                         "ASAN/UBSAN will be suppressed in favor of TSAN.")
+    endif()
+    message(STATUS "FlowCoro: ThreadSanitizer enabled (-fsanitize=thread)")
+    target_compile_options(flowcoro INTERFACE
+        -fsanitize=thread
+        -fno-sanitize-recover=thread
+        -g
+        -O1
+        $<$<NOT:$<CONFIG:Release>>:-fno-omit-frame-pointer>
+    )
+    target_compile_options(flowcoro_net PUBLIC
+        -fsanitize=thread
+        -fno-sanitize-recover=thread
+        -g
+        -O1
+        $<$<NOT:$<CONFIG:Release>>:-fno-omit-frame-pointer>
+    )
+    target_link_options(flowcoro INTERFACE -fsanitize=thread)
+    target_link_options(flowcoro_net PUBLIC  -fsanitize=thread)
+elseif(FLOWCORO_ENABLE_SANITIZERS)
+    message(STATUS "FlowCoro: ASAN+UBSAN enabled (-fsanitize=address,undefined)")
     target_compile_options(flowcoro INTERFACE
         -fsanitize=address,undefined
         -fno-sanitize-recover=all
+        -g
+        $<$<NOT:$<CONFIG:Release>>:-fno-omit-frame-pointer>
     )
-    target_link_options(flowcoro INTERFACE
+    target_compile_options(flowcoro_net PUBLIC
         -fsanitize=address,undefined
+        -fno-sanitize-recover=all
+        -g
+        $<$<NOT:$<CONFIG:Release>>:-fno-omit-frame-pointer>
     )
+    target_link_options(flowcoro INTERFACE -fsanitize=address,undefined)
+    target_link_options(flowcoro_net PUBLIC  -fsanitize=address,undefined)
 endif()
 
 # =============================================================================

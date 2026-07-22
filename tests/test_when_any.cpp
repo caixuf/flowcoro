@@ -78,7 +78,7 @@ TEST_CASE(when_any_race) {
     auto test_coro = []() -> Task<void> {
         auto create_racing_task = [](int id, int computation_size) -> Task<int> {
             // 根据 computation_size 进行不同强度的计算
-            volatile int sum = 0;
+            volatile long long sum = 0;
             for (int i = 0; i < computation_size; ++i) {
                 sum += i;
             }
