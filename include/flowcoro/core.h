@@ -45,7 +45,7 @@ class HttpRequest;
 #include "awaiter.h"                // 各种awaiter实现
 #include "coroutine_scope.h"        // RAII协程范围管理
 #include "network_request.h"        // 网络请求抽象接口
-#include "coro_task.h"              // CoroTask实现
+#include "coro_task.h"              // LazyTask实现 (CoroTask 别名兼容)
 #include "task.h"                   // Task模板及特化
 #include "async_promise.h"          // 异步Promise实现
 #include "when_any.h"               // when_any/when_all实现

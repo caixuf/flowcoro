@@ -39,7 +39,13 @@ private:
     SmartLoadBalancer load_balancer_;
     
 public:
-    CoroutineManager() = default;
+    CoroutineManager() {
+        // FC-5: 启动专用定时器线程，让 timer 由后台驱动，
+        // 使 get() 不再需要 drive() 全局 manager 来推进 timer。
+        // 此前 start_timer_thread() 从未被调用，timer 完全依赖
+        // drive()->process_timer_queue，导致 get() 必须自旋 drive 全局。
+        start_timer_thread();
+    }
     
     // 禁止拷贝和移动
     CoroutineManager(const CoroutineManager&) = delete;
@@ -354,8 +360,13 @@ private:
                 continue;
             }
             auto now = std::chrono::steady_clock::now();
-            const auto& top = timer_queue_.top();
-            if (top.when <= now)
+            // 必须按值拷贝 next_deadline：wait_until 期间会释放 timer_mutex_，
+            // 其他线程 add_timer_enhanced 向 priority_queue（底层 vector）push
+            // 可能触发 vector 重分配，使 top() 返回的引用悬垂。若将悬垂引用
+            // 作为 abs_time 传给 wait_until，会读取到垃圾值 → 可能永久等待，
+            // 导致 timer 永不触发（FC-5c 复现的关键 bug）。
+            auto next_deadline = timer_queue_.top().when;
+            if (next_deadline <= now)
             {
                 // 批量处理到期的定时器
                 std::vector<TimerEntry> expired;
@@ -380,18 +391,26 @@ private:
                 // 批量恢复协程（通过线程池异步执行）
                 for (auto h : to_resume)
                 {
-                    if (h && !h.done())
+                    if (h)
                     {
-                        // 使用现有的协程池恢复
+                        // FC-5: 不在此处跨线程调用 h.done()（读取协程帧内部
+                        // __resume_index 是 data race）。schedule_coroutine_enhanced
+                        // 内部已做有效性处理，直接交给协程池即可。
                         schedule_coroutine_enhanced(h);
                     }
                 }
             }
             else
             {
-                // 精确等待到下一个定时器时间
-                timer_thread_cv_.wait_until(lock, top.when, [this]
-                                            { return timer_thread_stop_.load(std::memory_order_acquire); });
+                // 精确等待到下一个定时器时间。
+                // predicate 同时检查「队列顶部出现了比 next_deadline 更早的定时器」：
+                // 当新增更短 deadline 的 timer 时，及时唤醒重新计算等待，避免延迟。
+                timer_thread_cv_.wait_until(lock, next_deadline, [this, &next_deadline]
+                {
+                    return timer_thread_stop_.load(std::memory_order_acquire)
+                           || timer_queue_.empty()
+                           || timer_queue_.top().when < next_deadline;
+                });
             }
         }
         LOG_INFO("Dedicated timer thread stopped");

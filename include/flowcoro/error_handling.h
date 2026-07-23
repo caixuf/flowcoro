@@ -16,6 +16,7 @@ enum class FlowCoroError {
     ResourceExhausted,
     InvalidOperation,
     TaskCancelled,
+    OperationTimedOut,
     UnknownError
 };
 
@@ -46,6 +47,7 @@ private:
             case FlowCoroError::ResourceExhausted: return "ResourceExhausted";
             case FlowCoroError::InvalidOperation: return "InvalidOperation";
             case FlowCoroError::TaskCancelled: return "TaskCancelled";
+            case FlowCoroError::OperationTimedOut: return "OperationTimedOut";
             case FlowCoroError::UnknownError: return "UnknownError";
             default: return "Unknown";
         }

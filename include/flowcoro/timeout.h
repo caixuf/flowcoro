@@ -56,7 +56,6 @@ Task<void> make_timeout_task(std::chrono::duration<Rep, Period> timeout) {
 template<typename T, typename Rep, typename Period>
 Task<T> with_timeout(Task<T> task, std::chrono::duration<Rep, Period> timeout) {
     auto timeout_task = detail::make_timeout_task(timeout);
-
     // 用 when_any 让两者 race
     auto result = co_await when_any(std::move(task), std::move(timeout_task));
 

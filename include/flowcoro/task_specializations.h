@@ -1,5 +1,14 @@
 #pragma once
 // Task特化版本 - 分离以减少编译依赖
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+#include <stdexcept>
+#include "coroutine_manager.h"
+#include "logger.h"
+#include "result.h"
+#include "error_handling.h"
+#include "task.h"
 
 namespace flowcoro {
 
@@ -14,6 +23,9 @@ struct Task<Result<T, E>> {
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::atomic<bool> completed_{false};
+        // FC-5: 完成通知，让 get() 用 cv 等待自身完成，不再 drive() 全局。
+        mutable std::mutex completion_mtx_;
+        std::condition_variable completion_cv_;
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -32,19 +44,31 @@ struct Task<Result<T, E>> {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_never initial_suspend() noexcept { return {}; }
-        // 用自定义 final_suspend 设置 completed_ 标志
+
+        // FC-5: 自定义 final_suspend——在 await_ready 中 release 置位 completed_
+        // 并 notify cv，让 get() 的 cv 等待立即唤醒（不再 drive() 全局 manager）。
+        // 用 completed_ 替代非线程安全的 handle.done() 跨线程检测完成。
         auto final_suspend() noexcept {
             struct final_awaiter {
-                bool await_ready() const noexcept { return false; }
-                std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) const noexcept {
+                promise_type* promise;
+
+                bool await_ready() const noexcept {
+                    promise->completed_.store(true, std::memory_order_release);
+                    // FC-5: notify 让 get() 的 cv 等待立即唤醒。
+                    {
+                        std::lock_guard<std::mutex> lock(promise->completion_mtx_);
+                    }
+                    promise->completion_cv_.notify_all();
+                    return false;
+                }
+
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
                     return std::noop_coroutine();
                 }
+
                 void await_resume() const noexcept {}
             };
-            // 在 final_suspend 入口设置 completed_（release），让 get()
-            // 的 load(acquire) 能观察到完成状态。
-            completed_.store(true, std::memory_order_release);
-            return final_awaiter{};
+            return final_awaiter{this};
         }
 
         void return_value(Result<T, E> r) noexcept {
@@ -72,6 +96,11 @@ struct Task<Result<T, E>> {
         // 快速状态管理方法 - 去除锁
         void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
+            // FC-5: notify 让 get() 的 cv 等待（条件含 is_cancelled）立即唤醒。
+            {
+                std::lock_guard<std::mutex> lock(completion_mtx_);
+            }
+            completion_cv_.notify_all();
         }
 
         bool is_cancelled() const {
@@ -187,7 +216,9 @@ struct Task<Result<T, E>> {
     }
 
     // 获取结果
-    Result<T, E> get() {
+    // FC-5: 用 cv 等待自身完成（不再 drive() 全局 manager）。
+    // FC-4: 超时恒返回 err(OperationTimedOut)，不再无限自旋。
+    Result<T, E> get(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
         if (!handle) {
             if constexpr (std::is_same_v<E, ErrorInfo>) {
                 return err(ErrorInfo(FlowCoroError::InvalidOperation, "Invalid task handle"));
@@ -196,8 +227,41 @@ struct Task<Result<T, E>> {
             }
         }
 
+        if (handle.promise().is_destroyed()) {
+            if constexpr (std::is_same_v<E, ErrorInfo>) {
+                return err(ErrorInfo(FlowCoroError::CoroutineDestroyed, "Task was destroyed"));
+            } else {
+                return err(E{});
+            }
+        }
+
+        // 已完成或已取消则跳过等待
+        if (!handle.promise().completed_.load(std::memory_order_acquire)
+            && !handle.promise().is_cancelled()) {
+            // FC-5: 用 cv 等待自身完成，不再 drive() 全局 manager。
+            // timer 由 dedicated_timer_thread 后台驱动，CoroutinePool worker
+            // 推进协程，final_suspend notify 此 cv。
+            std::unique_lock<std::mutex> lock(handle.promise().completion_mtx_);
+            handle.promise().completion_cv_.wait_for(lock, timeout, [&] {
+                return handle.promise().completed_.load(std::memory_order_acquire)
+                    || handle.promise().is_cancelled();
+            });
+
+            // FC-4: 超时返回 err(OperationTimedOut)
+            if (!handle.promise().completed_.load(std::memory_order_acquire)
+                && !handle.promise().is_cancelled()) {
+                LOG_ERROR("Task<Result>::get: Timeout after %lld ms",
+                          static_cast<long long>(timeout.count()));
+                if constexpr (std::is_same_v<E, ErrorInfo>) {
+                    return err(ErrorInfo(FlowCoroError::OperationTimedOut, "Task::get timed out"));
+                } else {
+                    return err(E{});
+                }
+            }
+        }
+
         // 检查取消状态
-        if (is_cancelled()) {
+        if (handle.promise().is_cancelled()) {
             if constexpr (std::is_same_v<E, ErrorInfo>) {
                 return err(ErrorInfo(FlowCoroError::TaskCancelled, "Task was cancelled"));
             } else {
@@ -205,19 +269,8 @@ struct Task<Result<T, E>> {
             }
         }
 
-        // 等待完成 - 快速自适应等待
-        while (!handle.done()) {
-            // 快速检查几次
-            for (int i = 0; i < 100 && !handle.done(); ++i) {
-                std::this_thread::yield();
-            }
-            // 如果还没完成，短暂休眠
-            if (!handle.done()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(1));
-            }
-        }
-
-        // 获取结果
+        // 获取结果（Result 特化的 unhandled_exception 已将异常转换为 err，
+        // 这里直接取 result，不再 rethrow）
         auto result = handle.promise().safe_get_result();
         if (!result.has_value()) {
             if constexpr (std::is_same_v<E, ErrorInfo>) {
@@ -287,6 +340,10 @@ struct Task<void> {
         // 让 get() 可以用 load(acquire) 代替 handle.done() 跨线程检测完成，
         // 规避 GCC coroutine_handle::done() 非线程安全的问题。
         std::atomic<bool> completed_{false};
+        // FC-5: 完成通知，让 get() 用 cv 等待自身完成，不再 drive() 全局。
+        // mutable: 在 const final_suspend::await_ready 中加锁。
+        mutable std::mutex completion_mtx_;
+        std::condition_variable completion_cv_;
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -329,6 +386,11 @@ struct Task<void> {
                     // 标记协程已完成（release），让 get() 的 load(acquire)
                     // 能观察到完成状态，无需调用 handle.done()。
                     promise->completed_.store(true, std::memory_order_release);
+                    // FC-5: notify 让 get() 的 cv 等待立即唤醒。
+                    {
+                        std::lock_guard<std::mutex> lock(promise->completion_mtx_);
+                    }
+                    promise->completion_cv_.notify_all();
                     return false;
                 }
 
@@ -364,6 +426,11 @@ struct Task<void> {
         // 快速取消支持 - 去除锁
         void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
+            // FC-5: notify 让 get() 的 cv 等待（条件含 is_cancelled）立即唤醒。
+            {
+                std::lock_guard<std::mutex> lock(completion_mtx_);
+            }
+            completion_cv_.notify_all();
         }
 
         bool is_cancelled() const {
@@ -497,61 +564,41 @@ struct Task<void> {
         return is_cancelled() || handle.promise().has_error;
     }
 
-    void get() {
+    // FC-5: 用 cv 等待自身完成（不再 drive() 全局 manager）。
+    // FC-4: 超时恒抛 TaskTimeoutException，不再静默 return。
+    void get(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
         // 增强版：安全状态检查
         if (!handle) {
             LOG_ERROR("Task<void>::get: Invalid handle");
-            return;
+            throw std::runtime_error("Task<void>::get called on invalid handle");
         }
 
         // 检查是否已销毁
         if (handle.promise().is_destroyed()) {
             LOG_ERROR("Task<void>::get: Task already destroyed");
-            return;
+            throw std::runtime_error("Task<void>::get called on destroyed task");
         }
 
         // 关键修复：先检查是否已完成（suspend_never 情况下协程会同步执行直到挂起）
         // 用 is_completed() 代替 handle.done()：前者用原子 load(acquire)，
         // 后者读取协程帧内部 __resume_index，跨线程不安全（TSAN 报警）。
-        if (handle.promise().is_completed()) {
-            // 重新抛出异常（如果有）
-            handle.promise().rethrow_if_exception();
-            return;
-        }
+        if (!handle.promise().is_completed()
+            && !handle.promise().is_cancelled()) {
+            // FC-5: 用 cv 等待自身完成，不再 drive() 全局 manager。
+            // timer 由 dedicated_timer_thread 后台驱动，CoroutinePool worker
+            // 推进协程，final_suspend notify 此 cv。
+            std::unique_lock<std::mutex> lock(handle.promise().completion_mtx_);
+            handle.promise().completion_cv_.wait_for(lock, timeout, [&] {
+                return handle.promise().is_completed()
+                    || handle.promise().is_cancelled();
+            });
 
-        // 只有在未完成时才进入调度逻辑
-        if (!handle.promise().is_cancelled()) {
-            auto& manager = CoroutineManager::get_instance();
-            
-            // 🔧 修复：不直接调度外层句柄，通过驱动管理器让子任务完成并触发延续链
-            // 🔧 Fix: do not schedule the outer handle directly; drive the manager so sub-tasks
-            //         complete via their natural mechanisms (timers/continuations) and
-            //         eventually resume this handle.
-            auto start_time = std::chrono::steady_clock::now();
-            const auto timeout = std::chrono::seconds(5);
-            
-            auto wait_time = std::chrono::microseconds(1);
-            const auto max_wait = std::chrono::microseconds(100);
-            size_t spin_count = 0;
-            const size_t max_spins = 100;
-            
-            while (!handle.promise().is_completed() && !handle.promise().is_cancelled()) {
-                // 超时检查
-                auto elapsed = std::chrono::steady_clock::now() - start_time;
-                if (elapsed > timeout) {
-                    LOG_ERROR("Task<void>::get: Timeout after 5 seconds");
-                    return;
-                }
-                
-                manager.drive();
-                
-                if (spin_count < max_spins) {
-                    ++spin_count;
-                    std::this_thread::yield();
-                } else {
-                    std::this_thread::sleep_for(wait_time);
-                    wait_time = std::min(wait_time * 2, max_wait);
-                }
+            // FC-4: 超时恒抛 TaskTimeoutException
+            if (!handle.promise().is_completed()
+                && !handle.promise().is_cancelled()) {
+                LOG_ERROR("Task<void>::get: Timeout after %lld ms",
+                          static_cast<long long>(timeout.count()));
+                throw TaskTimeoutException("Task<void>::get timed out");
             }
         }
 
@@ -652,6 +699,10 @@ struct Task<std::unique_ptr<T>> {
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
         std::atomic<bool> completed_{false};
+        // FC-5: 完成通知，让 get() 用 cv 等待自身完成，不再 drive() 全局。
+        // mutable: 在 const final_suspend::await_ready 中加锁。
+        mutable std::mutex completion_mtx_;
+        std::condition_variable completion_cv_;
 #ifndef NDEBUG
         std::chrono::steady_clock::time_point creation_time_;
 #endif
@@ -690,6 +741,11 @@ struct Task<std::unique_ptr<T>> {
 
                 bool await_ready() const noexcept {
                     promise->completed_.store(true, std::memory_order_release);
+                    // FC-5: notify 让 get() 的 cv 等待立即唤醒。
+                    {
+                        std::lock_guard<std::mutex> lock(promise->completion_mtx_);
+                    }
+                    promise->completion_cv_.notify_all();
                     return false;
                 }
 
@@ -723,6 +779,11 @@ struct Task<std::unique_ptr<T>> {
 
         void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
+            // FC-5: notify 让 get() 的 cv 等待（条件含 is_cancelled）立即唤醒。
+            {
+                std::lock_guard<std::mutex> lock(completion_mtx_);
+            }
+            completion_cv_.notify_all();
         }
 
         bool is_cancelled() const {
@@ -846,31 +907,35 @@ struct Task<std::unique_ptr<T>> {
         }
     }
 
-    std::unique_ptr<T> get() {
+    // FC-5: 用 cv 等待自身完成（不再 drive() 全局 manager）。
+    // FC-4: 超时恒抛 TaskTimeoutException，不再无限自旋。
+    std::unique_ptr<T> get(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
         if (!handle) {
             LOG_ERROR("Task<unique_ptr>::get: Invalid handle");
-            return nullptr;
+            throw std::runtime_error("Task<unique_ptr>::get called on invalid handle");
         }
 
         if (handle.promise().is_destroyed()) {
             LOG_ERROR("Task<unique_ptr>::get: Task already destroyed");
-            return nullptr;
+            throw std::runtime_error("Task<unique_ptr>::get called on destroyed task");
         }
 
-        if (!handle.done() && !handle.promise().is_cancelled()) {
-            auto& manager = CoroutineManager::get_instance();
-            
-            while (!handle.promise().is_completed() && !handle.promise().is_cancelled()) {
-                manager.drive();
-                // 快速检查几次
-                for (int i = 0; i < 100 && !handle.done() && !handle.promise().is_cancelled(); ++i) {
-                    manager.drive();
-                    std::this_thread::yield();
-                }
-                // 如果还没完成，短暂休眠
-                if (!handle.done() && !handle.promise().is_cancelled()) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(1));
-                }
+        if (!handle.promise().is_completed() && !handle.promise().is_cancelled()) {
+            // FC-5: 用 cv 等待自身完成，不再 drive() 全局 manager。
+            // timer 由 dedicated_timer_thread 后台驱动，CoroutinePool worker
+            // 推进协程，final_suspend notify 此 cv。
+            std::unique_lock<std::mutex> lock(handle.promise().completion_mtx_);
+            handle.promise().completion_cv_.wait_for(lock, timeout, [&] {
+                return handle.promise().is_completed()
+                    || handle.promise().is_cancelled();
+            });
+
+            // FC-4: 超时恒抛 TaskTimeoutException
+            if (!handle.promise().is_completed()
+                && !handle.promise().is_cancelled()) {
+                LOG_ERROR("Task<unique_ptr>::get: Timeout after %lld ms",
+                          static_cast<long long>(timeout.count()));
+                throw TaskTimeoutException("Task<unique_ptr>::get timed out");
             }
         }
 

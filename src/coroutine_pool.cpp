@@ -214,32 +214,34 @@ public:
     }
     
     void schedule_coroutine(std::coroutine_handle<> handle) {
-        if (!handle || handle.done() || stop_flag_.load()) return;
-        
+        if (!handle || handle.done() || stop_flag_.load()) {
+            return;
+        }
+
         // 增强的安全检查
         void* addr = handle.address();
         if (!addr) return;
-        
+
         // 检查地址合理性
         uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
         if (addr_val < 0x1000 || addr_val == 0xffffffffffffffff) {
             return;
         }
-        
+
         total_coroutines_.fetch_add(1, std::memory_order_relaxed);
-        
+
         // 使用无锁队列添加协程
         coroutine_queue_.enqueue(handle);
-        
+
         // 精确更新队列大小
         queue_size_.fetch_add(1, std::memory_order_relaxed);
-        
+
         // 唤醒等待的worker线程
         {
             std::lock_guard<std::mutex> lock(cv_mutex_);
         }
         cv_.notify_one();
-        
+
         // 实时更新负载均衡器的队列大小信息
         auto& manager = flowcoro::CoroutineManager::get_instance();
         auto& load_balancer = manager.get_load_balancer();
@@ -392,14 +394,16 @@ public:
 
     // 协程调度 - 使用智能负载均衡分配到调度器
     void schedule_coroutine(std::coroutine_handle<> handle) {
-        if (!handle || handle.done() || stop_flag_.load()) return;
+        if (!handle || handle.done() || stop_flag_.load()) {
+            return;
+        }
 
         // 使用智能负载均衡：选择最优调度器
         auto& manager = flowcoro::CoroutineManager::get_instance();
         auto& load_balancer = manager.get_load_balancer();
-        
+
         size_t scheduler_index = load_balancer.select_scheduler();
-        
+
         // 分配给对应的调度器
         schedulers_[scheduler_index]->schedule_coroutine(handle);
     }

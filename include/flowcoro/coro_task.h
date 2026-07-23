@@ -11,15 +11,15 @@ class HttpRequest;
 
 namespace flowcoro {
 
-struct CoroTask {
+struct LazyTask {
     struct promise_type {
         // Bug 修复3: 存储异常，以便在 await_resume() 中重新抛出
         std::exception_ptr exception_;
         // 用于续体链式唤醒的 continuation（修复 Bug 1 & 2）
         std::coroutine_handle<> continuation;
 
-        CoroTask get_return_object() {
-            return CoroTask{std::coroutine_handle<promise_type>::from_promise(*this)};
+        LazyTask get_return_object() {
+            return LazyTask{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_always initial_suspend() noexcept { return {}; }
 
@@ -39,15 +39,15 @@ struct CoroTask {
         // Bug 修复3: 捕获异常而非静默丢弃
         void unhandled_exception() noexcept {
             exception_ = std::current_exception();
-            LOG_ERROR("Unhandled exception in CoroTask");
+            LOG_ERROR("Unhandled exception in LazyTask");
         }
     };
     std::coroutine_handle<promise_type> handle;
-    CoroTask(std::coroutine_handle<promise_type> h) : handle(h) {}
-    CoroTask(const CoroTask&) = delete;
-    CoroTask& operator=(const CoroTask&) = delete;
-    CoroTask(CoroTask&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
-    CoroTask& operator=(CoroTask&& other) noexcept {
+    LazyTask(std::coroutine_handle<promise_type> h) : handle(h) {}
+    LazyTask(const LazyTask&) = delete;
+    LazyTask& operator=(const LazyTask&) = delete;
+    LazyTask(LazyTask&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
+    LazyTask& operator=(LazyTask&& other) noexcept {
         if (this != &other) {
             if (handle) handle.destroy();
             handle = other.handle;
@@ -55,7 +55,7 @@ struct CoroTask {
         }
         return *this;
     }
-    ~CoroTask() { if (handle) handle.destroy(); }
+    ~LazyTask() { if (handle) handle.destroy(); }
 
     void resume() {
         // Bug 修复1: 使用 CoroutineManager::schedule_resume，它内部通过无锁队列保证
@@ -68,7 +68,7 @@ struct CoroTask {
     }
     bool done() const { return !handle || handle.done(); }
 
-    // 使CoroTask可等待
+    // 使LazyTask可等待
     bool await_ready() const {
         return done();
     }
@@ -141,5 +141,9 @@ struct CoroTask {
         return RequestTask(url);
     }
 };
+
+// FC-6: CoroTask 重命名为 LazyTask（更准确反映其 lazy 启动语义）。
+// 保留别名以向后兼容已有用户代码。
+using CoroTask = LazyTask;
 
 } // namespace flowcoro

@@ -75,13 +75,15 @@ Task<void> selector(TaskT task, std::shared_ptr<WhenAnyState> state) {
     try {
         if constexpr (std::is_void_v<R>) {
             co_await std::move(task);
-            if (state->try_win(Index)) {
+            bool won = state->try_win(Index);
+            if (won) {
                 state->result = std::any{};
                 state->resume_waiter();
             }
         } else {
             auto val = co_await std::move(task);
-            if (state->try_win(Index)) {
+            bool won = state->try_win(Index);
+            if (won) {
                 state->result = std::make_any<R>(std::move(val));
                 state->resume_waiter();
             }

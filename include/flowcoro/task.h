@@ -6,6 +6,8 @@
 #include <type_traits>
 #include <thread>
 #include <utility>
+#include <mutex>
+#include <condition_variable>
 #include "performance_monitor.h"
 #include "coroutine_manager.h"
 #include "result.h"
@@ -17,6 +19,14 @@ namespace flowcoro {
 
 // 前向声明
 class CoroutineManager;
+
+// FC-4: Task::get() 超时时抛出。不再按 is_default_constructible 分裂
+// （默认可构造静默返回 T{}、否则抛）。恒抛让调用方能区分「超时」与「结果为 0」。
+class TaskTimeoutException : public std::runtime_error {
+public:
+    TaskTimeoutException() : std::runtime_error("Task::get timed out") {}
+    explicit TaskTimeoutException(const char* msg) : std::runtime_error(msg) {}
+};
 
 // 支持返回值的Task - 整合SafeTask的RAII和异常安全特性
 template<typename T>
@@ -34,6 +44,11 @@ struct Task {
         // process_pending_tasks 只销毁 settled 的帧，避免销毁仍在运行的协程。
         // 比 done() 安全：不读协程帧内部的 __resume_index。
         std::atomic<bool> settled_{false};
+        // FC-5: 完成通知。final_suspend / request_cancellation 时 notify，
+        // 让 get() 用 cv 等待自身完成，不再 drive() 全局 manager。
+        // mutable: 在 const final_suspend::await_ready 中加锁。
+        mutable std::mutex completion_mtx_;
+        std::condition_variable completion_cv_;
 #ifndef NDEBUG
         // [Perf优化] creation_time_ 仅用于诊断（get_lifetime），Release 下关掉
         // callgrind: steady_clock::now() 每个 Task 构造都触发，2000 任务就是 2000 次 vDSO 调用
@@ -81,6 +96,11 @@ struct Task {
                     // FC-1: 协程已到达 final_suspend = 已完成。
                     // release 存储，让 process_pending_tasks 能安全 destroy。
                     promise->settled_.store(true, std::memory_order_release);
+                    // FC-5: notify 让 get() 的 cv 等待立即唤醒。
+                    {
+                        std::lock_guard<std::mutex> lock(promise->completion_mtx_);
+                    }
+                    promise->completion_cv_.notify_all();
                     return false;
                 }
                 
@@ -119,6 +139,12 @@ struct Task {
         // 快速的取消支持 - 去除锁
         void request_cancellation() noexcept {
             is_cancelled_.store(true, std::memory_order_release);
+            // FC-5: notify 让 get() 的 cv 等待（条件含 is_cancelled）立即唤醒，
+            // 不必等超时。
+            {
+                std::lock_guard<std::mutex> lock(completion_mtx_);
+            }
+            completion_cv_.notify_all();
         }
 
         bool is_cancelled() const {
@@ -329,84 +355,51 @@ struct Task {
         }
     }
 
-    T get() {
+    T get(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
         // 增强版：安全状态检查
         if (!handle) {
             LOG_ERROR("Task::get: Invalid handle");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                throw std::runtime_error("Task::get called on invalid handle with non-default-constructible type");
-            }
+            throw std::runtime_error("Task::get called on invalid handle");
         }
 
         // 检查是否已销毁
         if (handle.promise().is_destroyed()) {
             LOG_ERROR("Task::get: Task already destroyed");
-            if constexpr (std::is_default_constructible_v<T>) {
-                return T{};
-            } else {
-                LOG_ERROR("Cannot provide default value for non-default-constructible type");
-                throw std::runtime_error("Task::get called on destroyed task with non-default-constructible type");
+            throw std::runtime_error("Task::get called on destroyed task");
+        }
+
+        // 已完成则直接取值（suspend_never 情况下协程可能已同步执行至 final_suspend）
+        if (!handle.promise().settled_.load(std::memory_order_acquire)
+            && !handle.promise().is_cancelled()) {
+            // FC-5: 用 cv 等待自身完成，不再 drive() 全局 manager。
+            // timer 由 dedicated_timer_thread 后台驱动，CoroutinePool worker
+            // 推进协程，final_suspend notify 此 cv。多线程各自 get() 不再
+            // 并发驱动同一全局单例。
+            std::unique_lock<std::mutex> lock(handle.promise().completion_mtx_);
+            handle.promise().completion_cv_.wait_for(lock, timeout, [&] {
+                return handle.promise().settled_.load(std::memory_order_acquire)
+                    || handle.promise().is_cancelled();
+            });
+
+            // FC-4: 超时恒抛 TaskTimeoutException（不再按
+            // is_default_constructible 分裂返回默认值）。调用方可凭异常类型
+            // 区分「超时」与「结果为 0」。
+            if (!handle.promise().settled_.load(std::memory_order_acquire)
+                && !handle.promise().is_cancelled()) {
+                LOG_ERROR("Task::get: Timeout after %lld ms",
+                          static_cast<long long>(timeout.count()));
+                throw TaskTimeoutException("Task::get timed out");
             }
         }
 
-        // 关键修复：先检查是否已完成（suspend_never 情况下协程会同步执行直到挂起）
-        if (handle.done()) {
-            goto get_result;
-        }
-
-        // 只有在未完成时才进入调度逻辑
-        if (!handle.promise().is_cancelled()) {
-            auto& manager = CoroutineManager::get_instance();
-            
-            // 🔧 修复：不直接调度外层句柄，通过驱动管理器让子任务完成并触发延续链
-            // 直接调度外层句柄会导致在子任务尚未完成时提前调用 await_resume，引发异常
-            auto start_time = std::chrono::steady_clock::now();
-            const auto timeout = std::chrono::seconds(5); // 5秒超时
-            
-            auto wait_time = std::chrono::microseconds(1);
-            const auto max_wait = std::chrono::microseconds(100);
-            size_t spin_count = 0;
-            const size_t max_spins = 100;
-            
-            while (!handle.done() && !handle.promise().is_cancelled()) {
-                // 超时检查
-                auto elapsed = std::chrono::steady_clock::now() - start_time;
-                if (elapsed > timeout) {
-                    LOG_ERROR("Task::get: Timeout after 5 seconds");
-                    if constexpr (std::is_default_constructible_v<T>) {
-                        return T{};
-                    } else {
-                        throw std::runtime_error("Task::get timed out after 5 seconds");
-                    }
-                }
-                
-                // 驱动协程管理器
-                manager.drive();
-                
-                // 自适应等待策略
-                if (spin_count < max_spins) {
-                    ++spin_count;
-                    std::this_thread::yield();
-                } else {
-                    std::this_thread::sleep_for(wait_time);
-                    wait_time = std::min(wait_time * 2, max_wait);
-                }
-            }
-        }
-
-get_result:
         // 重新抛出异常（如果有）
         handle.promise().rethrow_if_exception();
 
         auto safe_value = handle.promise().safe_get_value();
         if (safe_value.has_value()) {
             return std::move(safe_value.value());
-        } else {
-            throw std::runtime_error("Task completed without setting a value");
         }
+        throw std::runtime_error("Task completed without setting a value");
     }
 
     // SafeTask兼容方法：获取结果（同步）

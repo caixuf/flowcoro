@@ -366,7 +366,7 @@ public:
 
     // 预热连接池 - 创建最小数量的连接
     Task<void> warm_up() {
-        std::vector<CoroTask> create_tasks;
+        std::vector<LazyTask> create_tasks;
 
         std::lock_guard<std::mutex> lock(pool_mutex_);
         size_t connections_to_create = config_.min_connections;
@@ -543,7 +543,7 @@ private:
         }
     }
 
-    CoroTask create_and_add_connection() {
+    LazyTask create_and_add_connection() {
         try {
             auto raw_conn = co_await driver_->create_connection(connection_string_);
             if (!raw_conn) {
