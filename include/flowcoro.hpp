@@ -51,6 +51,9 @@
 #include "flowcoro/timeout.h"
 #include "flowcoro/when_any.h"
 
+// 确定性实时执行模型：单线程亲和、协作式停止、两段式拆除
+#include "flowcoro/rt_executor.h"
+
 /**
  * @namespace flowcoro
  * @brief FlowCoro库的主命名空间
