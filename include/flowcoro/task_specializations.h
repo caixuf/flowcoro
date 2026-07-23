@@ -158,7 +158,7 @@ struct Task<Result<T, E>> {
 
     bool is_settled() const noexcept {
         if (!handle) return true;
-        return handle.done() || is_cancelled();
+        return handle.promise().completed_.load(std::memory_order_acquire) || is_cancelled();
     }
 
     bool is_fulfilled() const noexcept {
@@ -180,7 +180,8 @@ struct Task<Result<T, E>> {
             if (!handle.promise().is_destroyed()) {
                 handle.promise().is_destroyed_.store(true, std::memory_order_release);
             }
-            handle.destroy();
+            // 统一用延迟销毁（process_pending_tasks 无条件销毁，RAII 契约）。
+            CoroutineManager::get_instance().schedule_destroy(handle);
             handle = nullptr;
         }
     }
@@ -445,7 +446,7 @@ struct Task<void> {
             // 统一用延迟销毁：不在此处调用 handle.destroy() 或 handle.done()。
             // 原因：GCC 的 coroutine_handle::destroy()/done() 会读取协程帧
             // 内部的 __resume_index 字段，跨线程访问是 data race（TSAN 报警）。
-            // schedule_destroy 把帧入队，由 CoroutineManager 在安全线程处理。
+            // schedule_destroy 把帧入队，由 CoroutineManager 无条件销毁（RAII 契约）。
             CoroutineManager::get_instance().schedule_destroy(handle);
             handle = nullptr;
         }
@@ -483,7 +484,7 @@ struct Task<void> {
 
     bool is_settled() const noexcept {
         if (!handle) return true; // 无效句柄视为已结束
-        return handle.done() || is_cancelled();
+        return handle.promise().completed_.load(std::memory_order_acquire) || is_cancelled();
     }
 
     bool is_fulfilled() const noexcept {
@@ -817,7 +818,7 @@ struct Task<std::unique_ptr<T>> {
 
     bool is_settled() const noexcept {
         if (!handle) return true;
-        return handle.done() || is_cancelled();
+        return handle.promise().completed_.load(std::memory_order_acquire) || is_cancelled();
     }
 
     bool is_fulfilled() const noexcept {
@@ -839,6 +840,7 @@ struct Task<std::unique_ptr<T>> {
             }
 
             // 统一用延迟销毁，不调用 handle.done()/destroy()（跨线程不安全）
+            // process_pending_tasks 无条件销毁入队帧（RAII 契约）。
             manager.schedule_destroy(handle);
             handle = nullptr;
         }

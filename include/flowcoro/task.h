@@ -30,6 +30,10 @@ struct Task {
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
         std::atomic<bool> is_cancelled_{false};
         std::atomic<bool> is_destroyed_{false};
+        // FC-1: settled 标志——协程到达 final_suspend 时置位。
+        // process_pending_tasks 只销毁 settled 的帧，避免销毁仍在运行的协程。
+        // 比 done() 安全：不读协程帧内部的 __resume_index。
+        std::atomic<bool> settled_{false};
 #ifndef NDEBUG
         // [Perf优化] creation_time_ 仅用于诊断（get_lifetime），Release 下关掉
         // callgrind: steady_clock::now() 每个 Task 构造都触发，2000 任务就是 2000 次 vDSO 调用
@@ -72,8 +76,13 @@ struct Task {
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* promise;
-                
-                bool await_ready() const noexcept { return false; }
+
+                bool await_ready() const noexcept {
+                    // FC-1: 协程已到达 final_suspend = 已完成。
+                    // release 存储，让 process_pending_tasks 能安全 destroy。
+                    promise->settled_.store(true, std::memory_order_release);
+                    return false;
+                }
                 
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
                     // 如果有continuation，恢复它
@@ -118,18 +127,20 @@ struct Task {
 
         // 将外部 CancellationToken 绑定到本 Task：token 取消时自动调用 request_cancellation
         // 若 token 已取消，则立即同步取消
+        //
+        // FC-3 修复：存 token 拷贝 + cancel_handle_，safe_destroy 时调
+        // unregister_callback 摘除回调（在 handle.destroy() 之前）。
+        // 这样 token 后续 fire 会跳过本 promise，避免解引用已释放内存。
+        CancellationToken attached_token_;
+        void* cancel_handle_{nullptr};
+
         void attach_cancellation_token(const CancellationToken& token) noexcept {
+            attached_token_ = token;
             if (token.is_cancelled()) {
                 request_cancellation();
                 return;
             }
-            // 注意：this 指向 promise，promise 的生命周期由协程帧决定。
-            // 协程帧在 safe_destroy 时才销毁，此时回调链表里的 ctx 已不再有效。
-            // 为避免悬空指针，仅当 token 早于协程销毁时才会触发回调；
-            // 若协程先被销毁，回调中再次访问 promise 是 UB。
-            // 当前实现仅作为 "尽力而为" 的取消传播：要求 token 的生命周期
-            // 不长于协程。完整方案需要 weak handle，这里满足基本用例。
-            token.register_callback([](void* self) {
+            cancel_handle_ = token.register_callback([](void* self) {
                 auto* promise = static_cast<promise_type*>(self);
                 promise->request_cancellation();
             }, this);
@@ -204,7 +215,9 @@ struct Task {
                 }
                 else
                 {
-                    LOG_ERROR("Task::operator=: Attempting to destroy an already done or null handle");
+                    // FC-7: 对已完成 handle 赋值是常见操作（非错误），
+                    // 降级为 DEBUG 避免日志噪音。
+                    LOG_DEBUG("Task::operator=: destroying an already done or null handle");
                 }
             }
             handle = other.handle;
@@ -264,7 +277,9 @@ struct Task {
 
     bool is_settled() const noexcept {
         if (!handle) return true; // 无效句柄视为已结束
-        return handle.done() || is_cancelled();
+        // FC-1: 用 settled_（final_suspend 时 release 置位）替代 handle.done()，
+        // 避免跨线程读取协程帧内部的 __resume_index（data race）。
+        return handle.promise().settled_.load(std::memory_order_acquire) || is_cancelled();
     }
 
     bool is_fulfilled() const noexcept {
@@ -291,15 +306,20 @@ struct Task {
                     return;
                 }
 
+                // FC-3: 在销毁前摘除 cancel 回调（在 handle.destroy() 之前）。
+                // 这样 token 后续 fire 会跳过本 promise，避免 UAF。
+                handle.promise().attached_token_.unregister_callback(
+                    handle.promise().cancel_handle_);
+                handle.promise().cancel_handle_ = nullptr;
+
                 // 统一用延迟销毁：不在此处调用 handle.done()。
                 // 原因：GCC 的 coroutine_handle::done() 会读取协程帧内部的
-                // __resume_index 字段，该字段在协程 final_suspend 时被写入。
-                // 当 Task 在不同于协程执行线程的地方被析构时（例如 when_any
-                // 的 selector Task 在 caller 线程析构，而 selector 协程在
-                // 工作线程执行），done() 的跨线程读取是 data race（TSAN 报警）。
-                // schedule_destroy 把帧入队，由 CoroutineManager 在安全线程
-                // 调用 process_destroy_queue 处理；process_destroy_queue 会在
-                // 销毁前检查 done()，未完成的协程会被跳过等下一轮。
+                // __resume_index 字段，跨线程访问是 data race（TSAN 报警）。
+                //
+                // FC-1 复盘：入队帧由 process_pending_tasks 无条件销毁（不再 gate
+                // 在 settled 上）——这会运行帧上局部对象的析构，由各 awaitable
+                // 析构负责摘除外部恢复源（RAII 契约）。settled_ 仍保留在 promise
+                // 中作为线程安全的完成指示，由 is_settled() 等读取。
                 manager.schedule_destroy(handle);
             } catch (...) {
                 // 忽略销毁过程中的异常

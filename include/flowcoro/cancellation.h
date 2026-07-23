@@ -44,9 +44,17 @@ struct CancellationState {
     // 注册的回调，用于级联取消子 token / 唤醒等待者。
     // 这里使用简单的 spinlock-protected 链表，性能不是关键路径。
     // 若取消已发生，新注册的回调会立即同步执行。
+    //
+    // FC-3 修复：加 unregistered/fired 原子标志 + unregister_callback。
+    // 回调注册者（如 Task::promise_type）在析构前调 unregister，标记
+    // unregistered=true。fire 跳过 unregistered 的 node，不执行 fn，
+    // 避免解引用已释放的 promise。fire 不 delete node（unregister 可能
+    // 并发访问），node 由 ~CancellationState 统一清理。
     struct CallbackNode {
         void (*fn)(void*);
         void* ctx;
+        std::atomic<bool> unregistered{false};
+        std::atomic<bool> fired{false};
         CallbackNode* next{nullptr};
     };
 
@@ -54,8 +62,10 @@ struct CancellationState {
     // 自旋锁保护 callbacks 链表
     std::atomic<bool> lock{false};
 
-    void register_callback(void (*fn)(void*), void* ctx) {
-        auto* node = new CallbackNode{fn, ctx, nullptr};
+    // 返回 handle（node 指针）用于后续 unregister。
+    // 若已取消，同步执行后返回 nullptr（无需 unregister）。
+    void* register_callback(void (*fn)(void*), void* ctx) {
+        auto* node = new CallbackNode{fn, ctx, false, false, nullptr};
 
         bool expected = false;
         while (!lock.compare_exchange_weak(
@@ -69,12 +79,22 @@ struct CancellationState {
             // 已取消：立即同步执行回调，不入链
             fn(ctx);
             delete node;
-            return;
+            return nullptr;
         }
 
         node->next = callbacks_head;
         callbacks_head = node;
         lock.store(false, std::memory_order_release);
+        return node;
+    }
+
+    // FC-3: 标记回调为已注销。fire 会跳过 unregistered 的 node。
+    // 不 delete node（fire 可能并发遍历），node 由 ~CancellationState 清理。
+    // handle 为 nullptr（已同步执行）时是 no-op。
+    void unregister_callback(void* handle) {
+        if (!handle) return;
+        auto* node = static_cast<CallbackNode*>(handle);
+        node->unregistered.store(true, std::memory_order_release);
     }
 
     void fire_callbacks() {
@@ -84,13 +104,42 @@ struct CancellationState {
             expected = false;
         }
 
+        // 不清空链表——node 留着让 ~CancellationState 清理。
+        // 在锁内标记所有未 fired 且未 unregistered 的 node。
+        CallbackNode* cur = callbacks_head;
+        while (cur) {
+            if (!cur->fired.load(std::memory_order_acquire) &&
+                !cur->unregistered.load(std::memory_order_acquire)) {
+                cur->fired.store(true, std::memory_order_release);
+            }
+            cur = cur->next;
+        }
+        lock.store(false, std::memory_order_release);
+
+        // 锁外执行回调（避免死锁——fn 可能调 cancel 相关操作）
+        // 此时不可能有新 register（cancelled==true 时 register 同步执行不入链）
+        cur = callbacks_head;
+        while (cur) {
+            if (cur->fired.load(std::memory_order_acquire) &&
+                !cur->unregistered.load(std::memory_order_acquire)) {
+                cur->fn(cur->ctx);
+            }
+            cur = cur->next;
+        }
+    }
+
+    ~CancellationState() {
+        // 清理所有未 delete 的 node
+        bool expected = false;
+        while (!lock.compare_exchange_weak(
+                expected, true, std::memory_order_acquire)) {
+            expected = false;
+        }
         CallbackNode* cur = callbacks_head;
         callbacks_head = nullptr;
         lock.store(false, std::memory_order_release);
-
         while (cur) {
             CallbackNode* next = cur->next;
-            cur->fn(cur->ctx);
             delete cur;
             cur = next;
         }
@@ -123,9 +172,18 @@ public:
     }
 
     // 注册一个回调，在取消发生时被调用一次（若已取消则立即同步调用）
-    void register_callback(void (*fn)(void*), void* ctx) const {
+    // 返回 handle 用于后续 unregister（nullptr 表示已同步执行，无需 unregister）
+    void* register_callback(void (*fn)(void*), void* ctx) const {
         if (state_) {
-            state_->register_callback(fn, ctx);
+            return state_->register_callback(fn, ctx);
+        }
+        return nullptr;
+    }
+
+    // FC-3: 注销回调。在 promise 析构前调用，避免 fire 访问已释放的 promise。
+    void unregister_callback(void* handle) const {
+        if (state_ && handle) {
+            state_->unregister_callback(handle);
         }
     }
 

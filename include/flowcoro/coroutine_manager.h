@@ -109,11 +109,24 @@ public:
     }
 
     // 调度协程销毁（延迟销毁）
+    //
+    // 入队的都是「已被宿主放弃」的帧（safe_destroy 来自 ~Task / operator=）。
+    // process_pending_tasks 无条件销毁入队帧——这会运行帧上局部对象的析构，
+    // 由各 awaitable 的析构函数负责摘除外部恢复源（bus/timer/IO），
+    // 这是 Task 的 RAII 契约（test_bus_awaitable 析构测试即验证之）。
+    //
+    // 注：曾尝试「只销毁 settled 的、未 settled 的 requeue」（FC-1 原方案），
+    // 但会破坏上述 RAII 契约并导致泄漏（详见 process_pending_tasks 注释）。
+    // settled 标志仍保留在 promise 中，用作线程安全的完成指示（替代非线程
+    // 安全的 done()），但不用于 gate 销毁。
     void schedule_destroy(std::coroutine_handle<> handle) {
         if (!handle) return;
 
         std::lock_guard<std::mutex> lock(destroy_mutex_);
         destroy_queue_.push(handle);
+        // FC-2: lazy 启动后台回收线程。
+        // 用 call_once 保证只启动一次，避免静态初始化顺序问题。
+        ensure_reaper_started();
     }
 
     // 获取全局管理器实例
@@ -124,6 +137,17 @@ public:
 
     ~CoroutineManager()
     {
+        // FC-2: 停止后台回收线程
+        {
+            std::lock_guard<std::mutex> lock(reaper_mutex_);
+            reaper_stop_.store(true, std::memory_order_release);
+        }
+        reaper_cv_.notify_one();
+        if (reaper_thread_.joinable()) {
+            reaper_thread_.join();
+        }
+        // 最后 drain 一次（reaper 已停，单线程安全）
+        process_pending_tasks();
         stop_timer_thread();
     }
     // 启动专用定时器线程
@@ -248,7 +272,7 @@ public:
     }
 
     void process_pending_tasks() {
-        static constexpr size_t BATCH_SIZE = 64; // 增加批处理大小，减少锁竞争
+        static constexpr size_t BATCH_SIZE = 64;
         std::array<std::coroutine_handle<>, BATCH_SIZE> batch;
         size_t batch_count = 0;
 
@@ -256,15 +280,28 @@ public:
         {
             std::lock_guard<std::mutex> lock(destroy_mutex_);
             while (!destroy_queue_.empty() && batch_count < BATCH_SIZE) {
-                batch[batch_count++] = destroy_queue_.front();
+                batch[batch_count++] = std::move(destroy_queue_.front());
                 destroy_queue_.pop();
             }
         }
 
-        // 批量销毁协程，无锁执行
-        // 注意：不调用 handle.done() 检查——它在协程池模式下跨线程不安全
-        // （GCC 的 done() 读取协程帧内部 __resume_index）。
-        // 入队的协程都应已完成（挂起在 final_suspend），destroy 是安全的。
+        // 销毁队列中的帧。
+        //
+        // 设计说明（FC-1 复盘）：
+        // 最初按 FC-1 设计为「只销毁 settled 的、未 settled 的 requeue」，
+        // 但经验证该策略会破坏 Task 的 RAII 契约：
+        //   - schedule_destroy 的唯一调用源是 safe_destroy（即 ~Task / operator=），
+        //     入队的都是「已被宿主放弃」的帧。
+        //   - 一个挂在 await 点的帧若被 requeue，它永远不会自己 settled
+        //     （没人再 resume 它）→ 永不销毁 → 内存泄漏。
+        //   - 更严重的是：~Awaitable 析构（如 BusAwaitable::unsubscribe）永远不会
+        //     被调用 → 外部恢复源（bus/timer/IO）仍持有该 handle → 后续 resume
+        //     命中已释放帧 = 真正的 UAF。test_bus_awaitable 的析构测试即验证此契约。
+        //
+        // 因此正确做法是：无条件销毁入队帧。这会运行帧上局部对象的析构，
+        // 由各 awaitable 的析构函数负责「摘除外部恢复源」（RAII 契约）。
+        // settled 标志仍保留在 promise 中，用作线程安全的完成指示（替代非线程
+        // 安全的 done()），但不再用于 gate 销毁。
         for (size_t i = 0; i < batch_count; ++i) {
             auto handle = batch[i];
 
@@ -281,6 +318,26 @@ public:
     }
 
 private:
+    // FC-2: 后台回收线程——周期 drain destroy_queue_
+    void ensure_reaper_started() {
+        std::call_once(reaper_once_, [this] {
+            reaper_thread_ = std::thread([this] { reaper_loop(); });
+        });
+    }
+
+    void reaper_loop() {
+        using namespace std::chrono_literals;
+        while (!reaper_stop_.load(std::memory_order_acquire)) {
+            process_pending_tasks();
+            std::unique_lock<std::mutex> lock(reaper_mutex_);
+            reaper_cv_.wait_for(lock, 100ms, [this] {
+                return reaper_stop_.load(std::memory_order_acquire);
+            });
+        }
+        // 退出前最后 drain 一次
+        process_pending_tasks();
+    }
+
     // 专用定时器线程主函数
     void dedicated_timer_thread_func()
     {
@@ -356,6 +413,13 @@ private:
     // 延迟销毁队列
     std::queue<std::coroutine_handle<>> destroy_queue_;
     std::mutex destroy_mutex_;
+
+    // FC-2: 后台回收线程
+    std::thread reaper_thread_;
+    std::atomic<bool> reaper_stop_{false};
+    std::condition_variable reaper_cv_;
+    std::mutex reaper_mutex_;
+    std::once_flag reaper_once_;
 
     // 专用定时器线程
     std::unique_ptr<std::thread> dedicated_timer_thread_;
