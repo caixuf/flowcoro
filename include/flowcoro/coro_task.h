@@ -49,24 +49,13 @@ struct CoroTask {
     CoroTask(CoroTask&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
     CoroTask& operator=(CoroTask&& other) noexcept {
         if (this != &other) {
-            // 延迟销毁：避免在协程帧仍可能被其他线程引用时直接 destroy。
-            // schedule_destroy 入队后由 CoroutineManager::process_pending_tasks
-            // 在安全线程上下文统一回收（与 Task<T> 的销毁路径一致）。
-            if (handle) {
-                CoroutineManager::get_instance().schedule_destroy(handle);
-            }
+            if (handle) handle.destroy();
             handle = other.handle;
             other.handle = nullptr;
         }
         return *this;
     }
-    ~CoroTask() {
-        // 同上：延迟销毁。原 handle.destroy() 在协程池模式下可能销毁
-        // 仍被引用的帧（跨线程 done()/destroy() 是 GCC 已知竞态）。
-        if (handle) {
-            CoroutineManager::get_instance().schedule_destroy(handle);
-        }
-    }
+    ~CoroTask() { if (handle) handle.destroy(); }
 
     void resume() {
         // Bug 修复1: 使用 CoroutineManager::schedule_resume，它内部通过无锁队列保证
