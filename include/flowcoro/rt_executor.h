@@ -2,7 +2,8 @@
  * @file rt_executor.h
  * @brief flowcoro::rt — 确定性实时执行模型
  *
- * 设计目标: 单线程亲和、周期执行、销毁只在静止点、稳态不分配、标志式取消。
+ * 设计目标: 单线程亲和、周期执行、销毁只在静止点、稳态调度零分配(内部重投递
+ * 走 vector 快照);跨线程 post_ready 用池节点(预热后复用,池空退 std::malloc)、标志式取消。
  * 任何机器人/控制/嵌入式项目都想要的通用实时执行模型。它是纯新增, 不碰
  * Task<T>/CoroTask, 零回归面; 有明确消费者(FlowEngine)。
  *
@@ -21,19 +22,26 @@
  *   - post_ready() / request_stop() 可从任意线程调用(无锁队列 / 原子)。
  *   - 宿主每个 tick 调一次 run(); 持续调用直到 is_finished()。
  *
- * 事件流:
+ * 事件流(双队列 + tick 快照):
+ *   - 内部重投递(spawn/yield/final/timer)走 local_ready_(executor 线程私有 vector,
+ *     稳态零分配)。
+ *   - 跨线程事件走 ready_ext_(MPSC 无锁, post_ready)。
  *   run() = 非阻塞 tick。每次调用:
- *     1) 把到期 timer 的 handle 推 ready(绝不在 timer 路径 resume);
- *        若 stop 已请求, 取消全部剩余 timer 推 ready。
- *     2) 抽干 ready 队列: done 帧 -> destroy(在 executor 线程), 其余 -> resume。
+ *     1) process_timers: 到期 timer 的 handle -> local_ready_(绝不在 timer 路径 resume);
+ *        若 stop 已请求, 取消全部剩余 timer -> local_ready_。
+ *     2) tick 边界快照: tick_batch_.clear() + swap 自 local_ready_ + 抽干 ready_ext_。
+ *        处理中新产生的 yield/final 落进"新的" local_ready_(下 tick 才处理) ——
+ *        这从根上杜绝 yield 在单 tick 内无限重入(R1 正解)。
+ *     3) 遍历 tick_batch_: done 帧 -> destroy(executor 线程), 其余 -> resume。
  *   不阻塞、不 notify、不 syscall。
  *
  * 两段式拆除:
  *   request_stop() -> 置标志
- *     -> 下一次 run() 取消 timer(推 ready)
- *     -> task 在周期边界查 stop 后 co_return 到 final_suspend(park, 标 done, 推 ready)
- *     -> 同一次 run() 的 drain 把 done 帧在 executor 线程 destroy
- *     -> active 空 + stop => is_finished()
+ *     -> 下一次 run() 取消 timer(推 local_ready_)
+ *     -> task 在周期边界查 stop 后 co_return 到 final_suspend(park, 标 done, 推 local_ready_)
+ *     -> 同一次/下一次 run() 的 drain 把 done 帧在 executor 线程 destroy
+ *     -> active 空 => is_finished()
+ *   优雅关停请用 shutdown(); 析构仅为兜底(见 ~RtExecutor 注释)。
  */
 
 #pragma once
@@ -191,9 +199,17 @@ private:
         Handle handle;
     };
 
-    // ready 队列: MPSC 无锁。多生产者(任意线程 post_ready + executor 线程 final_suspend/
-    // yield/sleep 到期), 单消费者(executor 线程 run)。复用 lockfree::Queue。
-    lockfree::Queue<Handle> ready_;
+    // 跨线程 ready 队列: MPSC 无锁。仅接收跨线程 post_ready。
+    // 内部重投递(spawn/yield/final/timer)走 local_ready_(见下),避免热路径分配
+    // 且让 yield 等推迟到下一个 tick(见 run())。
+    lockfree::Queue<Handle> ready_ext_;
+
+    // executor 线程私有: 内部重投递(spawn/yield/final/timer)。非线程安全。
+    std::vector<Handle> local_ready_;
+
+    // 每 tick 复用的处理快照: run() 入口 swap 自 local_ready_ + 抽干 ready_ext_。
+    // swap 保留 capacity,稳态零重分配。
+    std::vector<Handle> tick_batch_;
 
     // 定时器最小堆: 仅 executor 线程访问(sleep_for 的 await_suspend 在 run() 的
     // resume 栈上跑)。无需锁。
@@ -229,10 +245,19 @@ public:
     // 若 config_.pin_cpu >= 0, 绑定当前线程到该 CPU(Linux)。
     void run_blocking();
 
-    // 任意线程可调; 置停止标志。下一次 run() 会排空 timer(推 ready),
+    // 任意线程可调; 置停止标志。下一次 run() 会排空 timer(推 local_ready_),
     // task 在周期边界查 stop 后 co_return, run() 在 executor 线程 destroy done 帧。
     void request_stop() noexcept {
         stop_flag_.store(true, std::memory_order_release);
+    }
+
+    // 优雅关停(R3 正解)。必须在 executor 线程调, 且所有会 post_ready 的外部生产者
+    // 已 join。request_stop -> 反复 run() 直到所有帧 co_return 并在 executor 线程被
+    // 销毁(quiesce)。若存在仍等外部 post_ready 的 parked 帧且生产者未 join,会无限
+    // 循环 —— 这是调用方违反前置条件的责任。
+    void shutdown() {
+        request_stop();
+        while (!is_finished()) run();
     }
 
     StopToken stop_token() const noexcept {
@@ -243,11 +268,16 @@ public:
         return stop_flag_.load(std::memory_order_acquire);
     }
 
-    // 跨线程事件唯一合法出口: 把 handle 压入 ready 队列。
+    // 跨线程事件唯一合法出口: 把 handle 压入 ready_ext_。
     // 不 notify、不 syscall、不 inline resume。
-    void post_ready(Handle h) noexcept {
-        ready_.enqueue(h);
-    }
+    // 契约: 每个 parked 帧只能有唯一恢复源;禁止对同一 handle 重复/陈旧 post_ready,
+    // 否则该帧被 destroy 后二次出队 = UAF。
+    void post_ready(Handle h) noexcept { ready_ext_.enqueue(h); }
+
+    // executor 线程内部重投递(yield/final_suspend/timer/spawn)。非线程安全,
+    // 只能在 run() 调用线程用。走 vector,稳态零分配。落入的 handle 在下一个 tick
+    // 才被处理(见 run() 的 tick 快照),从根上杜绝 yield 在单 tick 内无限重入。
+    void post_local(Handle h) { local_ready_.push_back(h); }
 
     // 所有已 spawn 的帧都已 destroy(quiesced)。宿主据此停止 tick。
     // 周期任务在 request_stop 后才会 co_return 到 active==0; 一次性任务自然到达。
@@ -269,10 +299,10 @@ private:
             std::pop_heap(timers_.begin(), timers_.end(), timer_less);
             Handle h = timers_.back().handle;
             timers_.pop_back();
-            ready_.enqueue(h);  // 绝不在 timer 路径 resume
+            post_local(h);  // 绝不在 timer 路径 resume; 走 local_ready_, 本 tick 处理
         }
         if (stop_flag_.load(std::memory_order_acquire)) {
-            for (auto& e : timers_) ready_.enqueue(e.handle);
+            for (auto& e : timers_) post_local(e.handle);
             timers_.clear();
         }
     }
@@ -306,21 +336,24 @@ private:
 
 // ---------------------------------------------------------------------------
 // out-of-line: final_awaiter::await_suspend (需 RtExecutor 完整)
-//   标 done -> 通过 post_ready 把自身递回 ready 队列。
+//   标 done -> 通过 post_local 把自身递回 local_ready_(下 tick)。
 //   run() 的 drain 在 executor 线程读到 done_ 后 destroy(绝不 resume)。
 // ---------------------------------------------------------------------------
 inline void RtTask::promise_type::final_awaiter::await_suspend(
         std::coroutine_handle<promise_type> h) noexcept {
     h.promise().done_ = true;
-    h.promise().executor_->post_ready(h);
+    // final_suspend 在 run() 的 resume 栈 = executor 线程,走 local_ready_(下 tick destroy)。
+    h.promise().executor_->post_local(h);
 }
 
 // ---------------------------------------------------------------------------
-// 便捷析构: 强制回收。ready/timers 只存 handle 值(无所有权), 由成员析构丢弃。
+// 析构: 前置条件 —— 所有会 post_ready 的外部生产者必须已 join。
+// 正常关停请先调 shutdown(); 本析构的 destroy_all_tasks() 仅为未 shutdown 时的
+// 兜底回收(强制销毁仍在链表中的 parked 帧, 非正常路径)。
 // ---------------------------------------------------------------------------
 inline RtExecutor::~RtExecutor() {
     stop_flag_.store(true, std::memory_order_release);
-    destroy_all_tasks();  // 销毁所有仍在链表中的 parked 帧(executor 线程语义)
+    destroy_all_tasks();  // 兜底: 销毁所有仍在链表中的 parked 帧(executor 线程语义)
 }
 
 // ---------------------------------------------------------------------------
@@ -333,17 +366,27 @@ inline void RtExecutor::spawn(RtTask task, std::string_view name) {
     p.name_ = std::string(name);
     active_count_.fetch_add(1, std::memory_order_relaxed);
     task_list_push(p);
-    ready_.enqueue(h);  // 首次 resume 推 ready
+    post_local(h);  // spawn 与 run 同线程(已文档化), 走 local_ready_
 }
 
 // ---------------------------------------------------------------------------
-// run: 非阻塞 tick
+// run: 非阻塞 tick。tick 边界快照 = R1 的正解(杜绝 yield 在单 tick 内无限重入)。
+//   1) process_timers: 到期 timer -> local_ready_(本 tick 处理)。
+//   2) tick_batch_.clear() + swap 自 local_ready_: 处理中新产生的 yield/final
+//      落进"新的" local_ready_(下 tick 才处理),从根上让 yield 推迟到下一 tick。
+//   3) 抽干 ready_ext_ 进 tick_batch_: 外部快照, 此刻已排队的才本 tick 处理。
+//   4) 遍历 tick_batch_: done -> destroy(executor 线程), 否则 resume。
+//      resume 期间的 yield/final -> local_ready_(下 tick);
+//      外部 post -> ready_ext_(下 tick)。
 // ---------------------------------------------------------------------------
 inline void RtExecutor::run() {
     process_timers();
+    tick_batch_.clear();
+    local_ready_.swap(tick_batch_);  // swap 后 local_ready_ 为空, tick_batch_ 持本 tick 内部重投递
     Handle h;
-    while (ready_.dequeue(h)) {
-        auto hp = std::coroutine_handle<RtTask::promise_type>::from_address(h.address());
+    while (ready_ext_.dequeue(h)) tick_batch_.push_back(h);  // 外部快照
+    for (Handle x : tick_batch_) {
+        auto hp = std::coroutine_handle<RtTask::promise_type>::from_address(x.address());
         if (hp.promise().done_) {
             task_list_unlink(hp.promise());
             hp.destroy();
@@ -398,12 +441,13 @@ sleep_awaiter sleep_for(std::chrono::duration<Rep, Period> d) {
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(d)};
 }
 
-// co_await rt::yield(): 把自身推回 ready, 让出当前 tick 的剩余执行权给其它 ready 任务。
+// co_await rt::yield(): 把自身推回 local_ready_, 让出到下一个 tick 再恢复。
+// 走 post_local(非 ready_ext_), 故 yield 在单 tick 内不会重入 —— 周期执行体该有的行为。
 struct yield_awaiter {
     bool await_ready() noexcept { return false; }
     template<typename Promise>
     void await_suspend(std::coroutine_handle<Promise> h) noexcept {
-        h.promise().rt_executor()->post_ready(h);
+        h.promise().rt_executor()->post_local(h);
     }
     void await_resume() noexcept {}
 };

@@ -101,6 +101,22 @@ rt::RtTask noop_worker() {
     co_return;
 }
 
+// R1 验证: 每次恢复 ++ticks 然后 yield(推 local_ready_, 下 tick 才恢复)。
+rt::RtTask yield_counter_worker(std::atomic<int>& ticks, int n) {
+    for (int i = 0; i < n; ++i) {
+        ticks.fetch_add(1, std::memory_order_relaxed);
+        co_await rt::yield();
+    }
+    co_return;
+}
+
+// R2 验证: park 等外部 post_ready, 恢复后 ++resumed。
+rt::RtTask park_resume_worker(std::atomic<void*>& parked, std::atomic<int>& resumed) {
+    co_await park_awaiter{&parked};
+    resumed.fetch_add(1, std::memory_order_relaxed);
+    co_return;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -243,6 +259,92 @@ TEST_CASE(rt_stop_token_external) {
     exec.spawn(noop_worker(), "noop");
     TEST_EXPECT_TRUE(drive_until_finished(exec));
     TEST_EXPECT_TRUE(exec.is_finished());
+}
+
+// ---------------------------------------------------------------------------
+// 9) R1: yield 推迟到下一 tick —— 单次 run() 不会让 yield 循环无限重入。
+//    断言: 第 1/2 次 run() 后 ticks 恰为 1/2(而非 N), 证明 tick 有界、无 livelock。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_yield_defers_to_next_tick) {
+    constexpr int N = 5;
+    std::atomic<int> ticks{0};
+    rt::RtExecutor exec;
+    exec.spawn(yield_counter_worker(ticks, N), "yieldloop");
+
+    exec.run();
+    TEST_EXPECT_EQ(ticks.load(), 1);  // 每 tick 只跑一次 yield
+    exec.run();
+    TEST_EXPECT_EQ(ticks.load(), 2);
+
+    TEST_EXPECT_TRUE(drive_until_finished(exec));
+    TEST_EXPECT_EQ(ticks.load(), N);
+    TEST_EXPECT_TRUE(exec.is_finished());
+}
+
+// ---------------------------------------------------------------------------
+// 10) 跨线程 post_ready 并发: M 个生产者线程并发对不同 parked handle post_ready,
+//     全部 resume 只发生在 executor 线程。不崩、无 UAF、无重复唤醒。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_many_producers_post_ready) {
+    constexpr int M = 8;
+    std::vector<std::atomic<void*>> parked(M);
+    std::atomic<int> resumed{0};
+    rt::RtExecutor exec;
+    for (int i = 0; i < M; ++i) {
+        parked[i].store(nullptr, std::memory_order_relaxed);
+        exec.spawn(park_resume_worker(parked[i], resumed), "p");
+    }
+
+    // 驱动直到全部 M 个任务 park
+    int guard = 0;
+    int parked_count = 0;
+    while (parked_count < M && guard < 5000) {
+        exec.run();
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        parked_count = 0;
+        for (int i = 0; i < M; ++i) {
+            if (parked[i].load(std::memory_order_acquire)) ++parked_count;
+        }
+        ++guard;
+    }
+    TEST_EXPECT_EQ(parked_count, M);
+
+    // M 个线程并发 post_ready(每个一个 distinct handle)
+    std::vector<std::thread> producers;
+    producers.reserve(M);
+    for (int i = 0; i < M; ++i) {
+        producers.emplace_back([&parked = parked[i], &exec]() {
+            auto h = std::coroutine_handle<>::from_address(parked.load());
+            exec.post_ready(h);
+        });
+    }
+    for (auto& t : producers) t.join();
+
+    TEST_EXPECT_TRUE(drive_until_finished(exec));
+    TEST_EXPECT_EQ(resumed.load(), M);
+    TEST_EXPECT_TRUE(exec.is_finished());
+}
+
+// ---------------------------------------------------------------------------
+// 11) R3: shutdown() 优雅关停 —— 周期任务在 shutdown 后 co_return 并 quiesce,
+//     is_finished() 为真。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_shutdown_drains) {
+    std::atomic<int> count{0};
+    rt::RtExecutor exec;
+    exec.spawn(periodic_worker(count), "periodic");
+
+    // 跑几轮让 count > 0
+    for (int i = 0; i < 10; ++i) {
+        exec.run();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_EXPECT_TRUE(count.load() > 0);
+
+    exec.shutdown();  // 阻塞直到所有帧 co_return 并在 executor 线程被销毁
+
+    TEST_EXPECT_TRUE(exec.is_finished());
+    TEST_EXPECT_TRUE(count.load() > 0);
 }
 
 int main() {
