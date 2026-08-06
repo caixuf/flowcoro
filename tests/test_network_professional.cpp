@@ -18,11 +18,39 @@
 #include <thread>
 #include <random>
 #include <csignal>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    // 测试客户端使用的跨平台套接字辅助
+    static inline void close_socket_compat(SOCKET s) { ::closesocket(s); }
+    #ifndef MSG_NOSIGNAL
+        #define MSG_NOSIGNAL 0
+    #endif
+    using sock_handle_t = SOCKET;
+    static const sock_handle_t INVALID_SOCK = INVALID_SOCKET;
+    static inline void set_nonblocking_compat(sock_handle_t s) {
+        u_long mode = 1;
+        ::ioctlsocket(s, FIONBIO, &mode);
+    }
+    static inline bool connect_in_progress() { return ::WSAGetLastError() == WSAEWOULDBLOCK; }
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    static inline void close_socket_compat(int s) { ::close(s); }
+    using sock_handle_t = int;
+    static const sock_handle_t INVALID_SOCK = -1;
+    static inline void set_nonblocking_compat(sock_handle_t s) {
+        int flags = ::fcntl(s, F_GETFL, 0);
+        ::fcntl(s, F_SETFL, flags | O_NONBLOCK);
+    }
+    static inline bool connect_in_progress() { return errno == EINPROGRESS; }
+#endif
 
 using namespace flowcoro;
 using namespace flowcoro::net;
@@ -118,51 +146,51 @@ public:
         return true;
     }
 
-    // 创建原生TCP客户端连接（用于测试）
-    int create_client_socket(const std::string& host, uint16_t port) {
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock == -1) {
-            std::cout << "Failed to create socket: " << strerror(errno) << std::endl;
-            return -1;
+    // 创建原生TCP客户端连接（用于测试，跨平台）
+    sock_handle_t create_client_socket(const std::string& host, uint16_t port) {
+        sock_handle_t sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCK) {
+            std::cout << "Failed to create socket" << std::endl;
+            return INVALID_SOCK;
         }
-        
+
         // 设置非阻塞
-        int flags = fcntl(sock, F_GETFL, 0);
-        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-        
+        set_nonblocking_compat(sock);
+
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
-        
+
         int result = connect(sock, (sockaddr*)&addr, sizeof(addr));
-        if (result == -1 && errno != EINPROGRESS) {
-            std::cout << "Connect failed: " << strerror(errno) << std::endl;
-            close(sock);
-            return -1;
+        if (result != 0 && !connect_in_progress()) {
+            std::cout << "Connect failed" << std::endl;
+            close_socket_compat(sock);
+            return INVALID_SOCK;
         }
-        
+
         // 等待连接完成
         fd_set write_fds;
         FD_ZERO(&write_fds);
         FD_SET(sock, &write_fds);
-        
+
         timeval timeout{1, 0}; // 1秒超时
-        int select_result = select(sock + 1, nullptr, &write_fds, nullptr, &timeout);
+        int select_result = select(static_cast<int>(sock + 1), nullptr, &write_fds, nullptr, &timeout);
         if (select_result <= 0) {
             std::cout << "Connection timeout or error, select result: " << select_result << std::endl;
-            close(sock);
-            return -1;
+            close_socket_compat(sock);
+            return INVALID_SOCK;
         }
-        
+
         // 检查连接状态
         int error = 0;
         socklen_t len = sizeof(error);
-        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) != 0 || error != 0) {
-            close(sock);
-            return -1;
+        if (getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                       reinterpret_cast<char*>(&error), &len) != 0 || error != 0) {
+            close_socket_compat(sock);
+            return INVALID_SOCK;
         }
-        
+
         return sock;
     }
 
@@ -182,8 +210,8 @@ public:
         
         for (size_t i = 0; i < num_connections; ++i) {
             client_threads.emplace_back([=, &successful_conns, &failed_conns, &total_msgs, &total_bytes_sent]() {
-                int sock = create_client_socket("127.0.0.1", port);
-                if (sock == -1) {
+                sock_handle_t sock = create_client_socket("127.0.0.1", port);
+                if (sock == INVALID_SOCK) {
                     failed_conns.fetch_add(1);
                     return;
                 }
@@ -206,7 +234,7 @@ public:
                     total_bytes_sent.fetch_add(sent + received);
                 }
                 
-                close(sock);
+                close_socket_compat(sock);
             });
         }
         
@@ -234,8 +262,8 @@ public:
         TestStats stats;
         stats.start_time = steady_clock::now();
         
-        int sock = create_client_socket("127.0.0.1", port);
-        if (sock == -1) {
+        sock_handle_t sock = create_client_socket("127.0.0.1", port);
+        if (sock == INVALID_SOCK) {
             std::cout << "Failed to create client socket for throughput test" << std::endl;
             return stats;
         }
@@ -269,7 +297,7 @@ public:
             }
         }
         
-        close(sock);
+        close_socket_compat(sock);
         
         stats.end_time = steady_clock::now();
         stats.total_messages = successful_msgs;
@@ -287,8 +315,8 @@ public:
         TestStats stats;
         stats.start_time = steady_clock::now();
         
-        int sock = create_client_socket("127.0.0.1", port);
-        if (sock == -1) {
+        sock_handle_t sock = create_client_socket("127.0.0.1", port);
+        if (sock == INVALID_SOCK) {
             std::cout << "Failed to create client socket for stability test" << std::endl;
             return stats;
         }
@@ -316,7 +344,7 @@ public:
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         
-        close(sock);
+        close_socket_compat(sock);
         
         stats.end_time = steady_clock::now();
         stats.total_messages = message_count;
@@ -397,8 +425,10 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    // 忽略SIGPIPE信号，避免在socket关闭时程序崩溃
+    // 忽略SIGPIPE信号，避免在socket关闭时程序崩溃（Windows 无 SIGPIPE）
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
     
     uint16_t port = 18888;
     if (argc >= 2) {
