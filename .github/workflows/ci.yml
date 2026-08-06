@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 显式限制 GITHUB_TOKEN 权限（最小权限原则：只读仓库内容）
+permissions:
+  contents: read
+
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # Regular build + run all tests on Ubuntu with GCC
