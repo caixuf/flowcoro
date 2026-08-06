@@ -10,9 +10,20 @@
 #include <thread>
 
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #include <winsock2.h>
     #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
+    #include <basetsd.h>
+    #ifdef _MSC_VER
+        #pragma comment(lib, "ws2_32.lib")
+    #endif
+    // MSVC 无 POSIX 的 ssize_t；用 Windows 的 SSIZE_T 补齐
+    #ifndef _SSIZE_T_DEFINED
+        typedef SSIZE_T ssize_t;
+        #define _SSIZE_T_DEFINED
+    #endif
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>

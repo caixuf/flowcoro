@@ -14,13 +14,32 @@
 
 #pragma once
 
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <sys/eventfd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <unistd.h>
+// ============================================================================
+// 平台适配层 - Linux 使用 epoll/eventfd/POSIX socket，Windows 使用 winsock2/WSAPoll
+// ============================================================================
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #include <basetsd.h>
+    #ifdef _MSC_VER
+        #pragma comment(lib, "ws2_32.lib")
+    #endif
+#else
+    #include <sys/epoll.h>
+    #include <sys/socket.h>
+    #include <sys/eventfd.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+#endif
+
 #include <cstring>
 #include <string>
 #include <vector>
@@ -39,19 +58,30 @@
 
 namespace flowcoro::net {
 
+// 平台无关的套接字句柄类型与常量
+#ifdef _WIN32
+using socket_t = SOCKET;
+using ssize_t = SSIZE_T;
+inline constexpr socket_t INVALID_SOCKET_HANDLE = INVALID_SOCKET;
+#else
+using socket_t = int;
+using ssize_t = ::ssize_t;
+inline constexpr socket_t INVALID_SOCKET_HANDLE = -1;
+#endif
+
 // 前向声明
 class EventLoop;
 class Socket;
 class TcpServer;
 class TcpConnection;
 
-// IO事件类型
+// IO事件类型（平台无关的位标志，由 EventLoop 内部翻译成 epoll/WSAPoll 事件）
 enum class IoEvent : uint32_t {
-    READ = EPOLLIN,
-    WRITE = EPOLLOUT,
-    ERROR = EPOLLERR,
-    HANGUP = EPOLLHUP,
-    EDGE_TRIGGERED = EPOLLET
+    READ = 0x01,
+    WRITE = 0x02,
+    ERROR = 0x04,
+    HANGUP = 0x08,
+    EDGE_TRIGGERED = 0x10
 };
 
 // IO事件回调
@@ -59,7 +89,7 @@ struct IoEventHandler {
     std::function<void()> on_read;
     std::function<void()> on_write;
     std::function<void()> on_error;
-    int fd{-1};
+    socket_t fd{INVALID_SOCKET_HANDLE};
     uint32_t events{0};
 };
 
@@ -69,10 +99,16 @@ struct IoEventHandler {
  */
 class EventLoop {
 private:
+#ifdef _WIN32
+    // Windows 使用 WSAPoll，无需 epoll fd；用一对自连接套接字充当唤醒管道
+    socket_t wakeup_recv_{INVALID_SOCKET_HANDLE};
+    socket_t wakeup_send_{INVALID_SOCKET_HANDLE};
+#else
     int epoll_fd_{-1};
     int wakeup_fd_{-1};
+#endif
     std::atomic<bool> running_{false};
-    std::unordered_map<int, std::unique_ptr<IoEventHandler>> handlers_;
+    std::unordered_map<socket_t, std::unique_ptr<IoEventHandler>> handlers_;
     // 保护 handlers_ 的互斥锁，避免跨线程/回调重入导致的数据竞争与UAF
     std::mutex handlers_mutex_;
     lockfree::Queue<std::function<void()>> pending_tasks_;
@@ -123,20 +159,20 @@ public:
      * @param events 监听的事件类型
      * @param handler 事件处理器
      */
-    void add_fd(int fd, uint32_t events, std::unique_ptr<IoEventHandler> handler);
+    void add_fd(socket_t fd, uint32_t events, std::unique_ptr<IoEventHandler> handler);
 
     /**
      * @brief 修改文件描述符的事件
      * @param fd 文件描述符
      * @param events 新的事件类型
      */
-    void modify_fd(int fd, uint32_t events);
+    void modify_fd(socket_t fd, uint32_t events);
 
     /**
      * @brief 从事件循环中移除文件描述符
      * @param fd 文件描述符
      */
-    void remove_fd(int fd);
+    void remove_fd(socket_t fd);
 
     /**
      * @brief 在事件循环中执行任务
@@ -161,6 +197,10 @@ private:
     void process_pending_tasks();
     void process_timers();
     int get_next_timeout();
+    // 唤醒事件循环线程（跨平台）
+    void wakeup();
+    // 分发某个 fd 上就绪的 IO 事件（平台无关的 IoEvent 位标志）
+    void handle_io_event(socket_t fd, uint32_t ready_events);
 };
 
 /**
@@ -169,13 +209,13 @@ private:
  */
 class Socket {
 private:
-    int fd_{-1};
+    socket_t fd_{INVALID_SOCKET_HANDLE};
     EventLoop* loop_{nullptr};
     bool connected_{false};
 
 public:
     explicit Socket(EventLoop* loop);
-    Socket(int fd, EventLoop* loop);
+    Socket(socket_t fd, EventLoop* loop);
     ~Socket();
 
     // 禁止拷贝，允许移动
@@ -258,7 +298,7 @@ public:
      * @brief 获取文件描述符
      * @return 文件描述符
      */
-    int fd() const { return fd_; }
+    socket_t fd() const { return fd_; }
 
     /**
      * @brief 检查是否已连接

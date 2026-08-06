@@ -12,38 +12,62 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 编译选项
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
+# 编译选项（按编译器/平台分派，避免把 GCC/Clang 专有标志传给 MSVC，
+# 以及把 ELF 专有标志（如 -fno-plt）传给 Windows 目标）
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 
-# Release: 全力优化，不保留帧指针（让寄存器分配器自由使用 rbp）
-set(CMAKE_CXX_FLAGS_RELEASE
-    "-O3 -DNDEBUG -march=native -mtune=native -flto=auto -ffast-math -funroll-loops -fno-plt -fomit-frame-pointer"
-    CACHE STRING "Release build flags" FORCE)
+    # -march/-mtune/-fno-plt 为 Linux/ELF 相关优化；在 Windows(MinGW) 上剔除以保证可移植
+    if(WIN32)
+        set(_flowcoro_arch_flags "")
+        set(_flowcoro_plt_flag "")
+    else()
+        set(_flowcoro_arch_flags "-march=native -mtune=native")
+        set(_flowcoro_plt_flag "-fno-plt")
+    endif()
 
-# RelWithDebInfo: 保留调试信息，适合 valgrind/callgrind
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
-    "-O2 -g -DNDEBUG -march=native -mtune=native -fno-omit-frame-pointer"
-    CACHE STRING "RelWithDebInfo build flags" FORCE)
+    # Release: 全力优化，不保留帧指针（让寄存器分配器自由使用 rbp）
+    set(CMAKE_CXX_FLAGS_RELEASE
+        "-O3 -DNDEBUG ${_flowcoro_arch_flags} -flto=auto -ffast-math -funroll-loops ${_flowcoro_plt_flag} -fomit-frame-pointer"
+        CACHE STRING "Release build flags" FORCE)
 
-# Profiling: 专用性能分析构建（Release 级别 + 帧指针 + 行号 + 关闭内联以便 perf/callgrind 看到真实调用栈）
-set(CMAKE_CXX_FLAGS_PROFILING
-    "-O2 -g -DNDEBUG -march=native -mtune=native -fno-omit-frame-pointer -fno-inline-functions-called-once"
-    CACHE STRING "Profiling build flags" FORCE)
-set(CMAKE_EXE_LINKER_FLAGS_PROFILING "-fno-omit-frame-pointer"
-    CACHE STRING "Profiling linker flags" FORCE)
+    # RelWithDebInfo: 保留调试信息，适合 valgrind/callgrind
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+        "-O2 -g -DNDEBUG ${_flowcoro_arch_flags} -fno-omit-frame-pointer"
+        CACHE STRING "RelWithDebInfo build flags" FORCE)
 
-# LTO 链接器参数（Release/Profiling 时由 -flto=auto 驱动，链接器也需要同步）
-set(CMAKE_EXE_LINKER_FLAGS_RELEASE    "-flto=auto -Wl,-O1 -Wl,--as-needed"
-    CACHE STRING "Release linker flags" FORCE)
-set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-flto=auto -Wl,-O1 -Wl,--as-needed"
-    CACHE STRING "Release shared linker flags" FORCE)
+    # Profiling: 专用性能分析构建（Release 级别 + 帧指针 + 行号 + 关闭内联以便 perf/callgrind 看到真实调用栈）
+    set(CMAKE_CXX_FLAGS_PROFILING
+        "-O2 -g -DNDEBUG ${_flowcoro_arch_flags} -fno-omit-frame-pointer -fno-inline-functions-called-once"
+        CACHE STRING "Profiling build flags" FORCE)
+    set(CMAKE_EXE_LINKER_FLAGS_PROFILING "-fno-omit-frame-pointer"
+        CACHE STRING "Profiling linker flags" FORCE)
+
+    # LTO 链接器参数（Release/Profiling 时由 -flto=auto 驱动，链接器也需要同步）
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE    "-flto=auto -Wl,-O1 -Wl,--as-needed"
+        CACHE STRING "Release linker flags" FORCE)
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-flto=auto -Wl,-O1 -Wl,--as-needed"
+        CACHE STRING "Release shared linker flags" FORCE)
+elseif(MSVC)
+    # MSVC: 使用等价的优化开关（/O2 + 全程序优化 /GL + /LTCG）
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /DNDEBUG /GL"
+        CACHE STRING "Release build flags" FORCE)
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Zi /DNDEBUG"
+        CACHE STRING "RelWithDebInfo build flags" FORCE)
+    set(CMAKE_CXX_FLAGS_PROFILING "/O2 /Zi /DNDEBUG"
+        CACHE STRING "Profiling build flags" FORCE)
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/LTCG"
+        CACHE STRING "Release linker flags" FORCE)
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "/LTCG"
+        CACHE STRING "Release shared linker flags" FORCE)
+endif()
 
 # PGO (Profile-Guided Optimization) 自动支持
 option(FLOWCORO_ENABLE_PGO "Enable Profile-Guided Optimization" ON)
 option(FLOWCORO_PGO_GENERATE "Generate PGO profile data" OFF)
 
-# 自动检测并启用PGO优化
-if(FLOWCORO_ENABLE_PGO)
+# 自动检测并启用PGO优化（仅 GCC/Clang 支持 -fprofile-generate/-fprofile-use）
+if(FLOWCORO_ENABLE_PGO AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(FLOWCORO_PGO_GENERATE)
         message(STATUS "Enabling PGO profile generation")
         set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fprofile-generate")
@@ -221,6 +245,7 @@ target_link_libraries(flowcoro_net PUBLIC
     flowcoro
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
+    $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 # 添加项目路径宏定义

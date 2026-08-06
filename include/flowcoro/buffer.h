@@ -5,6 +5,9 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 #include "memory_pool.h"
 
 namespace flowcoro {
@@ -26,9 +29,16 @@ public:
         
         // 大对象使用对齐分配
         void* ptr = nullptr;
+#ifdef _WIN32
+        ptr = _aligned_malloc(size, Alignment);
+        if (!ptr) {
+            throw std::bad_alloc();
+        }
+#else
         if (posix_memalign(&ptr, Alignment, size) != 0) {
             throw std::bad_alloc();
         }
+#endif
         return ptr;
     }
 
