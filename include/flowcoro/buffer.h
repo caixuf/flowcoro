@@ -20,14 +20,9 @@ template<size_t Alignment = CACHE_LINE_SIZE>
 class AlignedAllocator {
 public:
     static void* allocate(size_t size) {
-        // 对于小对象（<= 1024字节）使用内存池
-        if (size <= 1024) {
-            void* ptr = pool_malloc(size);
-            if (!ptr) throw std::bad_alloc();
-            return ptr;
-        }
-        
-        // 大对象使用对齐分配
+        // 使用对齐分配，保证返回 Alignment 对齐的内存。
+        // 分配与释放必须对称：Windows 用 _aligned_malloc/_aligned_free，
+        // POSIX 用 posix_memalign/free，不可与内存池的 pool_free 混用。
         void* ptr = nullptr;
 #ifdef _WIN32
         ptr = _aligned_malloc(size, Alignment);
@@ -43,8 +38,13 @@ public:
     }
 
     static void deallocate(void* ptr) {
-        // 内存池会自动处理，如果不是内存池分配的会fallback到系统释放
-        pool_free(ptr);
+        if (!ptr) return;
+        // 与 allocate 对称释放，避免堆损坏（尤其是 Windows）
+#ifdef _WIN32
+        _aligned_free(ptr);
+#else
+        std::free(ptr);
+#endif
     }
 };
 

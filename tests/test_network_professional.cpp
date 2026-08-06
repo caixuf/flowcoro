@@ -175,7 +175,13 @@ public:
         FD_SET(sock, &write_fds);
 
         timeval timeout{1, 0}; // 1秒超时
-        int select_result = select(static_cast<int>(sock + 1), nullptr, &write_fds, nullptr, &timeout);
+#ifdef _WIN32
+        // Windows 忽略 select 的第一个参数（nfds）；SOCKET 是无符号指针大小类型，
+        // 转成 int 可能溢出，故直接传 0。
+        int select_result = select(0, nullptr, &write_fds, nullptr, &timeout);
+#else
+        int select_result = select(sock + 1, nullptr, &write_fds, nullptr, &timeout);
+#endif
         if (select_result <= 0) {
             std::cout << "Connection timeout or error, select result: " << select_result << std::endl;
             close_socket_compat(sock);
