@@ -148,31 +148,52 @@ jobs:
         run: ctest --test-dir build-asan --output-on-failure --parallel 2 --label-exclude network_external
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Optional: macOS build (no sanitizers — just verify portability)
+  # Windows build + test (MinGW-w64 GCC via MSYS2)
+  # 验证 FlowCoro 在 Windows 上的深度适配：winsock2 + WSAPoll 事件循环、
+  # 跨平台套接字/内存对齐，以及不依赖 epoll/eventfd/POSIX socket 的构建。
   # ─────────────────────────────────────────────────────────────────────────
-  build-macos:
-    name: Build (macOS, Apple Clang)
-    runs-on: macos-13
-    timeout-minutes: 30
+  build-windows:
+    name: Build & Test (MinGW-w64 GCC, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: brew install cmake ninja
+      - name: Setup MSYS2 / MinGW-w64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
 
-      - name: Configure (Apple Clang, Release)
+      - name: Configure (MinGW GCC, Release)
         run: |
-          cmake -S . -B build-mac -G Ninja \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
             -DFLOWCORO_BUILD_BENCHMARKS=OFF \
             -DFLOWCORO_BUILD_EXAMPLES=OFF \
             -DFLOWCORO_ENABLE_DATABASE=OFF
 
-      - name: Build
-        run: cmake --build build-mac --parallel 4
-
-      - name: Run core tests (exclude platform-specific)
+      - name: Build core library and portable tests
         run: |
-          ctest --test-dir build-mac --output-on-failure --parallel 4 \
-                --label-exclude network_external \
-                --exclude-regex 'test_database|test_rpc|test_network_professional'
+          cmake --build build --parallel 4 --target \
+            flowcoro_net \
+            test_core test_new_features test_network_professional \
+            test_cross_thread test_when_any test_sleep_for \
+            test_exception_propagation test_bus_awaitable \
+            test_lockfree_stress test_when_any_v2 test_cancellation \
+            test_timeout test_c_api test_rt_executor
+
+      - name: Run portable tests
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 2 \
+            --label-exclude network_external \
+            -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor'
