@@ -7,19 +7,28 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 编译选项（内存优化版本）
 # 注意：sanitizer 构建需要 -g 与 -O1，因此仅在未启用 sanitizer 时强制 -g0 -O0。
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines -pthread -fno-stack-protector")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftemplate-depth=128 -ftemplate-backtrace-limit=10")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --param ggc-min-expand=10 --param ggc-min-heapsize=32768")
-if(NOT FLOWCORO_ENABLE_TSAN AND NOT FLOWCORO_ENABLE_SANITIZERS)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g0 -O0 -fno-inline")
-endif()
+# 这些均为 GCC/Clang 专有标志；MSVC 走 else 分支的等价开关。
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fno-stack-protector")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftemplate-depth=128 -ftemplate-backtrace-limit=10")
+    # -fcoroutines 与 --param ggc-* 仅 GCC 支持
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --param ggc-min-expand=10 --param ggc-min-heapsize=32768")
+    endif()
+    if(NOT FLOWCORO_ENABLE_TSAN AND NOT FLOWCORO_ENABLE_SANITIZERS)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g0 -O0 -fno-inline")
+    endif()
 
-# GCC 的 ASAN detect_stack_use_after_scope 与 C++20 协程 lambda 有已知误报：
-# lambda 闭包是栈上临时对象，在完整表达式结束后被 ASAN 标记为失效，
-# 但协程帧（堆上）已拷贝了闭包。此处禁用该编译期插桩以消除误报。
-# 堆 UAF / 缓冲区溢出等其它 ASAN 检查不受影响。
-if(FLOWCORO_ENABLE_SANITIZERS)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-sanitize-address-use-after-scope")
+    # GCC 的 ASAN detect_stack_use_after_scope 与 C++20 协程 lambda 有已知误报：
+    # lambda 闭包是栈上临时对象，在完整表达式结束后被 ASAN 标记为失效，
+    # 但协程帧（堆上）已拷贝了闭包。此处禁用该编译期插桩以消除误报。
+    # 堆 UAF / 缓冲区溢出等其它 ASAN 检查不受影响。
+    if(FLOWCORO_ENABLE_SANITIZERS)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-sanitize-address-use-after-scope")
+    endif()
+elseif(MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /bigobj")
 endif()
 
 # 包含目录
