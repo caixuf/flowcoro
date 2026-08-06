@@ -56,10 +56,11 @@ public:
     struct alignas(64) ThreadSlot {
         std::array<std::atomic<void*>, HAZARD_SLOTS_PER_THREAD> hazards{};
         std::vector<RetiredNode> retired;
-        // Bug#4 修复：保护 retired vector 的 spinlock。
+        // Bug#4/#5 修复：保护 retired vector 的 spinlock。
         // retire()（热路径，自己的 slot）加锁后 push_back；
-        // drain_all()（冷路径，跨线程 scan 别人的 retired）用 try_lock，
-        // 锁不上就跳过该线程（保守，不回收，避免堆损坏）。
+        // scan()（冷路径：阈值触发或 shutdown drain）无条件自旋锁定后
+        // 遍历+释放——含"自己的" slot，因为并发 shutdown 时别的线程的
+        // drain_all() 也会扫到这里（见 scan() 内 Bug#5 注释）。
         std::atomic_flag retired_lock = ATOMIC_FLAG_INIT;
         // Padding keeps slots on distinct cache lines (also helps the
         // retired vector land on its own line).
@@ -138,10 +139,9 @@ public:
     // Best-effort: try to reclaim on all registered threads. Called
     // from Queue destructor to avoid leaking memory.
     //
-    // Bug#4 修复：用 try_lock 保护跨线程 scan。如果某线程的 retired_lock
-    // 锁不上（说明该线程正在 retire），就跳过该线程（保守，不回收）。
-    // 这样即使 worker 未 join 干净，也不会与 drain_all 的 scan 并发
-    // 操作 retired vector 导致堆损坏。
+    // Bug#5 修复：scan() 现在对每个 slot 无条件自旋锁定（含调用者自己的
+    // slot），并发 shutdown 时多个线程的 drain_all() 对同一 slot 串行化，
+    // 不再产生 double free。
     void drain_all() noexcept {
         if (destroyed_.load(std::memory_order_acquire)) return;
         const std::size_t n = next_thread_id_.load(std::memory_order_relaxed);
@@ -199,22 +199,28 @@ private:
     void scan(std::size_t tid, bool force_all = false) noexcept {
         auto& slot = slot_of(tid);
 
-        // Bug#4 修复：如果 scan 是由 drain_all() 对其他线程发起的（tid !=
-        // 当前线程），用 try_lock 保护 retired vector。锁不上说明该线程
-        // 正在 retire，跳过以避免堆损坏。自己的线程无需锁（单线程访问）。
-        bool is_self = (tid == thread_id());
-        bool locked = false;
-        if (!is_self) {
-            if (!slot.retired_lock.test_and_set(std::memory_order_acquire)) {
-                locked = true;
-            } else {
-                return; // 该线程正在 retire，跳过
-            }
-        }
+        // Bug#5 修复（并发 shutdown double-free）：scan 必须**无条件**锁定
+        // 目标 slot——包括 tid == 自己的情形。
+        //
+        // 旧实现假设"自己的 retired 只有自己单线程访问，无需锁"。该假设在
+        // 并发 shutdown 下不成立：多个节点线程同时销毁各自 RtExecutor →
+        // 各自 ~Queue() → drain_all() 扫**所有**线程的 retired。线程 A 的
+        // drain_all() try_lock 锁住线程 B 的 slot 正在遍历释放；线程 B 自己
+        // 的 drain_all() 轮到 scan(B)（is_self）时无锁直接遍历同一 vector
+        // 并释放 → 同批 RetiredNode 两边各 free 一次 = double free /
+        // fastbin corruption（2026-08 FlowEngine 仿真 60Hz 升频后 CI
+        // integration 稳定复现，crash 线程随机：safety_control/inference/
+        // control——谁先撞窗谁崩）。
+        //
+        // 统一自旋锁获取：retire() 在 unlock 之后才调 scan()，无重入死锁；
+        // 持锁期间只调 deleter（reclaim_node→pool_free，有界、不回环拿锁），
+        // 全程单锁无锁序问题。scan 频率低（RETIRE_THRESHOLD ≈ 1024 或
+        // shutdown 冷路径），热路径 retire() 的 push_back 临界区不变。
+        lock_retired(slot);
 
         auto& my_retired = slot.retired;
         if (my_retired.empty()) {
-            if (locked) unlock_retired(slot);
+            unlock_retired(slot);
             return;
         }
 
@@ -261,7 +267,7 @@ private:
         }
         my_retired.swap(still_hazardous);
 
-        if (locked) unlock_retired(slot);
+        unlock_retired(slot);
 
         // If force_all and we still have nodes left, there is nothing
         // more we can do — they are genuinely still referenced. Leave
