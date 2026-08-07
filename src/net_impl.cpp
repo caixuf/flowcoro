@@ -297,7 +297,7 @@ void EventLoop::handle_io_event(socket_t fd, uint32_t ready_events) {
     }
 
     // 处理错误和挂断事件
-    if (ready_events & (static_cast<uint32_t>(IoEvent::ERROR) |
+    if (ready_events & (static_cast<uint32_t>(IO_EVENT_ERROR) |
                         static_cast<uint32_t>(IoEvent::HANGUP))) {
         if (on_error_cb) {
             on_error_cb();
@@ -393,7 +393,7 @@ void EventLoop::run_loop() {
                 ready |= static_cast<uint32_t>(IoEvent::WRITE);
             }
             if (pfd.revents & POLLERR) {
-                ready |= static_cast<uint32_t>(IoEvent::ERROR);
+                ready |= static_cast<uint32_t>(IO_EVENT_ERROR);
             }
             if (pfd.revents & (POLLHUP | POLLNVAL)) {
                 ready |= static_cast<uint32_t>(IoEvent::HANGUP);
@@ -454,7 +454,7 @@ void EventLoop::run_loop() {
                 ready |= static_cast<uint32_t>(IoEvent::WRITE);
             }
             if (event.events & EPOLLERR) {
-                ready |= static_cast<uint32_t>(IoEvent::ERROR);
+                ready |= static_cast<uint32_t>(IO_EVENT_ERROR);
             }
             if (event.events & EPOLLHUP) {
                 ready |= static_cast<uint32_t>(IoEvent::HANGUP);

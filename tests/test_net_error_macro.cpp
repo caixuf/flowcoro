@@ -3,10 +3,10 @@
 
 #include <cstdint>
 
-#ifdef ERROR
-#error "ERROR macro should be undefined by flowcoro/net.h to avoid IoEvent::ERROR conflicts"
+#ifndef ERROR
+#error "ERROR macro should remain available after including flowcoro/net.h"
 #endif
 
 int main() {
-    return static_cast<uint32_t>(flowcoro::net::IoEvent::ERROR) == 0x04 ? 0 : 1;
+    return static_cast<uint32_t>(flowcoro::net::IO_EVENT_ERROR) == 0x04 ? 0 : 1;
 }

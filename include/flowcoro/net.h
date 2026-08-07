@@ -79,9 +79,11 @@ class Socket;
 class TcpServer;
 class TcpConnection;
 
-// Windows 头文件会把 ERROR 定义成宏，需取消定义以支持 IoEvent::ERROR
+// Windows 头文件会把 ERROR 定义成宏，需临时取消定义以声明 IoEvent::ERROR
 #ifdef ERROR
+    #pragma push_macro("ERROR")
     #undef ERROR
+    #define FLOWCORO_RESTORE_WINDOWS_ERROR_MACRO 1
 #endif
 
 // IO事件类型（平台无关的位标志，由 EventLoop 内部翻译成 epoll/WSAPoll 事件）
@@ -92,6 +94,14 @@ enum class IoEvent : uint32_t {
     HANGUP = 0x08,
     EDGE_TRIGGERED = 0x10
 };
+
+// 供实现层在 Windows ERROR 宏恢复后继续安全引用“错误事件”
+inline constexpr IoEvent IO_EVENT_ERROR = IoEvent::ERROR;
+
+#ifdef FLOWCORO_RESTORE_WINDOWS_ERROR_MACRO
+    #pragma pop_macro("ERROR")
+    #undef FLOWCORO_RESTORE_WINDOWS_ERROR_MACRO
+#endif
 
 // IO事件回调
 struct IoEventHandler {
