@@ -8,6 +8,7 @@
  */
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -75,7 +76,8 @@ public:
             std::lock_guard<std::mutex> lk(mu_);
             for (auto& sub : subs_) {
                 if (sub.id != s.id) continue;
-                if (sub.in_flight > 0) --sub.in_flight;
+                assert(sub.in_flight > 0);
+                --sub.in_flight;
                 if (sub.removed && sub.in_flight == 0) cv_.notify_all();
                 break;
             }
