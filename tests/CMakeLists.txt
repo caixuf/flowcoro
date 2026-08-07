@@ -67,6 +67,9 @@ add_executable(test_sleep_for test_sleep_for.cpp)
 # 异常传播测试
 add_executable(test_exception_propagation test_exception_propagation.cpp)
 
+# Windows ERROR 宏与 IoEvent::ERROR 冲突回归测试
+add_executable(test_net_error_macro test_net_error_macro.cpp)
+
 # 网络模块专业测试套件
 add_executable(test_network_professional test_network_professional.cpp)
 
@@ -146,6 +149,11 @@ target_link_libraries(test_exception_propagation
     Threads::Threads
 )
 
+target_link_libraries(test_net_error_macro
+    flowcoro_net
+    Threads::Threads
+)
+
 # 网络模块专业测试链接库
 target_link_libraries(test_network_professional
     flowcoro_net
@@ -195,6 +203,7 @@ add_test(NAME test_cross_thread COMMAND test_cross_thread)
 add_test(NAME test_when_any COMMAND test_when_any)
 add_test(NAME test_sleep_for COMMAND test_sleep_for)
 add_test(NAME test_exception_propagation COMMAND test_exception_propagation)
+add_test(NAME test_net_error_macro COMMAND test_net_error_macro)
 add_test(NAME test_network_professional COMMAND test_network_professional)
 add_test(NAME test_bus_awaitable      COMMAND test_bus_awaitable)
 add_test(NAME test_lockfree_stress   COMMAND test_lockfree_stress)
@@ -253,6 +262,11 @@ set_tests_properties(test_exception_propagation PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_net_error_macro PROPERTIES
+    TIMEOUT 30
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 set_tests_properties(test_network_professional PROPERTIES
     TIMEOUT 300
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
@@ -295,7 +309,7 @@ set_tests_properties(test_rt_executor PROPERTIES
 )
 
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_net_error_macro test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 

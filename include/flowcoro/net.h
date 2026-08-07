@@ -79,6 +79,11 @@ class Socket;
 class TcpServer;
 class TcpConnection;
 
+// Windows 头文件会把 ERROR 定义成宏，需取消定义以支持 IoEvent::ERROR
+#ifdef ERROR
+    #undef ERROR
+#endif
+
 // IO事件类型（平台无关的位标志，由 EventLoop 内部翻译成 epoll/WSAPoll 事件）
 enum class IoEvent : uint32_t {
     READ = 0x01,
