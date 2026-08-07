@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -37,27 +38,48 @@ public:
     SubscriptionHandle subscribe(Callback cb, void* user_data) {
         std::lock_guard<std::mutex> lk(mu_);
         int id = next_id_++;
-        subs_.push_back({id, cb, user_data, /*removed=*/false});
+        subs_.push_back({id, cb, user_data, /*removed=*/false, /*in_flight=*/0});
         return id;
     }
 
     // Synchronous unsubscribe: after this returns no further delivery for
     // this id will occur from publish().
     void unsubscribe(SubscriptionHandle id) {
-        std::lock_guard<std::mutex> lk(mu_);
-        for (auto& s : subs_)
-            if (s.id == id) { s.removed = true; break; }
+        std::unique_lock<std::mutex> lk(mu_);
+        for (auto& s : subs_) {
+            if (s.id != id) continue;
+            s.removed = true;
+            cv_.wait(lk, [&s] { return s.in_flight == 0; });
+            break;
+        }
     }
 
     void publish(const TestMsg& msg) {
+        struct ActiveSub {
+            int      id;
+            Callback cb;
+            void*    user_data;
+        };
         // Snapshot active subs while holding the lock, then call without it.
-        std::vector<std::pair<Callback, void*>> active;
+        std::vector<ActiveSub> active;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            for (auto& s : subs_)
-                if (!s.removed) active.emplace_back(s.cb, s.user_data);
+            for (auto& s : subs_) {
+                if (s.removed) continue;
+                ++s.in_flight;
+                active.push_back({s.id, s.cb, s.user_data});
+            }
         }
-        for (auto& [cb, ud] : active) cb(&msg, ud);
+        for (auto& s : active) {
+            s.cb(&msg, s.user_data);
+            std::lock_guard<std::mutex> lk(mu_);
+            for (auto& sub : subs_) {
+                if (sub.id != s.id) continue;
+                if (sub.in_flight > 0) --sub.in_flight;
+                if (sub.removed && sub.in_flight == 0) cv_.notify_all();
+                break;
+            }
+        }
     }
 
     // Fire message from a separate thread after an optional delay.
@@ -78,8 +100,9 @@ public:
     }
 
 private:
-    struct Sub { int id; Callback cb; void* user_data; bool removed; };
+    struct Sub { int id; Callback cb; void* user_data; bool removed; int in_flight; };
     mutable std::mutex mu_;
+    std::condition_variable cv_;
     std::vector<Sub>   subs_;
     int                next_id_ = 1;
 };
