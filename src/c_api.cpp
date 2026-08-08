@@ -174,8 +174,7 @@ int flowcoro_task_is_done(flowcoro_task_t* task) {
     // future.wait_for 在已 get 的 future 上会抛 future_error。
     if (task->waited.load(std::memory_order_acquire)) return 1;
     // future 状态查询不消耗结果，可多次调用
-    using namespace std::chrono;
-    return task->future.wait_for(0ms) == std::future_status::ready ? 1 : 0;
+    return task->future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready ? 1 : 0;
 }
 
 flowcoro_error_t flowcoro_task_wait_for(flowcoro_task_t* task,
