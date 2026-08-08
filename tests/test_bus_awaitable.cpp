@@ -102,7 +102,13 @@ public:
     }
 
 private:
-    struct Sub { int id; Callback cb; void* user_data; bool removed; int in_flight; };
+    struct Sub {
+        int id;
+        Callback cb;
+        void* user_data;
+        bool removed;
+        size_t in_flight;
+    };
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::vector<Sub>   subs_;
@@ -273,6 +279,55 @@ TEST_CASE(bus_awaitable_sequential_awaits) {
     TEST_EXPECT_EQ(result, 60);
     // All subscriptions must have been cleaned up.
     TEST_EXPECT_EQ(bus.subscriber_count(), static_cast<size_t>(0));
+}
+
+namespace {
+struct SlowCallbackContext {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+void slow_callback(const TestMsg*, void* user_data) {
+    auto* ctx = static_cast<SlowCallbackContext*>(user_data);
+    ctx->entered.store(true, std::memory_order_release);
+    while (!ctx->release.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+} // namespace
+
+TEST_CASE(mock_bus_unsubscribe_waits_for_inflight_callback) {
+    std::cout << "  Testing MockBus synchronous unsubscribe contract..." << std::endl;
+
+    MockBus bus;
+    SlowCallbackContext ctx;
+    auto sub = bus.subscribe(&slow_callback, &ctx);
+
+    std::thread publisher([&] { bus.publish({7}); });
+
+    while (!ctx.entered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    std::atomic<bool> unsubscribe_done{false};
+    std::atomic<bool> unsubscribe_started{false};
+    std::thread unsubscriber([&] {
+        unsubscribe_started.store(true, std::memory_order_release);
+        bus.unsubscribe(sub);
+        unsubscribe_done.store(true, std::memory_order_release);
+    });
+
+    while (!unsubscribe_started.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    TEST_EXPECT_FALSE(unsubscribe_done.load(std::memory_order_acquire));
+
+    ctx.release.store(true, std::memory_order_release);
+    unsubscriber.join();
+    publisher.join();
+
+    TEST_EXPECT_TRUE(unsubscribe_done.load(std::memory_order_acquire));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
