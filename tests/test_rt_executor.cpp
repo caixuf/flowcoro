@@ -21,15 +21,16 @@ using namespace std::chrono_literals;
 namespace {
 
 // 辅助: 作为宿主驱动 executor 直到 is_finished() 或超时。
+// 注意: 退出条件只能依赖墙钟 deadline, 不能用迭代计数兜底 —— MinGW posix 线程
+// 模型下 sleep_for(微秒级) 是 no-op(实测 1000 次 sleep_for(200us) 仅 5us),
+// 迭代 guard 会在定时器到期前抢先触发, 造成假性超时(CI MinGW job 曾因此红)。
 bool drive_until_finished(rt::RtExecutor& exec,
                          std::chrono::milliseconds timeout = 2s) {
     auto deadline = std::chrono::steady_clock::now() + timeout;
-    int guard = 0;
     while (!exec.is_finished()) {
         exec.run();
         if (exec.is_finished()) break;
         std::this_thread::sleep_for(std::chrono::microseconds(200));
-        if (++guard > 100000) return false;
         if (std::chrono::steady_clock::now() > deadline) return false;
     }
     return exec.is_finished();
@@ -176,12 +177,13 @@ TEST_CASE(rt_post_ready_cross_thread) {
     rt::RtExecutor exec;
     exec.spawn(park_worker(parked, resumed), "parked");
 
-    // 驱动直到任务 park
-    int guard = 0;
-    while (!parked.load(std::memory_order_acquire) && guard < 2000) {
+    // 驱动直到任务 park。同上: 用墙钟 deadline 而非迭代计数
+    // (MinGW posix 模型微秒 sleep 是 no-op, 迭代 guard 会假性触发)。
+    auto park_deadline = std::chrono::steady_clock::now() + 2s;
+    while (!parked.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < park_deadline) {
         exec.run();
         std::this_thread::sleep_for(std::chrono::microseconds(100));
-        ++guard;
     }
     TEST_EXPECT_TRUE(parked.load() != nullptr);
 
@@ -295,17 +297,16 @@ TEST_CASE(rt_many_producers_post_ready) {
         exec.spawn(park_resume_worker(parked[i], resumed), "p");
     }
 
-    // 驱动直到全部 M 个任务 park
-    int guard = 0;
+    // 驱动直到全部 M 个任务 park(墙钟 deadline, 不用迭代 guard, 原因同上)
+    auto park_deadline = std::chrono::steady_clock::now() + 2s;
     int parked_count = 0;
-    while (parked_count < M && guard < 5000) {
+    while (parked_count < M && std::chrono::steady_clock::now() < park_deadline) {
         exec.run();
         std::this_thread::sleep_for(std::chrono::microseconds(100));
         parked_count = 0;
         for (int i = 0; i < M; ++i) {
             if (parked[i].load(std::memory_order_acquire)) ++parked_count;
         }
-        ++guard;
     }
     TEST_EXPECT_EQ(parked_count, M);
 
