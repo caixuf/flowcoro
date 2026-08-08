@@ -308,11 +308,16 @@ TEST_CASE(mock_bus_unsubscribe_waits_for_inflight_callback) {
     }
 
     std::atomic<bool> unsubscribe_done{false};
+    std::atomic<bool> unsubscribe_started{false};
     std::thread unsubscriber([&] {
+        unsubscribe_started.store(true, std::memory_order_release);
         bus.unsubscribe(sub);
         unsubscribe_done.store(true, std::memory_order_release);
     });
 
+    while (!unsubscribe_started.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     TEST_EXPECT_FALSE(unsubscribe_done.load(std::memory_order_acquire));
 
