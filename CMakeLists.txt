@@ -21,14 +21,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(WIN32)
         set(_flowcoro_arch_flags "")
         set(_flowcoro_plt_flag "")
+        # MinGW LTO 与静态库链接存在已知问题（符号以 .gnu.lto_ 前缀存储为 bitcode，
+        # 链接器无法解析）。Windows 上禁用 LTO 以保证测试可链接。
+        set(_flowcoro_lto_flag "")
+        set(_flowcoro_lto_link_flag "")
     else()
         set(_flowcoro_arch_flags "-march=native -mtune=native")
         set(_flowcoro_plt_flag "-fno-plt")
+        set(_flowcoro_lto_flag "-flto=auto")
+        set(_flowcoro_lto_link_flag "-flto=auto")
     endif()
 
     # Release: 全力优化，不保留帧指针（让寄存器分配器自由使用 rbp）
     set(CMAKE_CXX_FLAGS_RELEASE
-        "-O3 -DNDEBUG ${_flowcoro_arch_flags} -flto=auto -ffast-math -funroll-loops ${_flowcoro_plt_flag} -fomit-frame-pointer"
+        "-O3 -DNDEBUG ${_flowcoro_arch_flags} ${_flowcoro_lto_flag} -ffast-math -funroll-loops ${_flowcoro_plt_flag} -fomit-frame-pointer"
         CACHE STRING "Release build flags" FORCE)
 
     # RelWithDebInfo: 保留调试信息，适合 valgrind/callgrind
@@ -44,9 +50,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         CACHE STRING "Profiling linker flags" FORCE)
 
     # LTO 链接器参数（Release/Profiling 时由 -flto=auto 驱动，链接器也需要同步）
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE    "-flto=auto -Wl,-O1 -Wl,--as-needed"
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE    "${_flowcoro_lto_link_flag} -Wl,-O1 -Wl,--as-needed"
         CACHE STRING "Release linker flags" FORCE)
-    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-flto=auto -Wl,-O1 -Wl,--as-needed"
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${_flowcoro_lto_link_flag} -Wl,-O1 -Wl,--as-needed"
         CACHE STRING "Release shared linker flags" FORCE)
 elseif(MSVC)
     # MSVC: 使用等价的优化开关（/O2 + 全程序优化 /GL + /LTCG）
@@ -239,12 +245,14 @@ target_compile_features(flowcoro_net PUBLIC cxx_std_20)
 target_link_libraries(flowcoro INTERFACE
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
+    $<$<PLATFORM_ID:Windows>:atomic>
 )
 
 target_link_libraries(flowcoro_net PUBLIC
     flowcoro
     Threads::Threads
     $<$<PLATFORM_ID:Linux>:atomic>
+    $<$<PLATFORM_ID:Windows>:atomic>
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
