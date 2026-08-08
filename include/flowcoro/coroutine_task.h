@@ -31,22 +31,22 @@
  * destruction path.  Without protection the bus would later fire on_message
  * with a dangling user_data pointer.
  *
- * Fix: ~BusAwaitable uses the same atomic_flag as Bug 1 (test_and_set) as
- * a mutual-exclusion token.  If the destructor wins, it calls
- * bus_.unsubscribe() *before* State is freed.  Because unsubscribe() is
- * required to be synchronous (it must guarantee no further delivery occurs
- * after it returns), State is never accessed through a dangling pointer.
+ * Fix: ~BusAwaitable always performs a one-shot synchronous unsubscribe when
+ * a subscription is active.  Because unsubscribe() is required to be
+ * synchronous (it must guarantee no further delivery occurs after it returns,
+ * and in-flight callbacks have completed), State is never accessed through a
+ * dangling pointer.
  *
  * ### Bug 3 — Insufficient memory ordering on the message copy
  * The callback writes to State::msg and then calls schedule_resume.  Without
  * explicit ordering the resuming thread (which may be a different thread-pool
  * worker) might observe a stale or zero value for State::msg.
  *
- * Fix: the message is copied into State::msg before the acq_rel
- * test_and_set in on_message.  The test_and_set acts as a release fence
- * that orders the copy.  The scheduler's internal mutex operations (used
- * when enqueuing and dequeuing the resume task) provide the acquire fence on
- * the consuming side, so await_resume always observes the written copy.
+ * Fix: the callback first wins the atomic one-shot gate, then copies the
+ * message into State::msg before scheduling resume.  The scheduler's internal
+ * mutex operations (used when enqueuing and dequeuing the resume task)
+ * provide the required cross-thread synchronisation so await_resume observes
+ * the written copy.
  *
  * ## Bus concept
  * The Bus type must provide:
@@ -105,30 +105,10 @@ public:
 
     // ── Destructor ──────────────────────────────────────────────────────────
     // Bug 2 fix: if the coroutine is destroyed while suspended (Task
-    // dropped / cancelled), the scheduler eventually calls handle.destroy(),
-    // which runs the destructors of frame-local variables including this one.
-    // We use test_and_set as a mutual-exclusion token with on_message:
-    //   • Destructor wins (old==false): we call bus_.unsubscribe() first,
-    //     guaranteeing that on_message will not fire again after we return.
-    //     State is safely freed afterwards.
-    //   • on_message won (old==true):  the callback has already completed;
-    //     the coroutine resume is scheduled. Nothing to clean up here.
+    // dropped / cancelled), we synchronously unsubscribe before State may be
+    // freed. This prevents callback dereference of stale user_data.
     ~BusAwaitable() {
-        // If await_suspend was never called, state_->handle is a null handle.
-        if (!state_->handle) return;
-
-        // Try to claim cleanup ownership.
-        // test_and_set returns the *previous* value of fired:
-        //   false → we won; on_message has not entered its critical section.
-        //   true  → on_message already won and delivered a message.
-        if (!state_->fired.test_and_set(std::memory_order_acq_rel)) {
-            // We won.  Unsubscribe synchronously so that the callback cannot
-            // fire after this point and cannot dereference a freed State.
-            bus_.unsubscribe(state_->sub_handle);
-        }
-        // State_ (the shared_ptr member) goes out of scope after this
-        // destructor, freeing State.  By this point the bus is guaranteed
-        // not to call on_message anymore.
+        unsubscribe_once();
     }
 
     // ── Awaitable interface ─────────────────────────────────────────────────
@@ -142,13 +122,14 @@ public:
         // (same-thread) callback always finds a valid handle.
         state_->sub_handle = bus_.subscribe(&BusAwaitable::on_message,
                                             state_.get());
+        state_->subscribed.store(true, std::memory_order_release);
     }
 
     const Message& await_resume() {
         // We reach here because on_message scheduled our resume.
         // Unsubscribe to stop any further deliveries (belt-and-suspenders;
         // the atomic_flag already prevents a second resume).
-        bus_.unsubscribe(state_->sub_handle);
+        unsubscribe_once();
 
         // Return a reference to the copy stored in State.  State is kept
         // alive by state_ (a member of this awaitable, which lives on the
@@ -166,7 +147,6 @@ private:
     struct State {
         // Bug 1 fix: atomic_flag ensures only the first on_message call that
         // wins test_and_set schedules a resume.
-        // Bug 2 fix: the same flag is the ownership token in ~BusAwaitable.
         std::atomic_flag fired{};      // default-initialised to false (C++20)
 
         // Bug 3 fix: the message is *copied* into State before the acq_rel
@@ -177,7 +157,15 @@ private:
 
         std::coroutine_handle<> handle;
         SubscriptionHandle      sub_handle{};
+        std::atomic<bool>       subscribed{false};
+        std::atomic<bool>       unsubscribed{false};
     };
+
+    void unsubscribe_once() noexcept {
+        if (!state_->subscribed.load(std::memory_order_acquire)) return;
+        if (state_->unsubscribed.exchange(true, std::memory_order_acq_rel)) return;
+        bus_.unsubscribe(state_->sub_handle);
+    }
 
     // ── Static callback ─────────────────────────────────────────────────────
     static void on_message(const Message* msg, void* user_data) {
@@ -191,8 +179,8 @@ private:
             return;
         }
 
-        // Bug 3 fix: copy the message *before* releasing ownership so that
-        // await_resume can read it after any scheduler synchronisation.
+        // Bug 3 fix: copy the callback-owned payload into awaitable-owned
+        // storage before scheduling resume.
         state->msg = *msg;
 
         // Schedule the coroutine resume through the FlowCoro scheduler so

@@ -41,6 +41,11 @@
 
 #include "core.h"
 
+// Windows headers may define DELETE as a macro, which breaks HttpMethod::DELETE.
+#ifdef DELETE
+    #undef DELETE
+#endif
+
 namespace flowcoro::net {
 
 // HTTP方法
