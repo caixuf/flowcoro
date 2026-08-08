@@ -8,6 +8,7 @@
  */
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -49,18 +50,18 @@ public:
         for (auto& s : subs_) {
             if (s.id != id) continue;
             s.removed = true;
-            cv_.wait(lk, [&] { return s.in_flight == 0; });
+            cv_.wait(lk, [&s] { return s.in_flight == 0; });
             break;
         }
     }
 
     void publish(const TestMsg& msg) {
-        // Snapshot active subs while holding the lock, then call without it.
         struct ActiveSub {
-            int id;
+            int      id;
             Callback cb;
-            void* user_data;
+            void*    user_data;
         };
+        // Snapshot active subs while holding the lock, then call without it.
         std::vector<ActiveSub> active;
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -70,13 +71,14 @@ public:
                 active.push_back({s.id, s.cb, s.user_data});
             }
         }
-        for (auto& sub : active) {
-            sub.cb(&msg, sub.user_data);
+        for (auto& s : active) {
+            s.cb(&msg, s.user_data);
             std::lock_guard<std::mutex> lk(mu_);
-            for (auto& s : subs_) {
-                if (s.id != sub.id) continue;
-                if (s.in_flight > 0) --s.in_flight;
-                if (s.removed && s.in_flight == 0) cv_.notify_all();
+            for (auto& sub : subs_) {
+                if (sub.id != s.id) continue;
+                assert(sub.in_flight > 0);
+                --sub.in_flight;
+                if (sub.removed && sub.in_flight == 0) cv_.notify_all();
                 break;
             }
         }
