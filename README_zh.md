@@ -163,7 +163,7 @@ suspend_never  负载均衡  无锁队列  执行
 
 ```bash
 # 运行性能测试
-./build/benchmarks/simple_benchmark
+./build/benchmarks/professional_flowcoro_benchmark
 
 # 测试不同规模
 ./build/examples/hello_world 10000   # 1万任务

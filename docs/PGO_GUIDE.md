@@ -75,9 +75,10 @@ cmake -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_ENABLE_PGO=OFF ..
 
 | 选项 | 默认值 | 描述 |
 |------|--------|------|
-| `FLOWCORO_ENABLE_PGO` | ON | 启用PGO支持 |
-| `FLOWCORO_PGO_USE` | ON | 使用已有的profile数据 |
+| `FLOWCORO_ENABLE_PGO` | ON | 启用PGO支持（仅 GCC/Clang） |
 | `FLOWCORO_PGO_GENERATE` | OFF | 生成新的profile数据 |
+
+> 使用已有 profile 数据是自动行为：当 `pgo_profiles/` 目录存在 `.gcda` 文件时，CMake 自动复制并追加 `-fprofile-use`（无需单独开关，见 `CMakeLists.txt`）。
 
 ## 工作原理
 
@@ -139,6 +140,8 @@ FlowCoro的PGO实现基于GCC的Profile-Guided Optimization：
 - **Profile格式**: GCDA (GCC Data Archive)
 - **优化目标**: 分支预测、函数内联、循环优化
 - **覆盖范围**: 核心协程调度、内存池、lockfree数据结构
+
+**平台说明**: PGO（`-fprofile-generate` / `-fprofile-use`）仅适用于 GCC/Clang，CMake 的 PGO 逻辑只在 `GNU|Clang` 分支生效。Windows 下（含 MinGW）CMake 会**禁用 LTO**（`_flowcoro_lto_flag` 置空），以避免 MinGW 静态库链接 `-flto` 的已知符号解析问题（见 `CMakeLists.txt`），故 Windows 构建不启用 PGO/LTO。
 
 ## 性能成果
 

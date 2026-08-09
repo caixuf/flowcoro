@@ -163,7 +163,7 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 
 ```bash
 # Run performance tests
-./build/benchmarks/simple_benchmark
+./build/benchmarks/professional_flowcoro_benchmark
 
 # Test different scales
 ./build/examples/hello_world 10000   # 10K tasks

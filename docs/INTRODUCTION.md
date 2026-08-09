@@ -167,10 +167,11 @@ Task<void> race_example() {
         co_return 2;
     };
 
-    // 等待最快完成的任务
-    auto [result, index] = co_await when_any(slow_task(), fast_task());
+    // 等待最快完成的任务：返回 {胜者索引, 结果}（结果存于 std::any）
+    auto [index, result] = co_await when_any(slow_task(), fast_task());
+    int result_val = std::any_cast<int>(result);
     std::cout << "最先完成的任务索引: " << index
-              << "，结果: " << result << "\n";  // 索引: 1，结果: 2
+              << "，结果: " << result_val << "\n";  // 索引: 1，结果: 2
 }
 ```
 
@@ -338,8 +339,8 @@ make -j$(nproc)
 在 `CMakeLists.txt` 中添加：
 
 ```cmake
-find_package(flowcoro REQUIRED)
-target_link_libraries(your_target flowcoro::flowcoro)
+find_package(FlowCoro REQUIRED)
+target_link_libraries(your_target FlowCoro::flowcoro)
 ```
 
 或者直接包含头文件目录（header-only 模式）：

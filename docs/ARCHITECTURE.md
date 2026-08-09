@@ -49,15 +49,15 @@ public:
         drive_coroutine_pool();        // 驱动协程池
         process_timer_queue();         // 批量处理定时器(32个/批)
         process_ready_queue();         // 批量处理就绪队列(64个/批)
-        process_pending_tasks();       // 批量销毁协程(32个/批)
+        process_pending_tasks();       // 批量销毁协程(64个/批)
     }
-};
 ```
 
 **特点**:
 - **智能调度**: 负载均衡选择最优调度器
 - **批量处理**: 减少锁竞争，提升吞吐量
 - **生命周期管理**: 安全的协程创建和销毁
+- **后台线程**（近期实现）: 专用定时器线程驱动 timer（`get()` 不再需要 `drive()` 全局 manager 推进 timer，见 `coroutine_manager.h` FC-5）；后台回收线程（reaper）周期 drain 延迟销毁队列（FC-2）
 
 ### 第二层：协程池 (CoroutinePool)
 
@@ -66,7 +66,7 @@ public:
 ```cpp
 class CoroutinePool {
 private:
-    // 根据CPU核心数确定调度器数量 (通常4-16个)
+    // 调度器数量（当前固定为 1，性能最优配置，见 src/coroutine_pool.cpp NUM_SCHEDULERS）
     const size_t NUM_SCHEDULERS;
     
     // 独立协程调度器，每个管理一个无锁队列
@@ -90,8 +90,9 @@ public:
 ```
 
 **特点**:
-- **多调度器**: 4-16个独立调度器并行工作
-- **无锁队列**: 每个调度器使用独立的lockfree::Queue
+- **单调度器（当前）**: 调度器数量固定为 1（`NUM_SCHEDULERS=1`，性能最优配置）；多调度器与负载均衡框架保留，便于后续扩展
+- **无锁队列**: 调度器使用独立的 lockfree::Queue
+- **批量处理**: worker 循环每次批量取出最多 256 个协程执行，降低调度开销
 - **智能负载均衡**: 自动选择负载最轻的调度器，避免热点
 
 ### 第三层：线程池 (ThreadPool)

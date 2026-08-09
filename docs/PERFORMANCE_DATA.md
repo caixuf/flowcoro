@@ -2,6 +2,8 @@
 
 本文档包含 FlowCoro 的官方性能基准数据，供其他文档引用。
 
+> **⚠ 数据来源说明**: 下表数值为早期统一基准的结果，**未被当前 `benchmarks/professional_flowcoro_benchmark` 复现**（benchmarks/README.md 中的「最新专业基准测试结果」数值与此不同，如协程创建为 4.20M ops/s 而非 13.3M ops/s）。在重新跑基准并更新前，请以 benchmarks/README.md 或自行运行 `professional_flowcoro_benchmark` 的结果为准。
+
 ## 最新性能表现 (统一测试基准)
 
 ### 核心性能指标
