@@ -303,6 +303,66 @@ FlowCoro 在关键指标上与 Go 和 Rust (Tokio) 相比：
 
 ---
 
+## 确定性实时执行（flowcoro::rt）
+
+前面介绍的三层调度架构面向**高吞吐批处理**。对于延迟敏感的控制回路（机器人、
+自动驾驶、嵌入式），FlowCoro 额外提供 `flowcoro::rt` 的 `RtExecutor` —— 一个
+**单线程确定性实时执行模型**。
+
+### 为什么需要单独一套实时模型？
+
+三层调度为了吞吐量，会让协程在**任意工作线程**上恢复（并行、负载均衡）。
+而控制回路（如自动驾驶的周期控制）要求**确定性**：同一任务每次都在同一线程、
+以固定节奏执行，且绝不允许跨线程并发修改协程状态。`RtExecutor` 正是为此设计：
+
+```cpp
+#include <flowcoro/rt_executor.h>
+using namespace flowcoro::rt;
+
+// 周期控制任务：每 10ms 执行一次，绑定到 CPU 2
+RtTask control_task() {
+    while (!co_await stop_requested()) {
+        co_await sleep_for(std::chrono::milliseconds(10));
+        // ... 控制逻辑（绝不被其他线程内联 resume）
+        co_await yield();
+    }
+}
+
+int main() {
+    RtExecutor ex{{ .pin_cpu = 2 }};
+    ex.spawn(control_task(), "control");
+    while (!ex.is_finished()) ex.run();   // 非阻塞周期 tick
+    // 或 ex.run_blocking();
+}
+```
+
+**核心保证**：
+- **单线程亲和**：所有 `resume`/`destroy` 都发生在 `run()` 的调用线程；跨线程事件
+  只通过 `post_ready(h)` 递回句柄，绝不 inline `resume` —— 从根上避免数据竞争。
+- **周期 tick**：`run()` 是非阻塞 tick（定时器 → 就绪 → resume/destroy）；
+  `rt::yield()` 推迟到下一 tick，单 tick 内不重入。
+- **CPU 绑定**：`Config{.pin_cpu = N}` 把执行器线程绑到指定核。
+- **确定性关停**：`request_stop()` 协作式停止，帧在周期边界 `co_return` 并在
+  executor 线程销毁。
+
+### 自动驾驶场景示例
+
+`examples/autonomous_driving/ad_pipeline_demo.cpp` 演示了 FlowCoro 在自动驾驶
+中间件中的应用：Camera(30Hz)/LiDAR(10Hz)/Radar(20Hz) 传感器通过 **DDS Channel**
+发布订阅，感知节点用 `when_all`/`co_await` 做多传感器融合，规划节点用
+**`when_any` 实现 QoS Deadline**（地图服务 20ms 超时自动降级到缓存路由），
+全程零外部依赖（无需 ROS2/Apollo）。
+
+```bash
+cd build && cmake .. && make ad_pipeline_demo
+./examples/autonomous_driving/ad_pipeline_demo 5
+```
+
+> 完整 API 见 [API 参考 §9](API_REFERENCE.md#9-确定性实时执行-rtexecutor)，
+> 机制细节见 [架构设计](ARCHITECTURE.md#实时执行模型flowcorort)。
+
+---
+
 ## 适用场景
 
 ### 推荐使用 FlowCoro 的场景
@@ -313,6 +373,8 @@ FlowCoro 在关键指标上与 Go 和 Rust (Tokio) 相比：
 - **高频交易系统**：低延迟、高吞吐的金融数据处理
 - **生产者-消费者管道**：通过 Channel 构建数据流处理链
 - **爬虫/批量抓取**：并发抓取大量 URL
+- **机器人/自动驾驶/嵌入式控制**：借助 `flowcoro::rt` 的确定性实时执行，实现
+  周期控制回路、CPU 亲和与确定性调度
 
 ### 不适合的场景
 

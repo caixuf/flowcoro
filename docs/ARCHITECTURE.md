@@ -233,6 +233,75 @@ public:
 - 单一长时间运行的协程
 - 需要手动管理协程生命周期的场景
 
+## 实时执行模型（flowcoro::rt）
+
+三层调度架构面向**高吞吐批处理**；而 `flowcoro::rt` 的 `RtExecutor` 面向**延迟敏感的控制回路**
+（机器人/自动驾驶/嵌入式），两者是互补的两套调度模型，互不干扰。
+
+> API 细节见 [API 参考 §9](API_REFERENCE.md#9-确定性实时执行-rtexecutor)；
+> 自动驾驶场景示例见 [examples/autonomous_driving/ad_pipeline_demo.cpp](../examples/autonomous_driving/ad_pipeline_demo.cpp)。
+
+### 核心正确性契约
+
+```
+所有 resume 和 destroy 都发生在 run() 的调用线程（executor 线程）上。
+事件在别的线程发生时，只能 post_ready(h) 把 handle 递回来，绝不 inline h.resume()。
+```
+
+这是确定性（单线程）的根基：执行器线程是唯一修改协程帧状态的地方，
+跨线程只通过无锁队列/原子传递句柄，从根上避免数据竞争。
+
+### 事件流（双队列 + tick 快照）
+
+- **内部重投递**（spawn/yield/final/timer）：走 executor 线程私有的 `local_ready_` vector，
+  稳态零分配。
+- **跨线程事件**：走 `ready_ext_`（MPSC 无锁队列，`post_ready`）。
+
+`run()` 是非阻塞 tick，每次调用：
+
+1. `process_timers`：到期 timer 的 handle → `local_ready_`（绝不在 timer 路径 resume）；
+   stop 已请求时取消全部剩余 timer。
+2. tick 边界快照：`tick_batch_.clear()` + swap 自 `local_ready_` + 抽干 `ready_ext_`。
+   处理中新产生的 yield/final 落进"新的" `local_ready_`（下一 tick 才处理）——
+   从根上杜绝 yield 在单 tick 内无限重入。
+3. 遍历 tick_batch：done 帧 → destroy（executor 线程），其余 → resume。
+
+不阻塞、不 notify、不 syscall。
+
+### 两段式拆除
+
+```
+request_stop() -> 置标志
+  -> 下一次 run() 取消 timer（推 local_ready_）
+  -> task 在周期边界查 stop 后 co_return 到 final_suspend（park，标 done，推 local_ready_）
+  -> run() 的 drain 把 done 帧在 executor 线程 destroy
+  -> active 空 => is_finished()
+```
+
+优雅关停请用 `request_stop()` + 反复 `run()`（或 `shutdown()`）；析构仅为未关停时的兜底回收。
+
+### 关键 API
+
+| API | 说明 |
+|-----|------|
+| `RtExecutor::Config{.pin_cpu, .idle_sleep_us}` | pin_cpu 绑定宿主线到指定核（run_blocking，Linux） |
+| `spawn(RtTask, name)` | 注册任务，惰性启动（initial_suspend = suspend_always），须与 run 同线程 |
+| `run()` | 非阻塞 tick，宿主每周期调一次 |
+| `run_blocking()` | 阻塞便捷模式：loop run() + 空闲睡眠直到 is_finished() |
+| `request_stop()` / `stop_token()` | 协作式停止（周期边界检查，不抢占） |
+| `post_ready(h)` | 跨线程事件唯一合法出口（MPSC 无锁入队，不 inline resume） |
+| `rt::sleep_for(d)` / `rt::yield()` / `rt::stop_requested()` | 仅在 RtTask 协程内 co_await 的 awaitable |
+
+### 与三层调度的定位差异
+
+| 维度 | 三层调度（Task/CoroutinePool） | 实时层（flowcoro::rt） |
+|------|-------------------------------|------------------------|
+| 目标 | 高吞吐批处理、负载均衡 | 延迟确定、单线程亲和 |
+| 执行模型 | 多调度器 + 线程池并行 | 单线程周期 tick |
+| 线程 | 多工作线程 | 单 host 线程（可 CPU 绑定） |
+| resume 发生地 | 任意工作线程 | 固定 executor 线程 |
+| 典型场景 | Web/网关/批处理 | 机器人/自动驾驶/嵌入式控制 |
+
 ## 性能特征
 
 详细性能数据请参考 [性能数据参考](PERFORMANCE_DATA.md)。

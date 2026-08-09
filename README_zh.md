@@ -14,6 +14,7 @@
 - **Channel通信**: 线程安全的异步通道，支持生产者-消费者模式
 - **内存池**: 参考Redis/Nginx设计的自定义内存分配
 - **PGO优化**: 通过Profile-Guided编译提升性能
+- **确定性实时执行**: 单线程亲和的 `RtExecutor`，面向机器人/控制/嵌入式——周期 tick、CPU 绑定、稳态零系统调用（见 `flowcoro::rt`），并附[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)
 
 ## 性能表现
 
@@ -141,6 +142,27 @@ suspend_never  负载均衡  无锁队列  执行
 - **无锁队列**: 高性能任务分发
 - **延续机制**: 零拷贝任务链接
 
+### 确定性实时执行（`flowcoro::rt`）
+
+在高吞吐调度器之外，FlowCoro 附带一个**单线程确定性实时执行模型**（`RtExecutor`），面向延迟敏感的控制回路（机器人/自动驾驶/嵌入式）：
+
+- **单线程亲和**：所有 `resume`/`destroy` 都在执行器线程上发生；跨线程事件只通过 `post_ready(h)` 递回句柄，绝不 inline `resume`。这正是 FlowEngine 依赖它避免数据竞争的原因。
+- **周期 tick**：`run()` 是非阻塞 tick（定时器 → 就绪 → resume/destroy）。惰性启动任务（`RtTask`）按固定节奏执行；`rt::yield()` 推迟到下一 tick，保证单 tick 内不重入。
+- **CPU 绑定**：`Config{.pin_cpu = N}` 将执行器线程绑定到指定核（`run_blocking`）。
+- **稳态零系统调用**：内部重投递走执行器线程私有 vector 快照；跨线程路径走 MPSC 无锁队列。
+- **两段式关停**：`request_stop()` → 周期边界协作式停止 → 帧 `co_return` 并在执行器线程销毁。
+
+```cpp
+#include <flowcoro/rt_executor.h>
+
+flowcoro::rt::RtExecutor ex{{ .pin_cpu = 2 }};
+ex.spawn(periodic_control_task(), "control");
+ex.run_blocking();   // 周期 tick 直到所有任务结束
+// 或: while (!ex.is_finished()) ex.run();
+```
+
+完整用法见 [API 参考 §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor) 与[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)（DDS 发布订阅 + `when_any` QoS 超时降级）。
+
 ## 使用场景
 
 **适用于:**
@@ -151,6 +173,20 @@ suspend_never  负载均衡  无锁队列  执行
 - 微服务网关
 - 生产者-消费者管道
 - 多阶段数据处理工作流
+
+**配合实时层（`flowcoro::rt`）:**
+
+- 机器人/自动驾驶控制回路（周期、延迟敏感）
+- AMR/无人机稳控与导航
+- 嵌入式确定性调度
+- 任何需要单线程亲和 + CPU 绑定的嵌入式/控制负载
+
+试试[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)：
+
+```bash
+cd build && cmake .. && make ad_pipeline_demo
+./examples/autonomous_driving/ad_pipeline_demo 5
+```
 
 **Channel增强特性:**
 

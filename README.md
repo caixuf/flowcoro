@@ -14,6 +14,7 @@ English | [中文](README_zh.md)
 - **Channel Communication**: Thread-safe async channels for producer-consumer patterns
 - **Memory Pool**: Custom memory allocation inspired by Redis/Nginx design
 - **PGO Optimization**: Performance improvements through profile-guided compilation
+- **Deterministic Real-Time Execution**: Single-thread-affine `RtExecutor` for robotics / control / embedded — periodic ticks, CPU pinning, zero syscall in steady state (see `flowcoro::rt`) and a ready-made [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp)
 
 ## Performance
 
@@ -141,6 +142,27 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 - **Lock-free Queues**: High-performance task distribution
 - **Continuation Mechanism**: Zero-copy task chaining
 
+### Deterministic Real-Time Execution (`flowcoro::rt`)
+
+Alongside the high-throughput scheduler, FlowCoro ships a **single-thread deterministic real-time model** (`RtExecutor`) for latency-critical control loops (robotics / autonomous driving / embedded):
+
+- **Single-thread affinity**: every `resume` / `destroy` happens on the executor thread; cross-thread events only `post_ready(h)` the handle back — never inline `resume`. This is what FlowEngine depends on to avoid data races.
+- **Periodic tick**: `run()` is a non-blocking tick (timers → ready → resume/destroy). Lazy-start tasks (`RtTask`) run at fixed cadence; `rt::yield()` defers to the next tick, guaranteeing no re-entrancy within one tick.
+- **CPU pinning**: `Config{.pin_cpu = N}` binds the executor thread to a core (`run_blocking`).
+- **Zero syscall steady state**: internal re-post uses an executor-thread-local vector snapshot; cross-thread path uses an MPSC lock-free queue.
+- **Two-phase shutdown**: `request_stop()` → cooperative stop checked at cycle boundary → frames `co_return` and are destroyed on the executor thread.
+
+```cpp
+#include <flowcoro/rt_executor.h>
+
+flowcoro::rt::RtExecutor ex{{ .pin_cpu = 2 }};
+ex.spawn(periodic_control_task(), "control");
+ex.run_blocking();   // periodic ticks until all tasks finish
+// or: while (!ex.is_finished()) ex.run();
+```
+
+See the complete usage in [API Reference §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor) and the [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp) (DDS Pub/Sub + `when_any` QoS deadline degradation).
+
 ## Use Cases
 
 **Ideal for:**
@@ -151,6 +173,20 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 - Microservice gateways
 - Producer-consumer pipelines
 - Multi-stage data processing workflows
+
+**With the Real-Time layer (`flowcoro::rt`):**
+
+- Robotics / autonomous driving control loops (periodic, latency-critical)
+- AMR / drone stabilization and navigation
+- Embedded deterministic scheduling
+- Any embedded/control workload needing single-thread affinity + CPU pinning
+
+Try the [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp):
+
+```bash
+cd build && cmake .. && make ad_pipeline_demo
+./examples/autonomous_driving/ad_pipeline_demo 5
+```
 
 **Enhanced with Channels:**
 
