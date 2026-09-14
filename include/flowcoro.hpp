@@ -51,6 +51,10 @@
 #include "flowcoro/timeout.h"
 #include "flowcoro/when_any.h"
 
+// 无锁容器与 CPU 亲和性
+#include "flowcoro/bounded_channel.h"
+#include "flowcoro/cpu_affinity.h"
+
 // 确定性实时执行模型：单线程亲和、协作式停止、两段式拆除
 #include "flowcoro/rt_executor.h"
 

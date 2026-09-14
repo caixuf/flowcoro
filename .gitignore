@@ -127,3 +127,11 @@ site/
 
 #测试json文件
 *.json
+
+# Python 绑定（pybind11）：模块本体已由上面的 *.so 忽略，这里补打包/缓存产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+python/build/
+dist/
+.pytest_cache/

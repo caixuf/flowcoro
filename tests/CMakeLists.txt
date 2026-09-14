@@ -101,6 +101,15 @@ target_link_libraries(test_c_api flowcoro_net Threads::Threads)
 # ============================================================================
 add_executable(test_rt_executor test_rt_executor.cpp)
 
+# ============================================================================
+# 有界 MPMC Channel（Vyukov 环）+ CPU 亲和性/物理核契约
+# ============================================================================
+add_executable(test_bounded_channel test_bounded_channel.cpp)
+target_link_libraries(test_bounded_channel flowcoro_net Threads::Threads)
+
+add_executable(test_cpu_affinity test_cpu_affinity.cpp)
+target_link_libraries(test_cpu_affinity flowcoro_net Threads::Threads)
+
 # 链接库
 target_link_libraries(test_core
     flowcoro_net
@@ -212,6 +221,8 @@ add_test(NAME test_cancellation      COMMAND test_cancellation)
 add_test(NAME test_timeout           COMMAND test_timeout)
 add_test(NAME test_c_api             COMMAND test_c_api)
 add_test(NAME test_rt_executor       COMMAND test_rt_executor)
+add_test(NAME test_bounded_channel   COMMAND test_bounded_channel)
+add_test(NAME test_cpu_affinity      COMMAND test_cpu_affinity)
 
 # 设置测试属性
 set_tests_properties(test_core PROPERTIES
@@ -308,8 +319,18 @@ set_tests_properties(test_rt_executor PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_bounded_channel PROPERTIES
+    TIMEOUT 120
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+set_tests_properties(test_cpu_affinity PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_net_error_macro test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_net_error_macro test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor test_bounded_channel test_cpu_affinity PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 

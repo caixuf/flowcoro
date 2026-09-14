@@ -1001,6 +1001,102 @@ awaitable：`rt::sleep_for(d)`、`rt::yield()`、`rt::stop_requested()`（均须
 
 ---
 
+## 10. 有界 MPMC 无锁通道 (BoundedChannel)
+
+`channel.h` 里的 `Channel<T>` 是**协程间**通信（基于 mutex + 协程句柄等待队列，唤醒走 `CoroutineManager`），
+普通线程用不了，也没有非阻塞接口。需要在**多线程之间**做有界、非阻塞搬运时用 `bounded_channel.h`：
+
+```cpp
+#include <flowcoro/bounded_channel.h>
+
+flowcoro::BoundedChannel<std::string> ch(10240);   // 容量向上取 2 的幂
+```
+
+### 接口
+
+```cpp
+explicit BoundedChannel(size_t capacity);  // capacity >= 1，向上取到 2 的幂
+bool try_push(T value);   // 非阻塞；满或已 close 返回 false，value 不被消费
+bool try_pop(T& out);     // 非阻塞；空返回 false 且不修改 out
+size_t size() const;      // 近似元素数，恒 <= capacity()
+size_t capacity() const;
+bool empty() const;
+void close();             // try_push 立即失败；已入队元素仍可取完
+bool is_closed() const;
+```
+
+### 算法
+
+Vyukov 逐 slot sequence 的有界 MPMC 环：无内存分配、无 hazard pointer SMR、
+push/pop 都非阻塞。每个 slot 自带 `sequence`，同时表达「本轮是否轮到我」和
+「空/满」，所以满容量 N 个元素全部可用。
+
+**类型要求**：`T` 需 nothrow 可移动构造/赋值且可析构（位置一旦 CAS 占用就无法
+回滚，移动构造抛异常会让队列状态与 sequence 不一致）。`std::string` / `std::vector` /
+`std::shared_ptr` 均满足。
+
+### 为什么不用现成的两个容器
+
+- `lockfree::RingBuffer<T, Size>` 是 **SPSC**：`pop()` 里 `head` 走非 CAS 的
+  load→check→store，多消费者会重复投递同一元素，且 `head` 回退会让元素永久滞留。
+  它的 `Size` 还是编译期模板参数。
+- `lockfree::Queue<T>` 是正确的 Michael-Scott MPMC，但**无界**，且每条消息要
+  `pool_malloc` 一个节点、`dequeue` 占 2 个 hazard slot、`retire()` 走自旋锁，
+  而 hazard 线程表上限 128。高频路径上是全局争用点。
+
+### 与 Channel<T> 的分工
+
+| | `Channel<T>` (channel.h) | `BoundedChannel<T>` (bounded_channel.h) |
+|---|---|---|
+| 使用者 | 协程（`co_await send/recv`） | 裸线程 / 异种运行时（如 Python 绑定） |
+| 阻塞语义 | 满则挂起协程 | 满则立即返回 false |
+| 依赖 | `CoroutineManager` | 无 |
+| 容量 | `capacity==0` 表示**无界** | 必须有界且运行时可定 |
+
+---
+
+## 11. CPU 亲和性 (cpu_affinity)
+
+```cpp
+#include <flowcoro/cpu_affinity.h>
+
+bool ok = flowcoro::pin_current_thread_to_cpu(3);  // Linux sched_setaffinity；
+                                                   // 其它平台返回 false 且不报错
+std::vector<int> cores = flowcoro::physical_core_cpus();
+size_t n = flowcoro::physical_core_count();
+```
+
+`physical_core_cpus()` 读 `/sys/devices/system/cpu/cpu*/topology/thread_siblings_list`
+按 SMT 兄弟组去重、每组取一个代表 CPU（失败回退 `0..hardware_concurrency()-1`）。
+**必须用它而不是逻辑核数**做并发上限：把两个 worker 派到同一物理核的两个 SMT 线程
+等于没有并行。该口径与 IMFL 测试平台 `scripts/deploy/cpu_topology.sh` 一致
+（Intel 12 物理核 ×2 线程 → `0,12 / 1,13 / ... / 11,23`）。
+
+测试注入：环境变量 `FLOWCORO_SYSFS_CPU` 可覆盖 sysfs 根目录（对应 shell 侧的 `IMFL_SYSFS_CPU`）。
+
+### 给线程池绑核
+
+`lockfree::ThreadPool` 的构造函数接受可选绑核列表，第 i 个 worker 绑到
+`cpus[i % cpus.size()]`：
+
+```cpp
+lockfree::ThreadPool pool(8, flowcoro::physical_core_cpus());  // 8 个 worker 各占一物理核
+lockfree::ThreadPool plain(8);                                  // 不绑核（默认，行为不变）
+```
+
+`rt::RtExecutor` 与 `CoroutineScheduler` 也复用同一个 helper，不再各自内联一份实现。
+
+---
+
+## Python 绑定 (`flowcoro_py`)
+
+C++ 侧的协程池无法直接被 Python 使用（C++ 协程帧与 Python `async` 是两套调度模型）。
+若需要从 Python 做批量任务并发调度、或把同进程 C++ 侧的高频消息搬给 Python 消费，
+见 [Python 绑定文档](PYTHON_BINDING.md)（`-DFLOWCORO_BUILD_PYTHON=ON` 后产出
+`build/python/flowcoro_py.so`）。
+
+---
+
 ## 高级特性
 
 ### 性能监控

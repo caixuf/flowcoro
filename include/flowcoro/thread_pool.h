@@ -1,4 +1,5 @@
 #pragma once
+#include "cpu_affinity.h"
 #include "lockfree.h"
 #include "memory_pool.h"
 #include <thread>
@@ -20,11 +21,18 @@ private:
     std::atomic<size_t> active_threads_{0};
 
 public:
-    explicit ThreadPool(size_t num_threads = std::thread::hardware_concurrency()) {
+    // cpus 非空时，把第 i 个 worker 绑到 cpus[i % cpus.size()]。
+    // 传 physical_core_cpus() 即可保证每个 worker 独占一个物理核
+    // （SMT 兄弟线程不会被派给两个 worker）。cpus 为空 = 不绑核（默认，行为不变）。
+    explicit ThreadPool(size_t num_threads = std::thread::hardware_concurrency(),
+                        std::vector<int> cpus = {}) {
         active_threads_.store(num_threads, std::memory_order_release);
 
         for (size_t i = 0; i < num_threads; ++i) {
-            workers_.emplace_back([this] {
+            workers_.emplace_back([this, i, cpus] {
+                if (!cpus.empty()) {
+                    flowcoro::pin_current_thread_to_cpu(cpus[i % cpus.size()]);
+                }
                 worker_loop();
             });
         }
@@ -54,7 +62,6 @@ public:
         // 如果线程数降为0，表示优雅关闭成功
         if (active_threads_.load(std::memory_order_acquire) == 0) {
             graceful_shutdown = true;
-            std::cout << "ThreadPool graceful shutdown completed" << std::endl;
         }
 
         // 尝试 join 所有线程
@@ -93,15 +100,11 @@ public:
 
         workers_.clear();
 
-        // 清空任务队列，避免析构时访问已失效的对象
+        // 清空任务队列，避免析构时访问已失效的对象。
+        // 被丢弃的任务由各任务自己的 cleanup 守卫感知（例如 flowcoro_py 会把
+        // 对应 future 标成 Dropped），库这里不再往 stdout 打印。
         std::function<void()> unused_task;
-        size_t remaining_tasks = 0;
         while (task_queue_.dequeue(unused_task)) {
-            remaining_tasks++;
-        }
-        
-        if (remaining_tasks > 0) {
-            std::cout << "ThreadPool dropped " << remaining_tasks << " unprocessed tasks" << std::endl;
         }
     }
 

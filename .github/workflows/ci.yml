@@ -98,7 +98,7 @@ jobs:
       - name: Run TSAN-targeted concurrency regression tests
         run: |
           ctest --test-dir build-tsan --output-on-failure \
-                -R 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread' \
+                -R 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread|bounded_channel' \
                 --parallel 2
 
       - name: Run remaining test suite under TSAN
@@ -106,7 +106,7 @@ jobs:
           ctest --test-dir build-tsan --output-on-failure \
                 --parallel 2 \
                 --label-exclude network_external \
-                --exclude-regex 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread'
+                --exclude-regex 'lockfree_stress|when_any_v2|cancellation|timeout|bus_awaitable|cross_thread|bounded_channel'
 
   # ─────────────────────────────────────────────────────────────────────────
   # AddressSanitizer + UBSAN — catches memory errors and UB
@@ -152,6 +152,48 @@ jobs:
         run: ctest --test-dir build-asan --output-on-failure --parallel 2 --label-exclude network_external
 
   # ─────────────────────────────────────────────────────────────────────────
+  # Python bindings (pybind11) — flowcoro_py 的 import 与行为契约。
+  #
+  # 默认构建不含绑定（FLOWCORO_BUILD_PYTHON=OFF，其余四个 job 完全不受影响），
+  # 这里显式打开并跑 pytest。重点回归的是三个真实踩过的坑：
+  #   · when_all 保序 + 所有任务都被等到完成；
+  #   · GIL 真的被放开（否则 time.sleep 批次不可能并行）；
+  #   · close() 不在 join 期间持 GIL（会与在跑任务互等死锁），
+  #     且进程不显式 close 也要能干净退出（退出钩子必须注册在标准库 atexit
+  #     模块上，C 的 Py_AtExit 触发太晚，会让 worker 在 finalizing 阶段碰
+  #     Python 而 abort）。
+  # ─────────────────────────────────────────────────────────────────────────
+  python-binding:
+    name: Python Bindings (pybind11, Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build g++-13 python3-dev
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pybind11 pytest
+
+      - name: Configure (with Python bindings)
+        run: |
+          cmake -S . -B build-py -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DFLOWCORO_BUILD_PYTHON=ON \
+            -Dpybind11_DIR="$(python3 -m pybind11 --cmakedir)" \
+            -DFLOWCORO_BUILD_BENCHMARKS=OFF \
+            -DFLOWCORO_BUILD_EXAMPLES=OFF
+
+      - name: Build module
+        run: cmake --build build-py --parallel 4 --target flowcoro_py
+
+      - name: Run Python binding tests
+        run: ctest --test-dir build-py -R test_flowcoro_py --output-on-failure
+
+  # ─────────────────────────────────────────────────────────────────────────
   # Windows build + test (MinGW-w64 GCC via MSYS2)
   # 验证 FlowCoro 在 Windows 上的深度适配：winsock2 + WSAPoll 事件循环、
   # 跨平台套接字/内存对齐，以及不依赖 epoll/eventfd/POSIX socket 的构建。
@@ -194,10 +236,11 @@ jobs:
             test_cross_thread test_when_any test_sleep_for \
             test_exception_propagation test_bus_awaitable \
             test_lockfree_stress test_when_any_v2 test_cancellation \
-            test_timeout test_c_api test_rt_executor
+            test_timeout test_c_api test_rt_executor \
+            test_bounded_channel test_cpu_affinity
 
       - name: Run portable tests
         run: |
           ctest --test-dir build --output-on-failure --parallel 2 \
             --label-exclude network_external \
-            -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor'
+            -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor|test_bounded_channel|test_cpu_affinity'

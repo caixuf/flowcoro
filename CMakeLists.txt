@@ -118,6 +118,9 @@ option(FLOWCORO_ENABLE_SANITIZERS "Enable sanitizers (address+undefined)" OFF)
 option(FLOWCORO_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with ASAN)" OFF)
 option(FLOWCORO_BUILD_V3 "Build FlowCoro 3.0 architecture" ON)
 option(FLOWCORO_ENABLE_DATABASE "Enable database support" ON)
+option(FLOWCORO_BUILD_PYTHON "Build pybind11 Python bindings (flowcoro_py)" OFF)
+option(FLOWCORO_PYTHON_FETCH_PYBIND11
+       "Fetch pybind11 via FetchContent when not installed locally" ON)
 
 # 线程池大小（0 = 运行时自动检测 hardware_concurrency）
 # 对于混合架构 CPU（如 Alder Lake），可手动设为物理 P-core 数量（通常 = 逻辑核数 / 2）
@@ -369,6 +372,14 @@ if(FLOWCORO_BUILD_BENCHMARKS)
 endif()
 
 # =============================================================================
+# Python 绑定（pybind11）
+# =============================================================================
+
+if(FLOWCORO_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
+
+# =============================================================================
 # FlowCoro 3.0 架构
 # =============================================================================
 
@@ -470,5 +481,6 @@ message(STATUS " Build benchmarks: ${FLOWCORO_BUILD_BENCHMARKS}")
 message(STATUS " Build docs: ${FLOWCORO_BUILD_DOCS}")
 message(STATUS " Build V3 architecture: ${FLOWCORO_BUILD_V3}")
 message(STATUS " Enable sanitizers: ${FLOWCORO_ENABLE_SANITIZERS}")
+message(STATUS " Build Python bindings: ${FLOWCORO_BUILD_PYTHON}")
 message(STATUS " Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")

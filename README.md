@@ -15,6 +15,9 @@ English | [中文](README_zh.md)
 - **Memory Pool**: Custom memory allocation inspired by Redis/Nginx design
 - **PGO Optimization**: Performance improvements through profile-guided compilation
 - **Deterministic Real-Time Execution**: Single-thread-affine `RtExecutor` for robotics / control / embedded — periodic ticks, CPU pinning, zero syscall in steady state (see `flowcoro::rt`) and a ready-made [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp)
+- **Bounded Lock-Free MPMC Channel**: `BoundedChannel<T>` (Vyukov ring — no allocation, no SMR, immediate fail when full/empty); fills the gap left by the coroutine-only `Channel<T>`
+- **CPU Affinity**: `cpu_affinity.h` unifies pinning and **physical-core** enumeration (dedup by `thread_siblings_list`, so SMT siblings never go to two workers); `lockfree::ThreadPool` takes an affinity list directly
+- **Python Bindings (optional)**: `-DFLOWCORO_BUILD_PYTHON=ON` builds `flowcoro_py.so` — `CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`; see [Python binding docs](docs/PYTHON_BINDING.md)
 
 ## Performance
 
@@ -127,6 +130,33 @@ int main() {
 }
 ```
 
+### Python (optional)
+
+```bash
+pip install pybind11
+cmake -B build-py -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_PYTHON=ON
+cmake --build build-py --parallel $(nproc) --target flowcoro_py
+export PYTHONPATH=$PWD/build-py/python
+```
+
+```python
+import flowcoro_py as fc
+
+with fc.CoroutineThreadPool(threads=8, pin_to_cores=True) as pool:
+    futures = [pool.submit(run_case, path) for path in cases]
+    results = fc.when_all(futures)      # order-preserving; raises the lowest-index failure
+
+channel = fc.Channel(capacity=10240)    # bounded lock-free MPMC, bytes payload
+channel.try_push(b"pdu")                # -> bool, non-blocking
+msg = channel.try_pop()                 # -> Optional[bytes], non-blocking
+```
+
+**Read [docs/PYTHON_BINDING.md](docs/PYTHON_BINDING.md) first.** `submit` runs Python
+callables on the C++ pool, so only work that releases the GIL (subprocess / IO) gets real
+parallelism — measured against `concurrent.futures.ThreadPoolExecutor` it is a wash on the
+shapes that matter, and slower on micro-tasks. The binding is worth it for precise core
+pinning and an in-process bounded lock-free hand-off, not as a magic speedup.
+
 ## Architecture
 
 FlowCoro uses a three-layer scheduling architecture:
@@ -214,6 +244,7 @@ cd build && cmake .. && make ad_pipeline_demo
 - [Architecture Design](docs/ARCHITECTURE.md)
 - [Performance Data](docs/PERFORMANCE_DATA.md)
 - [PGO Optimization Guide](docs/PGO_GUIDE.md)
+- [Python Bindings](docs/PYTHON_BINDING.md)
 
 ## License
 

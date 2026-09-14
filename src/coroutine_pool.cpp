@@ -1,4 +1,5 @@
 #include "flowcoro/core.h"
+#include "flowcoro/cpu_affinity.h"
 #include "flowcoro/thread_pool.h"
 #include "flowcoro/lockfree.h"
 #include <iostream>
@@ -10,12 +11,6 @@
 #include <mutex>
 #include <condition_variable>
 #include <limits>
-
-// CPU亲和性支持
-#ifdef __linux__
-#include <pthread.h>
-#include <sched.h>
-#endif
 
 namespace flowcoro {
 
@@ -46,13 +41,9 @@ private:
     
     // CPU亲和性设置
     void set_cpu_affinity() {
-#ifdef __linux__
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
         // 将调度器绑定到特定CPU核心，避免线程迁移
-        CPU_SET(scheduler_id_ % std::thread::hardware_concurrency(), &cpuset);
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-#endif
+        pin_current_thread_to_cpu(
+            static_cast<int>(scheduler_id_ % std::thread::hardware_concurrency()));
     }
 
     void worker_loop() {

@@ -58,6 +58,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include "flowcoro/cpu_affinity.h"
 #include "flowcoro/lockfree.h"
 #include "flowcoro/logger.h"
 
@@ -401,14 +402,9 @@ inline void RtExecutor::run() {
 // run_blocking
 // ---------------------------------------------------------------------------
 inline void RtExecutor::run_blocking() {
-#ifdef __linux__
     if (config_.pin_cpu >= 0) {
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(config_.pin_cpu, &cpuset);
-        ::sched_setaffinity(0, sizeof(cpuset), &cpuset);
+        pin_current_thread_to_cpu(config_.pin_cpu);
     }
-#endif
     while (!is_finished()) {
         run();
         if (!is_finished()) {

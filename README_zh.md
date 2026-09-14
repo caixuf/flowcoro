@@ -15,6 +15,9 @@
 - **内存池**: 参考Redis/Nginx设计的自定义内存分配
 - **PGO优化**: 通过Profile-Guided编译提升性能
 - **确定性实时执行**: 单线程亲和的 `RtExecutor`，面向机器人/控制/嵌入式——周期 tick、CPU 绑定、稳态零系统调用（见 `flowcoro::rt`），并附[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)
+- **有界 MPMC 无锁通道**: `BoundedChannel<T>`（Vyukov 环，无分配、无 SMR、满/空立即返回），补齐 `Channel<T>` 只服务协程的空缺
+- **CPU 亲和性**: `cpu_affinity.h` 统一绑核与**物理核**枚举（按 `thread_siblings_list` 去重，SMT 兄弟不会分给两个 worker），`lockfree::ThreadPool` 可直接绑核
+- **Python 绑定（可选）**: `-DFLOWCORO_BUILD_PYTHON=ON` 产出 `flowcoro_py.so`——`CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`，见 [Python 绑定文档](docs/PYTHON_BINDING.md)
 
 ## 性能表现
 
@@ -214,6 +217,7 @@ cd build && cmake .. && make ad_pipeline_demo
 - [架构设计](docs/ARCHITECTURE.md)
 - [性能数据](docs/PERFORMANCE_DATA.md)
 - [PGO优化指南](docs/PGO_GUIDE.md)
+- [Python 绑定](docs/PYTHON_BINDING.md)
 
 ## 许可证
 
