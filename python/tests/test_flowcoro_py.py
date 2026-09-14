@@ -201,15 +201,31 @@ def test_close_does_not_deadlock_while_task_still_running():
     assert time.monotonic() - start < 5
 
 
+def _pinnable_cores_or_skip(minimum=2):
+    """返回可用于绑核的物理核，不足则 skip。
+
+    CI 上跑在容器/cgroup 里时，``sched_setaffinity`` 只能收敛到被允许的 CPU 集合，
+    而 physical_core_cpus() 是从 sysfs 的 possible 推出来的。两者不一致时绑核会
+    静默失败（helper 返回 False），测试继续跑就会得到一个「worker 没被绑到单核」
+    的假失败。这里先取交集，环境不给就明确 skip，而不是误报。
+    """
+    allowed = set(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else set()
+    cores = [core for core in fc.physical_core_cpus() if core in allowed]
+    if len(cores) < minimum:
+        pytest.skip(
+            f"environment cannot pin {minimum} physical cores "
+            f"(cores={fc.physical_core_cpus()}, allowed={sorted(allowed)})"
+        )
+    return cores
+
+
 # ---------------------------------------------------------------------------
 # 绑核
 # ---------------------------------------------------------------------------
 
 
 def test_pin_to_cores_gives_each_worker_a_distinct_physical_core():
-    cores = fc.physical_core_cpus()
-    if len(cores) < 2:
-        pytest.skip("needs at least 2 physical cores")
+    cores = _pinnable_cores_or_skip()
     count = min(4, len(cores))
 
     # 池是单条 MPMC 队列 + N 个 worker，任务落到哪个 worker 不确定。
@@ -222,7 +238,8 @@ def test_pin_to_cores_gives_each_worker_a_distinct_physical_core():
         return affinity
 
     with fc.CoroutineThreadPool(threads=count, pin_to_cores=True) as pool:
-        assert pool.cpus == cores
+        # pin_to_cores 用全量物理核列表；这里只校验每个 worker 被收敛到单核且互不重合
+        assert pool.cpus == fc.physical_core_cpus()
         assert pool.threads == count
         observed = fc.when_all([pool.submit(record_affinity) for _ in range(count)])
 
@@ -233,7 +250,7 @@ def test_pin_to_cores_gives_each_worker_a_distinct_physical_core():
 
 
 def test_explicit_cpus_and_no_pinning():
-    cores = fc.physical_core_cpus()
+    cores = _pinnable_cores_or_skip(minimum=1)
     with fc.CoroutineThreadPool(threads=1, cpus=cores[:1]) as pool:
         assert pool.cpus == cores[:1]
         observed = pool.submit(lambda: sorted(os.sched_getaffinity(0))).result()
@@ -241,8 +258,8 @@ def test_explicit_cpus_and_no_pinning():
 
     with fc.CoroutineThreadPool(threads=2) as pool:
         assert pool.cpus == []
-        multi = pool.submit(lambda: len(os.sched_getaffinity(0))).result()
-    assert multi > 1, "without pin_to_cores the worker should keep the full mask"
+        mask = pool.submit(lambda: sorted(os.sched_getaffinity(0))).result()
+    assert len(mask) > 1, "without pin_to_cores the worker should keep the full mask"
 
 
 def test_default_threads_and_validation():
@@ -393,7 +410,12 @@ def test_shutdown_is_idempotent():
 
 
 def _built_module_dir():
+    """被测模块所在目录：优先用当前 import 到的那个，保证子进程测的是同一个模块。"""
     import pathlib
+
+    here = pathlib.Path(fc.__file__).resolve().parent
+    if (here / "flowcoro_py.so").is_file() or list(here.glob("flowcoro_py*.pyd")):
+        return here
 
     root = pathlib.Path(__file__).resolve().parents[2]
     for candidate in sorted(root.glob("build*/python")):
