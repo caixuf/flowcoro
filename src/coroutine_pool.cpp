@@ -1,5 +1,6 @@
 #include "flowcoro/core.h"
 #include "flowcoro/cpu_affinity.h"
+#include "flowcoro/idle_park.h"
 #include "flowcoro/thread_pool.h"
 #include "flowcoro/lockfree.h"
 #include <iostream>
@@ -11,6 +12,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <limits>
+
+#ifndef FLOWCORO_NUM_SCHEDULERS
+#define FLOWCORO_NUM_SCHEDULERS 1
+#endif
 
 namespace flowcoro {
 
@@ -34,11 +39,10 @@ private:
     std::atomic<size_t> total_coroutines_{0};
     std::atomic<size_t> completed_coroutines_{0};
     std::chrono::steady_clock::time_point start_time_;
-    
-    // 条件变量用于高效等待
-    mutable std::mutex cv_mutex_;
-    mutable std::condition_variable cv_;
-    
+
+    // 可唤醒的空闲等待：短自旋后 park（futex / cv），enqueue 时 wake
+    IdlePark idle_;
+
     // CPU亲和性设置
     void set_cpu_affinity() {
         // 将调度器绑定到特定CPU核心，避免线程迁移
@@ -54,21 +58,25 @@ private:
         std::vector<std::coroutine_handle<>> batch;
         batch.reserve(BATCH_SIZE);
         
-        // 延迟获取管理器和负载均衡器，避免初始化竞态
-        auto* manager_ptr = &flowcoro::CoroutineManager::get_instance();
-        auto* load_balancer_ptr = &manager_ptr->get_load_balancer();
-        
-        // 自适应等待策略 - 优化版本
-        auto wait_duration = std::chrono::nanoseconds(100); // 更精细的等待控制
-        constexpr auto max_wait = std::chrono::microseconds(500);
-        size_t empty_iterations = 0;
-        
+        // 延迟获取管理器，避免初始化竞态。负载均衡仅在多调度器 opt-in 时使用。
+        SmartLoadBalancer* load_balancer_ptr = nullptr;
+        if (FLOWCORO_NUM_SCHEDULERS > 1) {
+            load_balancer_ptr = &flowcoro::CoroutineManager::get_instance().get_load_balancer();
+        }
+
         // 预取优化：用于减少内存访问延迟
         std::coroutine_handle<> prefetch_handle = nullptr;
-        
+
+        auto on_completed = [&]() {
+            completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
+            if (load_balancer_ptr) {
+                load_balancer_ptr->on_task_completed(scheduler_id_);
+            }
+        };
+
         while (!stop_flag_.load(std::memory_order_relaxed)) {
             batch.clear();
-            
+
             // 批量提取协程 - 使用无锁队列，带预取
             std::coroutine_handle<> handle;
             if (prefetch_handle) {
@@ -76,91 +84,61 @@ private:
                 prefetch_handle = nullptr;
                 queue_size_.fetch_sub(1, std::memory_order_relaxed);
             }
-            
+
             while (batch.size() < BATCH_SIZE && coroutine_queue_.dequeue(handle)) {
                 batch.push_back(handle);
                 queue_size_.fetch_sub(1, std::memory_order_relaxed);
-                
+
                 // 预取下一个协程的内存
                 if (batch.size() < BATCH_SIZE - 1) {
                     __builtin_prefetch(handle.address(), 0, 3);
                 }
             }
-            
-            // 如果没有任务，使用更精细的自适应等待策略
+
             if (__builtin_expect(batch.empty(), false)) [[unlikely]] {
-                empty_iterations++;
-                
-                // 分级等待策略：spin -> yield -> sleep -> condition_variable
-                if (empty_iterations < 64) {
-                    // Level 1: 纯自旋等待（最快响应）
-                    for (int i = 0; i < 64; ++i) {
-                        if (!coroutine_queue_.empty()) break;
-                        __builtin_ia32_pause(); // x86 pause instruction
-                    }
-                } else if (empty_iterations < 256) {
-                    // Level 2: yield to other threads
-                    std::this_thread::yield();
-                } else if (empty_iterations < 1024) {
-                    // Level 3: 短暂休眠
-                    std::this_thread::sleep_for(wait_duration);
-                    wait_duration = std::min(wait_duration * 2, std::chrono::duration_cast<std::chrono::nanoseconds>(max_wait));
-                } else {
-                    // Level 4: 使用条件变量等待，避免CPU浪费
-                    std::unique_lock<std::mutex> lock(cv_mutex_);
-                    cv_.wait_for(lock, max_wait, [this] { 
-                        return stop_flag_.load(std::memory_order_relaxed) || queue_size_.load(std::memory_order_relaxed) > 0; 
-                    });
-                }
+                idle_.wait([this] {
+                    return stop_flag_.load(std::memory_order_relaxed)
+                        || !coroutine_queue_.empty();
+                });
                 continue;
             }
-            
-            // 重置等待策略
-            empty_iterations = 0;
-            wait_duration = std::chrono::nanoseconds(100);
-            
+
             // 批量执行协程 - 添加适当的异常处理
             for (auto handle : batch) {
                 if (handle && !handle.done() && !stop_flag_.load()) {
                     // 增强的安全检查
                     void* addr = handle.address();
                     if (!addr) {
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        load_balancer_ptr->on_task_completed(scheduler_id_);
+                        on_completed();
                         continue;
                     }
-                    
+
                     // 检查地址合理性
                     uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
                     if (addr_val < 0x1000 || addr_val == 0xffffffffffffffff) {
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        load_balancer_ptr->on_task_completed(scheduler_id_);
+                        on_completed();
                         continue;
                     }
-                    
+
                     try {
                         handle.resume();
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        
-                        // 通知负载均衡器任务完成
-                        load_balancer_ptr->on_task_completed(scheduler_id_);
+                        on_completed();
                     } catch (const std::exception& e) {
                         // 记录异常但不退出线程，确保线程池稳定性
-                        std::cerr << "协程执行异常 (调度器 " << scheduler_id_ << "): " 
+                        std::cerr << "协程执行异常 (调度器 " << scheduler_id_ << "): "
                                   << e.what() << std::endl;
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        load_balancer_ptr->on_task_completed(scheduler_id_);
+                        on_completed();
                     } catch (...) {
                         // 处理未知异常
                         std::cerr << "协程执行未知异常 (调度器 " << scheduler_id_ << ")" << std::endl;
-                        completed_coroutines_.fetch_add(1, std::memory_order_relaxed);
-                        load_balancer_ptr->on_task_completed(scheduler_id_);
+                        on_completed();
                     }
                 }
             }
-            
-            // 实时更新负载均衡器
-            load_balancer_ptr->update_load(scheduler_id_, queue_size_.load());
+
+            if (load_balancer_ptr) {
+                load_balancer_ptr->update_load(scheduler_id_, queue_size_.load());
+            }
         }
     }
 
@@ -182,13 +160,12 @@ public:
     
     void stop() {
         if (!stop_flag_.exchange(true)) {
-            // 唤醒等待的worker线程
-            cv_.notify_all();
-            
+            idle_.wake_all();
+
             if (worker_thread_.joinable()) {
                 worker_thread_.join();
             }
-            
+
             // 清理剩余协程 - 使用无锁队列
             std::coroutine_handle<> handle;
             while (coroutine_queue_.dequeue(handle)) {
@@ -203,7 +180,7 @@ public:
             }
         }
     }
-    
+
     void schedule_coroutine(std::coroutine_handle<> handle) {
         if (!handle || handle.done() || stop_flag_.load()) {
             return;
@@ -221,51 +198,20 @@ public:
 
         total_coroutines_.fetch_add(1, std::memory_order_relaxed);
 
-        // 使用无锁队列添加协程
         coroutine_queue_.enqueue(handle);
-
-        // 精确更新队列大小
         queue_size_.fetch_add(1, std::memory_order_relaxed);
+        idle_.wake_one();
 
-        // 唤醒等待的worker线程
-        {
-            std::lock_guard<std::mutex> lock(cv_mutex_);
+        if (FLOWCORO_NUM_SCHEDULERS > 1) {
+            auto& load_balancer = flowcoro::CoroutineManager::get_instance().get_load_balancer();
+            load_balancer.update_load(scheduler_id_, queue_size_.load());
         }
-        cv_.notify_one();
-
-        // 实时更新负载均衡器的队列大小信息
-        auto& manager = flowcoro::CoroutineManager::get_instance();
-        auto& load_balancer = manager.get_load_balancer();
-        load_balancer.update_load(scheduler_id_, queue_size_.load());
     }
-    
+
     size_t get_queue_size() const {
         return queue_size_.load(std::memory_order_relaxed);
     }
-    
-    // 工作窃取：尝试从队列中获取一批任务给其他调度器
-    size_t try_steal_work(std::vector<std::coroutine_handle<>>& stolen_tasks, size_t max_steal = 32) {
-        if (queue_size_.load(std::memory_order_relaxed) <= 1) {
-            return 0; // 队列太小，不值得窃取
-        }
-        
-        size_t stolen_count = 0;
-        std::coroutine_handle<> handle;
-        
-        // 窃取一半的任务（最多max_steal个）
-        size_t target_steal = std::min(queue_size_.load() / 2, max_steal);
-        
-        while (stolen_count < target_steal && coroutine_queue_.dequeue(handle)) {
-            if (handle && !handle.done()) {
-                stolen_tasks.push_back(handle);
-                stolen_count++;
-                queue_size_.fetch_sub(1, std::memory_order_relaxed);
-            }
-        }
-        
-        return stolen_count;
-    }
-    
+
     size_t get_total_coroutines() const { return total_coroutines_.load(); }
     size_t get_completed_coroutines() const { return completed_coroutines_.load(); }
     size_t get_scheduler_id() const { return scheduler_id_; }
@@ -277,22 +223,23 @@ public:
 };
 
 // ==========================================
-// 多调度器协程池 - 管理12个独立的协程调度器
+// 协程池：默认 1 个 CoroutineScheduler + 后台 ThreadPool
+// FLOWCORO_NUM_SCHEDULERS>1 为实验性 opt-in（入队时 round-robin/负载选择，
+// 无工作窃取）。云上微型基准未显示多调度器优于单调度器。
 // ==========================================
 
 class CoroutinePool {
 private:
     static std::atomic<CoroutinePool*> instance_;
-    
-    // 动态根据CPU核心数确定调度器数量
+
     const size_t NUM_SCHEDULERS;
-    
-    // 动态数量的独立协程调度器
+
     std::vector<std::unique_ptr<CoroutineScheduler>> schedulers_;
-    
-    // 后台线程池 - 处理CPU密集型任务
+
+    // 后台线程池 - 处理 CPU / 阻塞任务（与协程调度器分离）
     std::unique_ptr<lockfree::ThreadPool> thread_pool_;
-    
+    size_t thread_pool_size_{0};
+
     std::atomic<bool> stop_flag_{false};
     
     // 统计信息
@@ -302,14 +249,13 @@ private:
 
 public:
     CoroutinePool()
-        : NUM_SCHEDULERS(1), // 固定使用1个调度器 - 性能最优配置
+        : NUM_SCHEDULERS(static_cast<size_t>(FLOWCORO_NUM_SCHEDULERS)),
           start_time_(std::chrono::steady_clock::now()) {
-        // 根据CPU核心数初始化调度器
         schedulers_.reserve(NUM_SCHEDULERS);
         for (size_t i = 0; i < NUM_SCHEDULERS; ++i) {
             schedulers_.emplace_back(std::make_unique<CoroutineScheduler>(i));
         }
-        
+
         // 线程池大小配置：优先使用编译时常量，否则自动检测
         // 对混合架构 CPU（如 Alder Lake），建议设置为 P-core 数量
         // cmake: -DFLOWCORO_THREAD_POOL_SIZE=<N>
@@ -325,41 +271,42 @@ public:
         // 合理上下界：[4, 32]
         thread_count = std::max(thread_count, static_cast<size_t>(4));
         thread_count = std::min(thread_count, static_cast<size_t>(32));
+        thread_pool_size_ = thread_count;
 
         thread_pool_ = std::make_unique<lockfree::ThreadPool>(thread_count);
 
-        // 仅在需要时输出启动信息
         static bool first_init = true;
         if (first_init) {
-            std::cout << "FlowCoro智能协程池启动 - " << NUM_SCHEDULERS 
-                      << "个协程调度器 + " << thread_count 
-                      << "个工作线程 (智能负载均衡)" << std::endl;
+            std::cout << "FlowCoro coroutine pool: " << NUM_SCHEDULERS
+                      << " scheduler(s) + " << thread_count
+                      << " thread-pool workers"
+                      << (NUM_SCHEDULERS > 1 ? " (experimental multi-scheduler)" : "")
+                      << std::endl;
             first_init = false;
         }
 
-        // 在完全初始化后再启动调度器，避免初始化时的竞态条件
         for (auto& scheduler : schedulers_) {
             scheduler->start();
         }
-        
-        // 初始化智能负载均衡器
-        auto& manager = flowcoro::CoroutineManager::get_instance();
-        auto& load_balancer = manager.get_load_balancer();
-        load_balancer.set_scheduler_count(NUM_SCHEDULERS);
+
+        if (NUM_SCHEDULERS > 1) {
+            auto& load_balancer = flowcoro::CoroutineManager::get_instance().get_load_balancer();
+            load_balancer.set_scheduler_count(NUM_SCHEDULERS);
+        }
     }
 
     ~CoroutinePool() {
         stop_flag_.store(true);
-        
-        // 停止所有调度器
+
         for (auto& scheduler : schedulers_) {
             if (scheduler) {
                 scheduler->stop();
             }
         }
-        
+
         schedulers_.clear();
-        std::cout << "FlowCoro自适应协程池关闭 (" << NUM_SCHEDULERS << "个调度器)" << std::endl;
+        std::cout << "FlowCoro coroutine pool stopped (" << NUM_SCHEDULERS
+                  << " scheduler(s))" << std::endl;
     }
 
     static CoroutinePool& get_instance() {
@@ -383,19 +330,21 @@ public:
         }
     }
 
-    // 协程调度 - 使用智能负载均衡分配到调度器
+    // 协程调度：默认单调度器直达；N>1 时才走负载选择
     void schedule_coroutine(std::coroutine_handle<> handle) {
         if (!handle || handle.done() || stop_flag_.load()) {
             return;
         }
 
-        // 使用智能负载均衡：选择最优调度器
-        auto& manager = flowcoro::CoroutineManager::get_instance();
-        auto& load_balancer = manager.get_load_balancer();
-
-        size_t scheduler_index = load_balancer.select_scheduler();
-
-        // 分配给对应的调度器
+        size_t scheduler_index = 0;
+        if (NUM_SCHEDULERS > 1) {
+            scheduler_index = flowcoro::CoroutineManager::get_instance()
+                                  .get_load_balancer()
+                                  .select_scheduler();
+            if (scheduler_index >= NUM_SCHEDULERS) {
+                scheduler_index = 0;
+            }
+        }
         schedulers_[scheduler_index]->schedule_coroutine(handle);
     }
 
@@ -480,15 +429,15 @@ public:
         size_t completed_task = completed_tasks_.load();
 
         return PoolStats{
-            NUM_SCHEDULERS, // num_schedulers
-            std::max(std::thread::hardware_concurrency(), static_cast<unsigned int>(32)), // thread_pool_workers (显示实际线程数)
-            pending, // pending_coroutines
-            total_cor, // total_coroutines
-            completed_cor, // completed_coroutines
-            total_task, // total_tasks
-            completed_task, // completed_tasks
-            total_cor > 0 ? (double)completed_cor / total_cor : 0.0, // coroutine_completion_rate
-            total_task > 0 ? (double)completed_task / total_task : 0.0, // task_completion_rate
+            NUM_SCHEDULERS,
+            thread_pool_size_,
+            pending,
+            total_cor,
+            completed_cor,
+            total_task,
+            completed_task,
+            total_cor > 0 ? (double)completed_cor / total_cor : 0.0,
+            total_task > 0 ? (double)completed_task / total_task : 0.0,
             uptime
         };
     }
@@ -496,48 +445,50 @@ public:
     void print_stats() const {
         auto stats = get_stats();
 
-        std::cout << "\n=== FlowCoro 多调度器协程池统计 ===" << std::endl;
-        std::cout << " 运行时间: " << stats.uptime.count() << " ms" << std::endl;
-        std::cout << " 架构模式: " << stats.num_schedulers << "个独立协程调度器 + 后台线程池" << std::endl;
-        std::cout << " 工作线程: " << stats.thread_pool_workers << " 个" << std::endl;
-        std::cout << " 待处理协程: " << stats.pending_coroutines << std::endl;
-        std::cout << " 总协程数: " << stats.total_coroutines << std::endl;
-        std::cout << " 完成协程: " << stats.completed_coroutines << std::endl;
-        std::cout << " 总任务数: " << stats.total_tasks << std::endl;
-        std::cout << " 完成任务: " << stats.completed_tasks << std::endl;
-        std::cout << " 协程完成率: " << std::fixed << std::setprecision(1)
+        std::cout << "\n=== FlowCoro coroutine pool ===" << std::endl;
+        std::cout << " uptime: " << stats.uptime.count() << " ms" << std::endl;
+        std::cout << " architecture: " << stats.num_schedulers
+                  << " coroutine scheduler(s) + thread pool" << std::endl;
+        std::cout << " thread-pool workers: " << stats.thread_pool_workers << std::endl;
+        std::cout << " pending coroutines: " << stats.pending_coroutines << std::endl;
+        std::cout << " total coroutines: " << stats.total_coroutines << std::endl;
+        std::cout << " completed coroutines: " << stats.completed_coroutines << std::endl;
+        std::cout << " total tasks: " << stats.total_tasks << std::endl;
+        std::cout << " completed tasks: " << stats.completed_tasks << std::endl;
+        std::cout << " coroutine completion: " << std::fixed << std::setprecision(1)
                   << (stats.coroutine_completion_rate * 100) << "%" << std::endl;
-        std::cout << " 任务完成率: " << std::fixed << std::setprecision(1)
+        std::cout << " task completion: " << std::fixed << std::setprecision(1)
                   << (stats.task_completion_rate * 100) << "%" << std::endl;
-        
-        // 显示各个调度器的详细信息
-        std::cout << "\n--- 调度器详情 ---" << std::endl;
+
+        std::cout << "\n--- schedulers ---" << std::endl;
         for (const auto& scheduler : schedulers_) {
             if (scheduler) {
-                std::cout << "调度器 #" << scheduler->get_scheduler_id() 
-                          << " - 队列: " << scheduler->get_queue_size()
-                          << ", 总数: " << scheduler->get_total_coroutines()
-                          << ", 完成: " << scheduler->get_completed_coroutines()
-                          << ", 运行时间: " << scheduler->get_uptime().count() << "ms" << std::endl;
+                std::cout << "scheduler #" << scheduler->get_scheduler_id()
+                          << " - queue: " << scheduler->get_queue_size()
+                          << ", total: " << scheduler->get_total_coroutines()
+                          << ", done: " << scheduler->get_completed_coroutines()
+                          << ", uptime: " << scheduler->get_uptime().count() << "ms" << std::endl;
             }
         }
-        
-        // 显示负载均衡统计
-        auto& manager = flowcoro::CoroutineManager::get_instance();
-        auto& load_balancer = manager.get_load_balancer();
-        auto load_stats = load_balancer.get_load_stats();
-        
-        std::cout << "\n--- 负载均衡详情 ---" << std::endl;
-        for (const auto& stat : load_stats) {
-            std::cout << "调度器 #" << stat.scheduler_id 
-                      << " - 当前队列: " << stat.queue_load
-                      << ", 历史处理: " << stat.total_processed
-                      << ", 负载评分: " << std::fixed << std::setprecision(2) << stat.load_score
-                      << std::endl;
+
+        if (NUM_SCHEDULERS > 1) {
+            auto& load_balancer = flowcoro::CoroutineManager::get_instance().get_load_balancer();
+            auto load_stats = load_balancer.get_load_stats();
+
+            std::cout << "\n--- load balancer (experimental multi-scheduler) ---" << std::endl;
+            for (const auto& stat : load_stats) {
+                std::cout << "scheduler #" << stat.scheduler_id
+                          << " - queue: " << stat.queue_load
+                          << ", processed: " << stat.total_processed
+                          << ", score: " << std::fixed << std::setprecision(2) << stat.load_score
+                          << std::endl;
+            }
         }
-        
+
         std::cout << "===============================" << std::endl;
     }
+
+    size_t num_schedulers() const noexcept { return NUM_SCHEDULERS; }
 };
 
 // 静态成员定义
@@ -565,6 +516,10 @@ void drive_coroutine_pool() {
 // 统计信息接口
 void print_pool_stats() {
     CoroutinePool::get_instance().print_stats();
+}
+
+size_t coroutine_pool_num_schedulers() {
+    return CoroutinePool::get_instance().num_schedulers();
 }
 
 // 关闭接口

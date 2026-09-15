@@ -1,5 +1,6 @@
 #pragma once
 #include "cpu_affinity.h"
+#include "idle_park.h"
 #include "lockfree.h"
 #include "memory_pool.h"
 #include <thread>
@@ -19,6 +20,7 @@ private:
     std::vector<std::thread> workers_;
     std::atomic<bool> stop_{false};
     std::atomic<size_t> active_threads_{0};
+    flowcoro::IdlePark idle_;
 
 public:
     // cpus 非空时，把第 i 个 worker 绑到 cpus[i % cpus.size()]。
@@ -41,6 +43,7 @@ public:
     ~ThreadPool() {
         // 设置析构标志，避免新任务入队
         stop_.store(true, std::memory_order_release);
+        idle_.wake_all();
 
         // 改进的关闭逻辑：给工作线程更多时间完成当前任务
         auto start_time = std::chrono::steady_clock::now();
@@ -123,6 +126,7 @@ public:
 
         if (!stop_.load(std::memory_order_acquire)) {
             task_queue_.enqueue([task]() { (*task)(); });
+            idle_.wake_one();
         } else {
             throw std::runtime_error("ThreadPool is stopped");
         }
@@ -134,6 +138,7 @@ public:
     void enqueue_void(std::function<void()> task) {
         if (!stop_.load(std::memory_order_acquire)) {
             task_queue_.enqueue(std::move(task));
+            idle_.wake_one();
         } else {
             throw std::runtime_error("ThreadPool is stopped, cannot enqueue tasks");
         }
@@ -142,6 +147,7 @@ public:
     void shutdown() {
         // 设置 stop 标志
         stop_.store(true, std::memory_order_release);
+        idle_.wake_all();
 
         // 等待所有工作线程完成当前任务并退出
         for (auto& worker : workers_) {
@@ -197,18 +203,9 @@ public:
 private:
     void worker_loop() {
         std::function<void()> task;
-        
-        // 自适应等待策略，减少CPU浪费
-        auto wait_duration = std::chrono::microseconds(100);
-        constexpr auto max_wait = std::chrono::milliseconds(10);
-        size_t empty_iterations = 0;
 
         while (!stop_.load(std::memory_order_acquire)) {
             if (task_queue_.dequeue(task)) {
-                // 有任务：重置等待策略并执行
-                empty_iterations = 0;
-                wait_duration = std::chrono::microseconds(100);
-                
                 try {
                     task();
                 } catch (const std::exception& e) {
@@ -218,20 +215,9 @@ private:
                     std::cerr << "ThreadPool worker caught unknown exception" << std::endl;
                 }
             } else {
-                // 无任务：使用自适应等待策略，避免CPU忙等待
-                empty_iterations++;
-                
-                if (empty_iterations < 10) {
-                    // 短期内没任务，快速检查
-                    std::this_thread::yield();
-                } else if (empty_iterations < 100) {
-                    // 中期没任务，短暂休眠
-                    std::this_thread::sleep_for(wait_duration);
-                    wait_duration = std::min(wait_duration * 2, std::chrono::microseconds(1000));
-                } else {
-                    // 长期没任务，较长休眠
-                    std::this_thread::sleep_for(max_wait);
-                }
+                idle_.wait([this] {
+                    return stop_.load(std::memory_order_acquire) || !task_queue_.empty();
+                });
             }
         }
 
@@ -249,7 +235,9 @@ private:
     }
 };
 
-// 工作窃取线程池实现
+// 工作窃取线程池 —— 未被 CoroutinePool 使用。默认调度路径是
+// 单 CoroutineScheduler + lockfree::ThreadPool。保留此类供实验/
+// 进程内显式构造；空闲等待与 ThreadPool 相同（park，而非裸 yield）。
 class WorkStealingThreadPool {
 private:
     struct alignas(64) WorkerData {
@@ -262,6 +250,7 @@ private:
     lockfree::Queue<std::function<void()>> global_queue_;
     std::atomic<bool> stop_{false};
     std::atomic<size_t> active_workers_{0};
+    flowcoro::IdlePark idle_;
 
     static thread_local size_t worker_id_;
 
@@ -309,6 +298,7 @@ public:
             } else {
                 global_queue_.enqueue(wrapper);
             }
+            idle_.wake_one();
         } else {
             throw std::runtime_error("WorkStealingThreadPool is stopped");
         }
@@ -318,6 +308,7 @@ public:
 
     void shutdown() {
         stop_.store(true, std::memory_order_release);
+        idle_.wake_all();
 
         for (auto& worker : workers_) {
             if (worker.joinable()) {
@@ -370,7 +361,25 @@ private:
                     // 异常处理
                 }
             } else {
-                std::this_thread::yield();
+                idle_.wait([this, worker_index] {
+                    if (stop_.load(std::memory_order_acquire)) {
+                        return true;
+                    }
+                    if (!global_queue_.empty()) {
+                        return true;
+                    }
+                    if (!worker_data_[worker_index]->local_queue.empty()) {
+                        return true;
+                    }
+                    for (size_t i = 0; i < worker_data_.size(); ++i) {
+                        if (i != worker_index &&
+                            worker_data_[i]->has_work.load(std::memory_order_acquire) &&
+                            !worker_data_[i]->local_queue.empty()) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
             }
         }
 

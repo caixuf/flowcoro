@@ -35,7 +35,7 @@ struct TimerEntry {
 // 协程管理器
 class CoroutineManager {
 private:
-    // 智能负载均衡器实例
+    // 负载均衡器：默认单调度器不用它；FLOWCORO_NUM_SCHEDULERS>1 时才参与入队
     SmartLoadBalancer load_balancer_;
     
 public:
@@ -82,7 +82,7 @@ public:
         cancelled_timers_.insert(timer_id);
     }
 
-    // 调度协程恢复 - 集成协程池和智能负载均衡
+    // 调度协程恢复：交给 CoroutinePool（默认单个 CoroutineScheduler）
     void schedule_resume(std::coroutine_handle<> handle) {
         if (!handle) {
             LOG_ERROR("Null handle in schedule_resume");

@@ -7,8 +7,8 @@ FlowCoro 是一个基于 C++20 协程的高性能异步编程库，采用**同�
 ### 核心特性
 
 - **同步启动**: 协程创建时在调用者线程上同步执行直到首个挂起点
-- **无锁架构**: 多层无锁队列实现高性能协程调度
-- **智能负载均衡**: CPU亲和性绑定 + 动态负载感知
+- **无锁架构**: 无锁队列实现协程调度
+- **单调度器**: 默认 1 个 CoroutineScheduler；CPU 亲和性可选
 - **内存池优化**: Redis/Nginx风格的内存管理
 - **批量处理**: 256协程批次处理，减少调度开销
 
@@ -93,33 +93,15 @@ class CoroutineScheduler {
                 handle.resume();
             }
             
-            // 自适应等待策略
-            adaptive_wait_strategy();
+            idle_.wait([this] { return stop_ || !queue.empty(); });
         }
     }
 };
 ```
 
-#### 3. 智能负载均衡
+#### 3. 负载均衡（实验性，非默认）
 
-```cpp
-class SmartLoadBalancer {
-    // 实时负载跟踪（无锁）
-    std::array<std::atomic<size_t>, MAX_SCHEDULERS> queue_loads_;
-    
-    size_t select_scheduler() {
-        // 混合策略：性能 + 公平性
-        size_t quick_choice = round_robin_counter_.fetch_add(1) % scheduler_count_;
-        
-        // 每16次执行负载检查（避免过度优化）
-        if ((quick_choice & 0xF) == 0) {
-            return find_least_loaded_scheduler();
-        }
-        
-        return quick_choice;
-    }
-};
-```
+默认 `FLOWCORO_NUM_SCHEDULERS=1`，入队直达唯一调度器。`SmartLoadBalancer` 只在 cmake 把调度器数设为 >1 时使用。不要把「智能负载均衡」当成默认行为。
 
 ### 并发性能特征
 
@@ -228,27 +210,12 @@ while (batch.size() < BATCH_SIZE && coroutine_queue_.dequeue(handle)) {
 }
 ```
 
-#### 3. 自适应等待策略
+#### 3. 空闲等待（IdlePark）
 
 ```cpp
-void adaptive_wait_strategy() {
-    if (empty_iterations < 64) {
-        // Level 1: 纯自旋（最快响应）
-        for (int i = 0; i < 64; ++i) {
-            __builtin_ia32_pause();  // x86 pause指令
-        }
-    } else if (empty_iterations < 256) {
-        // Level 2: 让出CPU时间片
-        std::this_thread::yield();
-    } else if (empty_iterations < 1024) {
-        // Level 3: 短暂休眠
-        std::this_thread::sleep_for(wait_duration);
-    } else {
-        // Level 4: 条件变量等待
-        std::unique_lock<std::mutex> lock(cv_mutex_);
-        cv_.wait_for(lock, max_wait);
-    }
-}
+// 短自旋 + yield，然后 park（Linux futex / 否则 cv）
+// enqueue 时若有 waiter 则 wake_one —— 可打断，不像 sleep_for
+idle_.wait([this] { return stop_ || !queue.empty(); });
 ```
 
 ---
@@ -1211,7 +1178,7 @@ flowcoro::print_flowcoro_stats();
 
 ### 协程池
 
-协程池由 `CoroutineManager` 自动管理（多调度器 + 无锁队列 + 负载均衡），无公开配置接口，无需手动配置。底层调度接口见 `scheduler_api.h`：
+协程池由 `CoroutineManager` 自动管理（默认 **1 个** CoroutineScheduler + 无锁队列 + 后台 ThreadPool）。可用 `-DFLOWCORO_NUM_SCHEDULERS=N` 做实验性多调度器，无公开运行时配置。底层接口见 `scheduler_api.h`：
 
 ```cpp
 flowcoro::schedule_coroutine_enhanced(handle);  // 调度一个协程句柄

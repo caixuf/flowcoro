@@ -127,6 +127,11 @@ option(FLOWCORO_PYTHON_FETCH_PYBIND11
 set(FLOWCORO_THREAD_POOL_SIZE 0 CACHE STRING
     "Default thread pool size (0=auto, recommend P-core count for hybrid CPUs)")
 
+# 协程调度器数量。默认 1：单调度器是受支持的架构，不是「暂时的」配置。
+# >1 为实验性 opt-in（入队负载选择，无工作窃取）。不要把它当成默认故事。
+set(FLOWCORO_NUM_SCHEDULERS 1 CACHE STRING
+    "Coroutine schedulers (1=default single scheduler; >1 experimental)")
+
 # 查找依赖
 find_package(Threads REQUIRED)
 
@@ -299,6 +304,19 @@ if(FLOWCORO_THREAD_POOL_SIZE GREATER 0)
     message(STATUS "FlowCoro: fixed thread pool size = ${FLOWCORO_THREAD_POOL_SIZE}")
 else()
     message(STATUS "FlowCoro: thread pool size = auto (hardware_concurrency)")
+endif()
+
+if(FLOWCORO_NUM_SCHEDULERS MATCHES "^[0-9]+$" AND FLOWCORO_NUM_SCHEDULERS GREATER 0)
+    target_compile_definitions(flowcoro_net PUBLIC
+        FLOWCORO_NUM_SCHEDULERS=${FLOWCORO_NUM_SCHEDULERS}
+    )
+    if(FLOWCORO_NUM_SCHEDULERS GREATER 1)
+        message(STATUS "FlowCoro: experimental NUM_SCHEDULERS = ${FLOWCORO_NUM_SCHEDULERS}")
+    else()
+        message(STATUS "FlowCoro: NUM_SCHEDULERS = 1 (single coroutine scheduler)")
+    endif()
+else()
+    message(FATAL_ERROR "FLOWCORO_NUM_SCHEDULERS must be a positive integer (got '${FLOWCORO_NUM_SCHEDULERS}')")
 endif()
 
 # Sanitizers支持

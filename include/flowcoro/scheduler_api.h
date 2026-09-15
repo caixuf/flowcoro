@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <functional>
 #include <coroutine>
 #include "performance_monitor.h"
@@ -11,6 +12,7 @@ void schedule_task_enhanced(std::function<void()> task);
 void drive_coroutine_pool();
 void print_pool_stats();
 void shutdown_coroutine_pool();
+size_t coroutine_pool_num_schedulers();
 
 // 性能监控接口
 void print_flowcoro_stats();
