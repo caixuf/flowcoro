@@ -2,10 +2,9 @@
  * @file rt_executor.h
  * @brief flowcoro::rt — 确定性实时执行模型
  *
- * 设计目标: 单线程亲和、周期执行、销毁只在静止点、稳态调度零分配(内部重投递
- * 走 vector 快照);跨线程 post_ready 用池节点(预热后复用,池空退 std::malloc)、标志式取消。
- * 任何机器人/控制/嵌入式项目都想要的通用实时执行模型。它是纯新增, 不碰
- * Task<T>/CoroTask, 零回归面; 有明确消费者(FlowEngine)。
+ * 设计目标: 单线程亲和、周期执行、销毁只在静止点。内部重投递走 vector 快照
+ * (capacity 预留后稳态不再堆分配)。跨线程 post_ready 走 lockfree::Queue
+ * (每次入队分配池节点; hazard retire 可能自旋)。纯新增, 不碰 Task<T>/CoroTask。
  *
  * =====================================================================
  * 核心正确性契约(一切皆压在此句之上):
@@ -20,11 +19,12 @@
  * 使用约定:
  *   - spawn() 与 run() 必须在同一(宿主)线程调用, 且不并发。
  *   - post_ready() / request_stop() 可从任意线程调用(无锁队列 / 原子)。
- *   - 宿主每个 tick 调一次 run(); 持续调用直到 is_finished()。
+ *   - 控制回路请用宿主周期调 run()(可配合 next_timer_deadline() 决定何时再 tick);
+ *     run_blocking() 是便捷模式, 空闲时可能 sleep, 不是硬实时路径。
  *
  * 事件流(双队列 + tick 快照):
  *   - 内部重投递(spawn/yield/final/timer)走 local_ready_(executor 线程私有 vector,
- *     稳态零分配)。
+ *     预留后稳态零堆分配)。
  *   - 跨线程事件走 ready_ext_(MPSC 无锁, post_ready)。
  *   run() = 非阻塞 tick。每次调用:
  *     1) process_timers: 到期 timer 的 handle -> local_ready_(绝不在 timer 路径 resume);
@@ -33,13 +33,14 @@
  *        处理中新产生的 yield/final 落进"新的" local_ready_(下 tick 才处理) ——
  *        这从根上杜绝 yield 在单 tick 内无限重入(R1 正解)。
  *     3) 遍历 tick_batch_: done 帧 -> destroy(executor 线程), 其余 -> resume。
- *   不阻塞、不 notify、不 syscall。
+ *   run() 本身不阻塞、不 notify。本地路径在 vector capacity 预热后无堆分配、
+ *   无 syscall; 抽干 ready_ext_ 会走 hazard pointer(retire 阈值上有自旋锁)。
  *
  * 两段式拆除:
  *   request_stop() -> 置标志
  *     -> 下一次 run() 取消 timer(推 local_ready_)
  *     -> task 在周期边界查 stop 后 co_return 到 final_suspend(park, 标 done, 推 local_ready_)
- *     -> 同一次/下一次 run() 的 drain 把 done 帧在 executor 线程 destroy
+ *     -> 下一次 run() 的 drain 把 done 帧在 executor 线程 destroy
  *     -> active 空 => is_finished()
  *   优雅关停请用 shutdown(); 析构仅为兜底(见 ~RtExecutor 注释)。
  */
@@ -57,10 +58,12 @@
 #include <exception>
 #include <stdexcept>
 #include <thread>
+#include <optional>
 
 #include "flowcoro/cpu_affinity.h"
 #include "flowcoro/lockfree.h"
 #include "flowcoro/logger.h"
+#include "flowcoro/rt_jitter.h"
 
 namespace flowcoro::rt {
 
@@ -136,9 +139,8 @@ private:
 //
 // done_ / dead_ / prev_ / next_ 仅在 executor 线程访问:
 //   final_awaiter::await_suspend 在 executor 线程(resume 栈)中执行, 设置 done_ 并
-//   通过 post_ready 把 handle 递回 ready 队列。run() 的 drain 读 done_ 决定 resume
-//   还是 destroy。MPSC ready 队列的 release/acquire 已足够保证可见性, 故这里用
-//   普通 bool 而非 atomic。
+//   通过 post_local 把 handle 递回 local_ready_。run() 的 drain 读 done_ 决定 resume
+//   还是 destroy。同一线程, 故这里用普通 bool 而非 atomic。
 // ---------------------------------------------------------------------------
 struct RtTask::promise_type {
     RtExecutor* executor_ = nullptr;
@@ -188,8 +190,14 @@ struct RtTask::promise_type {
 class RtExecutor {
 public:
     struct Config {
-        int pin_cpu = -1;               // CPU 亲和性(run_blocking 生效); -1 不绑定
-        uint64_t idle_sleep_us = 1000;   // run_blocking 空闲 tick 间睡眠
+        // CPU 亲和性: 第一次 run() / run_blocking() 时绑到该逻辑 CPU(Linux)。
+        // -1 不绑定。只作用于调用 run 的那条线程; 不会给外部 post_ready 线程绑核。
+        int pin_cpu = -1;
+        // run_blocking 在「无 local_ready / 无到期 timer / ready_ext 近似为空」时
+        // 最多睡这么久; 若更早的 timer 存在则睡到该 deadline。
+        // 0 = 忙等(不 sleep, 贴近「run() 稳态无 syscall」, 占满一核)。
+        // 默认 1000us: 便捷/CI 友好, 不是硬实时。
+        uint64_t idle_sleep_us = 1000;
     };
 
     using Handle = std::coroutine_handle<>;
@@ -222,6 +230,14 @@ private:
     std::atomic<bool> stop_flag_{false};
     std::atomic<size_t> active_count_{0};
     Config config_;
+    bool affinity_applied_ = false;
+    bool affinity_ok_ = false;
+
+    void reserve_hot_paths() {
+        local_ready_.reserve(64);
+        tick_batch_.reserve(64);
+        timers_.reserve(32);
+    }
 
     // 定时器堆比较: 最小堆(parent <= children), std::greater<TimerEntry> 用 operator>。
     static bool timer_less(const TimerEntry& a, const TimerEntry& b) noexcept {
@@ -229,8 +245,8 @@ private:
     }
 
 public:
-    explicit RtExecutor() : config_() {}
-    explicit RtExecutor(Config cfg) : config_(cfg) {}
+    explicit RtExecutor() : config_() { reserve_hot_paths(); }
+    explicit RtExecutor(Config cfg) : config_(cfg) { reserve_hot_paths(); }
     ~RtExecutor();
 
     RtExecutor(const RtExecutor&) = delete;
@@ -239,12 +255,30 @@ public:
     // 注册任务。帧 park 着, executor 接管所有权。必须与 run() 同线程、不并发。
     void spawn(RtTask task, std::string_view name);
 
-    // 非阻塞 tick: 处理到期/取消 timer + 抽干 ready(resume 或 destroy)。宿主每 tick 调一次。
+    // 非阻塞 tick: 处理到期/取消 timer + 抽干 ready(resume 或 destroy)。
+    // 控制回路宿主应周期调用; 第一次调用会按 Config.pin_cpu 绑核(若 >= 0)。
     void run();
 
-    // 阻塞便捷模式: 在本线程上 loop run() + idle 睡眠, 直到 is_finished()。
-    // 若 config_.pin_cpu >= 0, 绑定当前线程到该 CPU(Linux)。
+    // 阻塞便捷模式: loop run() 直到 is_finished()。
+    // 仅在确认无本地待处理、无到期 timer、ready_ext 近似为空时才 sleep
+    // (睡到 next timer 与 idle_sleep_us 的较早者)。有 pending yield/final 时不睡。
+    // 不是硬实时路径; 需要确定节拍请自己调 run() + next_timer_deadline()。
     void run_blocking();
+
+    // 把当前线程绑到 Config.pin_cpu。run()/run_blocking() 首次进入时会调一次。
+    // pin_cpu < 0 或非 Linux / 失败时返回 false。可在进入周期循环前显式调用。
+    bool apply_affinity();
+
+    // 最近的 timer deadline。无 timer 返回 nullopt。仅 executor 线程。
+    // FlowEngine 宿主可用它决定 sleep_until / timerfd, 而不是盲睡。
+    std::optional<std::chrono::steady_clock::time_point>
+    next_timer_deadline() const noexcept {
+        if (timers_.empty()) return std::nullopt;
+        return timers_.front().deadline;
+    }
+
+    // local_ready_ 非空(本线程已排队的 yield/final/timer/spawn)。仅 executor 线程。
+    bool has_local_work() const noexcept { return !local_ready_.empty(); }
 
     // 任意线程可调; 置停止标志。下一次 run() 会排空 timer(推 local_ready_),
     // task 在周期边界查 stop 后 co_return, run() 在 executor 线程 destroy done 帧。
@@ -270,9 +304,9 @@ public:
     }
 
     // 跨线程事件唯一合法出口: 把 handle 压入 ready_ext_。
-    // 不 notify、不 syscall、不 inline resume。
+    // 不 notify、不 inline resume。会 pool_malloc 一个队列节点, 不是零分配路径。
     // 契约: 每个 parked 帧只能有唯一恢复源;禁止对同一 handle 重复/陈旧 post_ready,
-    // 否则该帧被 destroy 后二次出队 = UAF。
+    // 否则该帧被 destroy 后二次出队 = UAF。resume 仍只在后续 run() 的 executor 线程。
     void post_ready(Handle h) noexcept { ready_ext_.enqueue(h); }
 
     // executor 线程内部重投递(yield/final_suspend/timer/spawn)。非线程安全,
@@ -287,7 +321,7 @@ public:
     }
 
 private:
-    // 仅 executor 线程: 注册定时器(sleep_for 的 await_suspend 调用)。
+    // 仅 executor 线程: 注册定时器(sleep_for / sleep_until 的 await_suspend 调用)。
     void register_timer(std::chrono::steady_clock::time_point deadline, Handle h) {
         timers_.push_back(TimerEntry{deadline, h});
         std::push_heap(timers_.begin(), timers_.end(), timer_less);
@@ -332,7 +366,8 @@ private:
     }
 
     friend struct RtTask::promise_type::final_awaiter;
-    friend struct sleep_awaiter;  // 仅 sleep_for 的 await_suspend 调 register_timer
+    friend struct sleep_awaiter;  // sleep_for / sleep_until 的 await_suspend 调 register_timer
+    void idle_wait();
 };
 
 // ---------------------------------------------------------------------------
@@ -365,7 +400,7 @@ inline void RtExecutor::spawn(RtTask task, std::string_view name) {
     auto& p = h.promise();
     p.executor_ = this;
     p.name_ = std::string(name);
-    active_count_.fetch_add(1, std::memory_order_relaxed);
+    active_count_.fetch_add(1, std::memory_order_release);
     task_list_push(p);
     post_local(h);  // spawn 与 run 同线程(已文档化), 走 local_ready_
 }
@@ -381,6 +416,7 @@ inline void RtExecutor::spawn(RtTask task, std::string_view name) {
 //      外部 post -> ready_ext_(下 tick)。
 // ---------------------------------------------------------------------------
 inline void RtExecutor::run() {
+    (void)apply_affinity();
     process_timers();
     tick_batch_.clear();
     local_ready_.swap(tick_batch_);  // swap 后 local_ready_ 为空, tick_batch_ 持本 tick 内部重投递
@@ -391,7 +427,7 @@ inline void RtExecutor::run() {
         if (hp.promise().done_) {
             task_list_unlink(hp.promise());
             hp.destroy();
-            active_count_.fetch_sub(1, std::memory_order_relaxed);
+            active_count_.fetch_sub(1, std::memory_order_release);
         } else {
             hp.resume();
         }
@@ -399,17 +435,41 @@ inline void RtExecutor::run() {
 }
 
 // ---------------------------------------------------------------------------
-// run_blocking
+// apply_affinity / idle_wait / run_blocking
 // ---------------------------------------------------------------------------
-inline void RtExecutor::run_blocking() {
-    if (config_.pin_cpu >= 0) {
-        pin_current_thread_to_cpu(config_.pin_cpu);
+inline bool RtExecutor::apply_affinity() {
+    if (affinity_applied_) return affinity_ok_;
+    affinity_applied_ = true;
+    if (config_.pin_cpu < 0) {
+        affinity_ok_ = false;
+        return false;
     }
+    affinity_ok_ = pin_current_thread_to_cpu(config_.pin_cpu);
+    return affinity_ok_;
+}
+
+inline void RtExecutor::idle_wait() {
+    // 还有本线程排队的 yield/final/timer/spawn: 立刻再 tick, 不 sleep。
+    if (!local_ready_.empty()) return;
+    // 跨线程队列近似非空: 立刻再 tick。empty() 不解引用节点, executor 线程可读。
+    if (!ready_ext_.empty()) return;
+    if (config_.idle_sleep_us == 0) return;  // 忙等
+
+    const auto now = std::chrono::steady_clock::now();
+    auto wake = now + std::chrono::microseconds(config_.idle_sleep_us);
+    if (!timers_.empty()) {
+        const auto dl = timers_.front().deadline;
+        if (dl <= now) return;  // 已到期, 下一圈 process_timers
+        if (dl < wake) wake = dl;
+    }
+    std::this_thread::sleep_until(wake);
+}
+
+inline void RtExecutor::run_blocking() {
+    (void)apply_affinity();
     while (!is_finished()) {
         run();
-        if (!is_finished()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(config_.idle_sleep_us));
-        }
+        if (!is_finished()) idle_wait();
     }
 }
 
@@ -419,6 +479,7 @@ inline void RtExecutor::run_blocking() {
 
 // co_await rt::sleep_for(d): 注册定时器并挂起; 到期由 run() 推 ready 后在
 // executor 线程 resume。绝不在 timer 路径 resume。
+// co_await rt::sleep_until(tp): 绝对 deadline, 控制回路应对齐周期用这个。
 struct sleep_awaiter {
     std::chrono::steady_clock::time_point deadline;
     bool await_ready() noexcept {
@@ -435,6 +496,10 @@ template<typename Rep, typename Period>
 sleep_awaiter sleep_for(std::chrono::duration<Rep, Period> d) {
     return sleep_awaiter{std::chrono::steady_clock::now() +
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(d)};
+}
+
+inline sleep_awaiter sleep_until(std::chrono::steady_clock::time_point deadline) noexcept {
+    return sleep_awaiter{deadline};
 }
 
 // co_await rt::yield(): 把自身推回 local_ready_, 让出到下一个 tick 再恢复。

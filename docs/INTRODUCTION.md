@@ -321,41 +321,50 @@ using namespace flowcoro::rt;
 
 // 周期控制任务：每 10ms 执行一次，绑定到 CPU 2
 RtTask control_task() {
+    using clock = std::chrono::steady_clock;
+    const auto period = std::chrono::milliseconds(10);
+    auto origin = clock::now();
+    int i = 0;
     while (!co_await stop_requested()) {
-        co_await sleep_for(std::chrono::milliseconds(10));
+        ++i;
+        co_await sleep_until(origin + period * i);
         // ... 控制逻辑（绝不被其他线程内联 resume）
-        co_await yield();
     }
 }
 
 int main() {
     RtExecutor ex{{ .pin_cpu = 2 }};
     ex.spawn(control_task(), "control");
-    while (!ex.is_finished()) ex.run();   // 非阻塞周期 tick
-    // 或 ex.run_blocking();
+    while (!ex.is_finished()) {
+        ex.run();
+        if (auto t = ex.next_timer_deadline())
+            std::this_thread::sleep_until(*t);
+    }
 }
 ```
 
 **核心保证**：
 - **单线程亲和**：所有 `resume`/`destroy` 都发生在 `run()` 的调用线程；跨线程事件
-  只通过 `post_ready(h)` 递回句柄，绝不 inline `resume` —— 从根上避免数据竞争。
-- **周期 tick**：`run()` 是非阻塞 tick（定时器 → 就绪 → resume/destroy）；
-  `rt::yield()` 推迟到下一 tick，单 tick 内不重入。
-- **CPU 绑定**：`Config{.pin_cpu = N}` 把执行器线程绑到指定核。
+  只通过 `post_ready(h)` 递回句柄，绝不 inline `resume`。
+- **周期 tick**：`run()` 是非阻塞 tick；`sleep_until` 对齐绝对 deadline；
+  `rt::yield()` 推迟到下一 tick。
+- **CPU 绑定**：`Config{.pin_cpu = N}` 在第一次 `run()` 时把**当前线程**绑到指定核。
 - **确定性关停**：`request_stop()` 协作式停止，帧在周期边界 `co_return` 并在
   executor 线程销毁。
 
-### 自动驾驶场景示例
+本地 `run()` 热路径预热后无 syscall；`post_ready` 会分配队列节点，`run_blocking`
+空闲时可能 sleep。抖动由 `tests/test_rt_latency.cpp` 测量，不是口头「零抖动」。
 
-`examples/autonomous_driving/ad_pipeline_demo.cpp` 演示了 FlowCoro 在自动驾驶
-中间件中的应用：Camera(30Hz)/LiDAR(10Hz)/Radar(20Hz) 传感器通过 **DDS Channel**
-发布订阅，感知节点用 `when_all`/`co_await` 做多传感器融合，规划节点用
-**`when_any` 实现 QoS Deadline**（地图服务 20ms 超时自动降级到缓存路由），
-全程零外部依赖（无需 ROS2/Apollo）。
+### 两个自动驾驶相关示例
+
+- [`rt_control_loop_demo.cpp`](../examples/autonomous_driving/rt_control_loop_demo.cpp)：
+  **RtExecutor** 50Hz 控制回路 + 最新帧原子快照，打印 p50/p99 抖动。无 DDS。
+- [`ad_pipeline_demo.cpp`](../examples/autonomous_driving/ad_pipeline_demo.cpp)：
+  **Task<>** + 进程内 DDS Channel + 地图超时降级。不在 `RtExecutor` 上跑。
 
 ```bash
-cd build && cmake .. && make ad_pipeline_demo
-./examples/autonomous_driving/ad_pipeline_demo 5
+cd build && cmake .. && cmake --build . --target rt_control_loop_demo
+./examples/autonomous_driving/rt_control_loop_demo 2
 ```
 
 > 完整 API 见 [API 参考 §9](API_REFERENCE.md#9-确定性实时执行-rtexecutor)，

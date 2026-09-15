@@ -14,7 +14,7 @@
 - **Channel通信**: 线程安全的异步通道，支持生产者-消费者模式
 - **内存池**: 参考Redis/Nginx设计的自定义内存分配
 - **PGO优化**: 通过Profile-Guided编译提升性能
-- **确定性实时执行**: 单线程亲和的 `RtExecutor`，面向机器人/控制/嵌入式——周期 tick、CPU 绑定、稳态零系统调用（见 `flowcoro::rt`），并附[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)
+- **确定性实时执行**: 单线程亲和的 `RtExecutor`，面向机器人/控制/嵌入式——周期 tick、CPU 绑定、可测抖动（见 `flowcoro::rt`）。[实时控制回路示例](examples/autonomous_driving/rt_control_loop_demo.cpp)；[DDS 管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)走的是 `Task<>`，不是 `RtExecutor`。
 - **有界 MPMC 无锁通道**: `BoundedChannel<T>`（Vyukov 环，无分配、无 SMR、满/空立即返回），补齐 `Channel<T>` 只服务协程的空缺
 - **CPU 亲和性**: `cpu_affinity.h` 统一绑核与**物理核**枚举（按 `thread_siblings_list` 去重，SMT 兄弟不会分给两个 worker），`lockfree::ThreadPool` 可直接绑核
 - **Python 绑定（可选）**: `-DFLOWCORO_BUILD_PYTHON=ON` 产出 `flowcoro_py.so`——`CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`，见 [Python 绑定文档](docs/PYTHON_BINDING.md)
@@ -150,9 +150,9 @@ suspend_never  负载均衡  无锁队列  执行
 在高吞吐调度器之外，FlowCoro 附带一个**单线程确定性实时执行模型**（`RtExecutor`），面向延迟敏感的控制回路（机器人/自动驾驶/嵌入式）：
 
 - **单线程亲和**：所有 `resume`/`destroy` 都在执行器线程上发生；跨线程事件只通过 `post_ready(h)` 递回句柄，绝不 inline `resume`。这正是 FlowEngine 依赖它避免数据竞争的原因。
-- **周期 tick**：`run()` 是非阻塞 tick（定时器 → 就绪 → resume/destroy）。惰性启动任务（`RtTask`）按固定节奏执行；`rt::yield()` 推迟到下一 tick，保证单 tick 内不重入。
-- **CPU 绑定**：`Config{.pin_cpu = N}` 将执行器线程绑定到指定核（`run_blocking`）。
-- **稳态零系统调用**：内部重投递走执行器线程私有 vector 快照；跨线程路径走 MPSC 无锁队列。
+- **周期 tick**：`run()` 是非阻塞 tick。`rt::sleep_until` 对齐绝对周期；`rt::yield()` 推迟到下一 tick。
+- **CPU 绑定**：`Config{.pin_cpu = N}` 在第一次 `run()` 时绑定**当前**线程（`apply_affinity()`，Linux）。
+- **本地热路径**：内部重投递走预留的线程私有 vector。`post_ready` 会分配队列节点；`run_blocking` 空闲时可能 `sleep_until`。不要理解成处处零 syscall。
 - **两段式关停**：`request_stop()` → 周期边界协作式停止 → 帧 `co_return` 并在执行器线程销毁。
 
 ```cpp
@@ -164,7 +164,7 @@ ex.run_blocking();   // 周期 tick 直到所有任务结束
 // 或: while (!ex.is_finished()) ex.run();
 ```
 
-完整用法见 [API 参考 §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor) 与[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)（DDS 发布订阅 + `when_any` QoS 超时降级）。
+完整用法见 [API 参考 §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor)、抖动灯笼 `tests/test_rt_latency.cpp` 与[实时控制回路示例](examples/autonomous_driving/rt_control_loop_demo.cpp)。[DDS 管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)是 Task+Channel 中间件，不在 `RtExecutor` 上跑。
 
 ## 使用场景
 
@@ -184,11 +184,11 @@ ex.run_blocking();   // 周期 tick 直到所有任务结束
 - 嵌入式确定性调度
 - 任何需要单线程亲和 + CPU 绑定的嵌入式/控制负载
 
-试试[自动驾驶管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)：
+试试[实时控制回路示例](examples/autonomous_driving/rt_control_loop_demo.cpp)：
 
 ```bash
-cd build && cmake .. && make ad_pipeline_demo
-./examples/autonomous_driving/ad_pipeline_demo 5
+cd build && cmake .. && cmake --build . --target rt_control_loop_demo
+./examples/autonomous_driving/rt_control_loop_demo 2
 ```
 
 **Channel增强特性:**

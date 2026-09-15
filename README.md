@@ -14,7 +14,7 @@ English | [中文](README_zh.md)
 - **Channel Communication**: Thread-safe async channels for producer-consumer patterns
 - **Memory Pool**: Custom memory allocation inspired by Redis/Nginx design
 - **PGO Optimization**: Performance improvements through profile-guided compilation
-- **Deterministic Real-Time Execution**: Single-thread-affine `RtExecutor` for robotics / control / embedded — periodic ticks, CPU pinning, zero syscall in steady state (see `flowcoro::rt`) and a ready-made [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp)
+- **Deterministic Real-Time Execution**: Single-thread-affine `RtExecutor` for robotics / control / embedded — periodic ticks, CPU pinning, and a measured jitter lamp (`flowcoro::rt`). See the [rt control-loop demo](examples/autonomous_driving/rt_control_loop_demo.cpp); the [DDS pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp) uses `Task<>`, not `RtExecutor`.
 - **Bounded Lock-Free MPMC Channel**: `BoundedChannel<T>` (Vyukov ring — no allocation, no SMR, immediate fail when full/empty); fills the gap left by the coroutine-only `Channel<T>`
 - **CPU Affinity**: `cpu_affinity.h` unifies pinning and **physical-core** enumeration (dedup by `thread_siblings_list`, so SMT siblings never go to two workers); `lockfree::ThreadPool` takes an affinity list directly
 - **Python Bindings (optional)**: `-DFLOWCORO_BUILD_PYTHON=ON` builds `flowcoro_py.so` — `CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`; see [Python binding docs](docs/PYTHON_BINDING.md)
@@ -177,10 +177,10 @@ suspend_never   Load Balancing    Lock-free Queue   Execution
 Alongside the high-throughput scheduler, FlowCoro ships a **single-thread deterministic real-time model** (`RtExecutor`) for latency-critical control loops (robotics / autonomous driving / embedded):
 
 - **Single-thread affinity**: every `resume` / `destroy` happens on the executor thread; cross-thread events only `post_ready(h)` the handle back — never inline `resume`. This is what FlowEngine depends on to avoid data races.
-- **Periodic tick**: `run()` is a non-blocking tick (timers → ready → resume/destroy). Lazy-start tasks (`RtTask`) run at fixed cadence; `rt::yield()` defers to the next tick, guaranteeing no re-entrancy within one tick.
-- **CPU pinning**: `Config{.pin_cpu = N}` binds the executor thread to a core (`run_blocking`).
-- **Zero syscall steady state**: internal re-post uses an executor-thread-local vector snapshot; cross-thread path uses an MPSC lock-free queue.
-- **Two-phase shutdown**: `request_stop()` → cooperative stop checked at cycle boundary → frames `co_return` and are destroyed on the executor thread.
+- **Periodic tick**: `run()` is a non-blocking tick (timers → ready → resume/destroy). `rt::sleep_until` aligns to an absolute deadline; `rt::yield()` defers to the next tick.
+- **CPU pinning**: `Config{.pin_cpu = N}` binds the **run() thread** on first tick (`apply_affinity()`, Linux).
+- **Local hot path**: internal re-post uses a reserved thread-local vector. Cross-thread `post_ready` allocates a queue node; `run_blocking` may `sleep_until` when idle. That is not “zero syscall everywhere”.
+- **Two-phase shutdown**: `request_stop()` → cooperative stop at a cycle boundary → frames `co_return` and are destroyed on the executor thread.
 
 ```cpp
 #include <flowcoro/rt_executor.h>
@@ -191,7 +191,7 @@ ex.run_blocking();   // periodic ticks until all tasks finish
 // or: while (!ex.is_finished()) ex.run();
 ```
 
-See the complete usage in [API Reference §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor) and the [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp) (DDS Pub/Sub + `when_any` QoS deadline degradation).
+See the contract in [API Reference §9](docs/API_REFERENCE.md#9-确定性实时执行-rtexecutor), jitter lamp `tests/test_rt_latency.cpp`, and the [rt control-loop demo](examples/autonomous_driving/rt_control_loop_demo.cpp). The [DDS pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp) is Task+Channel middleware, not `RtExecutor`.
 
 ## Use Cases
 
@@ -211,11 +211,11 @@ See the complete usage in [API Reference §9](docs/API_REFERENCE.md#9-确定性�
 - Embedded deterministic scheduling
 - Any embedded/control workload needing single-thread affinity + CPU pinning
 
-Try the [Autonomous Driving pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp):
+Try the [rt control-loop demo](examples/autonomous_driving/rt_control_loop_demo.cpp):
 
 ```bash
-cd build && cmake .. && make ad_pipeline_demo
-./examples/autonomous_driving/ad_pipeline_demo 5
+cd build && cmake .. && cmake --build . --target rt_control_loop_demo
+./examples/autonomous_driving/rt_control_loop_demo 2
 ```
 
 **Enhanced with Channels:**
