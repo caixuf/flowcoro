@@ -1,6 +1,6 @@
 #pragma once
 #include <coroutine>
-#include "coroutine_manager.h"
+#include "scheduler_api.h"
 
 namespace flowcoro {
 
@@ -11,9 +11,8 @@ struct YieldAwaiter {
     }
     
     void await_suspend(std::coroutine_handle<> h) noexcept {
-        // 立即重新调度当前协程，但允许其他协程先执行
-        auto& manager = CoroutineManager::get_instance();
-        manager.schedule_resume(h);
+        // 立即将当前协程重新调度到工作池，让出当前时隙
+        schedule_coroutine_enhanced(h);
     }
     
     void await_resume() const noexcept {}
