@@ -111,6 +111,18 @@ rt::RtTask yield_counter_worker(std::atomic<int>& ticks, int n) {
     co_return;
 }
 
+rt::RtTask sleep_until_past_worker(std::atomic<bool>& ran) {
+    co_await rt::sleep_until(std::chrono::steady_clock::now() -
+                             std::chrono::seconds(1));
+    ran.store(true, std::memory_order_release);
+    co_return;
+}
+
+rt::RtTask sleep_until_future_worker() {
+    co_await rt::sleep_until(std::chrono::steady_clock::now() + 40ms);
+    co_return;
+}
+
 // R2 验证: park 等外部 post_ready, 恢复后 ++resumed。
 rt::RtTask park_resume_worker(std::atomic<void*>& parked, std::atomic<int>& resumed) {
     co_await park_awaiter{&parked};
@@ -346,6 +358,65 @@ TEST_CASE(rt_shutdown_drains) {
 
     TEST_EXPECT_TRUE(exec.is_finished());
     TEST_EXPECT_TRUE(count.load() > 0);
+}
+
+// ---------------------------------------------------------------------------
+// 12) run_blocking 在 local_ready_ 仍有 yield 时不得 idle sleep。
+//     把 idle_sleep_us 设很大: 若每 tick 仍盲睡, 40 次 yield 会超过 1s; 修复后应远小于该值。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_run_blocking_yield_skips_idle_sleep) {
+    constexpr int N = 40;
+    std::atomic<int> ticks{0};
+    rt::RtExecutor exec(rt::RtExecutor::Config{
+        .pin_cpu = -1,
+        .idle_sleep_us = 50000,  // 50ms; 盲睡则 ~2s
+    });
+    exec.spawn(yield_counter_worker(ticks, N), "yieldloop");
+
+    const auto t0 = std::chrono::steady_clock::now();
+    exec.run_blocking();
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+
+    TEST_EXPECT_TRUE(exec.is_finished());
+    TEST_EXPECT_EQ(ticks.load(), N);
+    TEST_EXPECT_TRUE(elapsed < std::chrono::milliseconds(500));
+}
+
+// ---------------------------------------------------------------------------
+// 13) sleep_until 已过 deadline 时 await_ready, 不挂 timer。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_sleep_until_past_is_ready) {
+    std::atomic<bool> ran{false};
+    rt::RtExecutor exec;
+    exec.spawn(sleep_until_past_worker(ran), "past");
+    TEST_EXPECT_TRUE(drive_until_finished(exec));
+    TEST_EXPECT_TRUE(ran.load());
+    TEST_EXPECT_TRUE(exec.is_finished());
+}
+
+// ---------------------------------------------------------------------------
+// 14) spawn + 一次 run 进入 sleep_until 后, next_timer_deadline 落在未来窗口内。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_next_timer_deadline_after_sleep) {
+    rt::RtExecutor exec;
+    exec.spawn(sleep_until_future_worker(), "future");
+    exec.run();  // spawn 恢复并注册 timer
+    auto dl = exec.next_timer_deadline();
+    TEST_EXPECT_TRUE(dl.has_value());
+    const auto now = std::chrono::steady_clock::now();
+    TEST_EXPECT_TRUE(*dl > now);
+    TEST_EXPECT_TRUE(*dl < now + std::chrono::milliseconds(200));
+    TEST_EXPECT_TRUE(drive_until_finished(exec));
+}
+
+// ---------------------------------------------------------------------------
+// 15) pin_cpu < 0 时 apply_affinity 为 false, 且不阻止 run。
+// ---------------------------------------------------------------------------
+TEST_CASE(rt_apply_affinity_disabled) {
+    rt::RtExecutor exec(rt::RtExecutor::Config{.pin_cpu = -1});
+    TEST_EXPECT_FALSE(exec.apply_affinity());
+    exec.spawn(noop_worker(), "noop");
+    TEST_EXPECT_TRUE(drive_until_finished(exec));
 }
 
 int main() {

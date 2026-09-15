@@ -961,43 +961,135 @@ class CancellationTokenSource {
 
 ## 9. 确定性实时执行 (RtExecutor)
 
-`flowcoro::rt` 提供单线程亲和的确定性实时执行模型（见 `rt_executor.h`），适用于机器人/控制/嵌入式场景：
+`flowcoro::rt`（`rt_executor.h`）是**另一套**调度器：单线程亲和、周期 tick、协作式停止。
+它不替代 `Task<T>` / `CoroutinePool`。FlowEngine 式控制回路应依赖下面这条正确性契约，
+而不是高吞吐调度器上的「尽量低延迟」。
 
-- **单线程确定性**: 所有 `resume`/`destroy` 都在 `run()` 的调用线程发生；跨线程事件只允许 `post_ready(h)` 递回句柄，绝不 inline `resume`
-- **惰性启动**: `RtTask` 的 `initial_suspend = suspend_always`
-- **协作式停止**: 周期边界查 `stop_token()`，`request_stop()` 后可优雅关停
-- **两段式拆除**: `request_stop()` → `co_return` 到 `final_suspend`(park) → `run()` 在 executor 线程 destroy 帧 → `is_finished()`
+### 核心契约
+
+所有 `resume` / `destroy` 只发生在 `run()` 的调用线程。别的线程上的事件只能
+`post_ready(h)` 递回句柄，**禁止** `h.resume()`。
+
+- `spawn()` 与 `run()` 必须同线程、不并发。
+- `post_ready()` / `request_stop()` 可从任意线程调用。
+- `RtTask` 必须是自由函数或无捕获 lambda：带捕获的临时 lambda 在 `spawn` 表达式结束后销毁，帧里的 `this` 悬垂。
+
+### `run()` vs `run_blocking()`
+
+| | `run()` | `run_blocking()` |
+|---|---------|------------------|
+| 语义 | 非阻塞 tick：到期 timer → 快照 ready → resume/destroy | 循环 `run()` 直到 `is_finished()` |
+| 空闲 | 立即返回，由宿主决定何时再 tick | 仅当无 `local_ready_`、无到期 timer、`ready_ext_` 近似为空时才 `sleep_until` |
+| 实时 | **控制回路应走这条**：自己按周期或 `next_timer_deadline()` 等待 | 便捷/演示路径，**不是**硬实时 |
+| 系统调用 | 本地路径预热后无 syscall；抽干跨线程队列会走 hazard pointer | 空闲时可能 `sleep_until`（syscall） |
+
+`idle_sleep_us`（默认 1000）只影响 `run_blocking` 的空闲上限；有更早的 timer 则睡到该 deadline。
+`idle_sleep_us = 0` 表示空闲忙等（不 sleep，占满一核）。
+
+宿主推荐写法：
 
 ```cpp
-flowcoro::rt::RtExecutor ex{{ .pin_cpu = -1, .idle_sleep_us = 1000 }};
-
-// 注册周期任务（惰性启动，executor 接管所有权）
-auto task = []() -> flowcoro::rt::RtTask {
-    while (!co_await flowcoro::rt::stop_requested()) {
-        do_work();
-        co_await flowcoro::rt::sleep_for(std::chrono::milliseconds(10));
-        co_await flowcoro::rt::yield();
-    }
-}();
-ex.spawn(std::move(task), "my_task");
-
-ex.run_blocking();          // 或每 tick 调一次 ex.run() 直到 ex.is_finished()
+while (!ex.is_finished()) {
+    ex.run();
+    if (ex.has_local_work()) continue;
+    if (auto t = ex.next_timer_deadline()) std::this_thread::sleep_until(*t);
+}
 ```
 
-主要接口（`RtExecutor`）:
+### `pin_cpu`
+
+`Config{.pin_cpu = N}` 在**第一次** `run()` / `run_blocking()` / `apply_affinity()` 时
+把**当前线程**绑到逻辑 CPU `N`（Linux `sched_setaffinity`）。`-1` 或不在 Linux 上则不绑、返回 false。
+不会给 `post_ready` 的生产者线程绑核。可在进入循环前显式 `apply_affinity()`。
+
+### `post_ready` 跨线程规则
+
+- 每个 parked 帧只能有**唯一**恢复源。对同一 handle 重复或陈旧 `post_ready`，帧 destroy 后再出队 = UAF。
+- `post_ready` **会分配** lockfree 队列节点（`pool_malloc`），retire 路径可能自旋。这不是零分配 / 零 syscall 热路径。
+- 需要跨线程完成通知时这是唯一合法出口；控制热路径应优先 `sleep_until` / `yield`（走 `local_ready_`）。
+
+### 两段式 `request_stop`
+
+```
+request_stop()          // 任意线程, 只置标志, 不抢占
+  → 下一次 run() 取消剩余 timer
+  → 任务在周期边界 co_await stop_requested() 后 co_return
+  → 再一次 run() 在 executor 线程 destroy 帧
+  → active==0 ⇒ is_finished()
+```
+
+`shutdown()` = `request_stop` + 反复 `run()` 直到 quiesce。前置条件：所有会 `post_ready` 的生产者已 join。
+仍 parked 等外部唤醒且生产者已走 → 无限循环（调用方违约）。析构只是未 `shutdown` 时的兜底 `destroy`。
+
+### 什么是 / 不是 realtime-safe
+
+**是（在契约内）：**
+
+- 单线程 resume/destroy；tick 快照让 `yield` 单 tick 不重入
+- `local_ready_` 预留后稳态无堆分配
+- `sleep_until` / `sleep_for` / `yield` / `stop_requested`（仅 `RtTask` 内 `co_await`）
+- `request_stop` 原子标志
+
+**不是：**
+
+- `run_blocking` 的 idle sleep（syscall + OS 唤醒抖动）
+- `post_ready` 的分配与 hazard retire
+- `spawn` 的 `std::string` 名字、首次 vector 扩容
+- 任何跨线程 inline `resume`
+- 「共享 CI runner 上的微秒级 p99」——测的是这次墙钟，不是证书
+
+### 延迟测量
+
+`rt_jitter.h` 对调用方记录的时长做 p50/p99/max/mean。灯笼测试：
+
+```bash
+ctest --test-dir build -R test_rt_latency --output-on-failure
+FLOWCORO_RT_SLO_STRICT=1 ctest --test-dir build -R test_rt_latency --output-on-failure
+```
+
+控制回路示例：`examples/autonomous_driving/rt_control_loop_demo.cpp`（无 DDS）。
+`ad_pipeline_demo.cpp` 走的是 `Task<>` + DDS，不在 `RtExecutor` 上跑。
 
 ```cpp
-void spawn(RtTask task, std::string_view name);  // 注册任务（须与 run 同线程、不并发）
-void run();                     // 非阻塞 tick：处理到期/取消 timer + 抽干 ready
-void run_blocking();            // 阻塞循环 run() + idle 睡眠，直到 is_finished()
-void request_stop() noexcept;   // 任意线程可调；置停止标志
-void shutdown();                // 优雅关停：request_stop + 反复 run() 至 quiesce
-void post_ready(Handle h) noexcept;  // 跨线程事件唯一合法出口
+#include <flowcoro/rt_executor.h>
+using namespace flowcoro::rt;
+
+RtTask control() {
+    using clock = std::chrono::steady_clock;
+    const auto period = std::chrono::milliseconds(10);
+    auto origin = clock::now();
+    int i = 0;
+    while (!co_await stop_requested()) {
+        ++i;
+        co_await sleep_until(origin + period * i);  // 对齐绝对周期
+        // do_work();  // 只在 executor 线程
+    }
+}
+
+int main() {
+    RtExecutor ex{{ .pin_cpu = -1, .idle_sleep_us = 1000 }};
+    ex.spawn(control(), "control");
+    ex.run_blocking();  // 或自己 loop run()
+}
+```
+
+主要接口:
+
+```cpp
+void spawn(RtTask task, std::string_view name);
+void run();
+void run_blocking();
+bool apply_affinity();
+std::optional<std::chrono::steady_clock::time_point> next_timer_deadline() const noexcept;
+bool has_local_work() const noexcept;
+void request_stop() noexcept;
+void shutdown();
+void post_ready(Handle h) noexcept;
 bool is_finished() const noexcept;
 StopToken stop_token() const noexcept;
 ```
 
-awaitable：`rt::sleep_for(d)`、`rt::yield()`、`rt::stop_requested()`（均须在 `RtTask` 协程内 `co_await`）。
+awaitable：`rt::sleep_for(d)`、`rt::sleep_until(tp)`、`rt::yield()`、`rt::stop_requested()`。
 
 ---
 

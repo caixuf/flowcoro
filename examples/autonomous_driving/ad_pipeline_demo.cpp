@@ -30,6 +30,10 @@
  *  3. 协程节点 vs 阻塞线程 — 相同传感器频率下，协程无阻塞等待的延迟优势
  *  4. 零外部依赖 — 无需安装 ROS2 / Apollo，cmake .. && make 直接运行
  *
+ * 本文件走 Task<> / CoroutinePool + 进程内 DDS，不是 flowcoro::rt。
+ * 确定性实时路径（RtExecutor、sleep_until、抖动统计）见同目录
+ * rt_control_loop_demo.cpp。
+ *
  * 构建与运行：
  *   cd build && cmake .. && make ad_pipeline_demo
  *   ./examples/autonomous_driving/ad_pipeline_demo [运行秒数=5]
