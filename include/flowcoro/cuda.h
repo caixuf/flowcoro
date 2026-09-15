@@ -26,11 +26,19 @@
 #else
 typedef struct CUstream_st* CUstream;
 typedef struct CUevent_st* CUevent;
+typedef struct CUctx_st* CUcontext;
+typedef int CUdevice;
+typedef unsigned long long CUdeviceptr;
 typedef int CUresult;
 #define CUDA_SUCCESS 0
 #define CU_STREAM_NON_BLOCKING 1
 #define CU_EVENT_DISABLE_TIMING 2
+#define CUDA_CB
 inline CUresult cuInit(unsigned int) { return CUDA_SUCCESS; }
+inline CUresult cuDeviceGetCount(int* count) { *count = 1; return CUDA_SUCCESS; }
+inline CUresult cuDeviceGet(CUdevice* dev, int) { *dev = 0; return CUDA_SUCCESS; }
+inline CUresult cuDevicePrimaryCtxRetain(CUcontext* ctx, CUdevice) { *ctx = nullptr; return CUDA_SUCCESS; }
+inline CUresult cuCtxSetCurrent(CUcontext) { return CUDA_SUCCESS; }
 inline CUresult cuStreamCreate(CUstream* s, unsigned int) { *s = nullptr; return CUDA_SUCCESS; }
 inline CUresult cuStreamDestroy(CUstream) { return CUDA_SUCCESS; }
 inline CUresult cuStreamQuery(CUstream) { return CUDA_SUCCESS; }
@@ -41,7 +49,15 @@ inline CUresult cuEventDestroy(CUevent) { return CUDA_SUCCESS; }
 inline CUresult cuEventRecord(CUevent, CUstream) { return CUDA_SUCCESS; }
 inline CUresult cuEventQuery(CUevent) { return CUDA_SUCCESS; }
 inline CUresult cuEventSynchronize(CUevent) { return CUDA_SUCCESS; }
+inline CUresult cuMemAlloc(CUdeviceptr* dptr, size_t bytes) { *dptr = reinterpret_cast<CUdeviceptr>(std::malloc(bytes)); return CUDA_SUCCESS; }
+inline CUresult cuMemFree(CUdeviceptr dptr) { std::free(reinterpret_cast<void*>(dptr)); return CUDA_SUCCESS; }
+inline CUresult cuMemAllocHost(void** pp, size_t bytes) { *pp = std::malloc(bytes); return CUDA_SUCCESS; }
+inline CUresult cuMemFreeHost(void* p) { std::free(p); return CUDA_SUCCESS; }
+inline CUresult cuMemcpyHtoDAsync(CUdeviceptr dst, const void* src, size_t bytes, CUstream) { std::memcpy(reinterpret_cast<void*>(dst), src, bytes); return CUDA_SUCCESS; }
+inline CUresult cuMemcpyDtoHAsync(void* dst, CUdeviceptr src, size_t bytes, CUstream) { std::memcpy(dst, reinterpret_cast<const void*>(src), bytes); return CUDA_SUCCESS; }
 #endif
+
+#include "flowcoro/scheduler_api.h"
 
 namespace flowcoro::cuda {
 
@@ -54,11 +70,26 @@ namespace flowcoro::cuda {
 } while(0)
 
 inline void ensure_cuda_initialized() {
-    static bool inited = []() {
-        cuInit(0);
+    static bool driver_inited = []() {
+        if (cuInit(0) != CUDA_SUCCESS) return false;
         return true;
     }();
-    (void)inited;
+    if (driver_inited) {
+        thread_local bool thread_bound = []() {
+            int count = 0;
+            if (cuDeviceGetCount(&count) == CUDA_SUCCESS && count > 0) {
+                CUdevice dev = 0;
+                if (cuDeviceGet(&dev, 0) == CUDA_SUCCESS) {
+                    CUcontext ctx = nullptr;
+                    if (cuDevicePrimaryCtxRetain(&ctx, dev) == CUDA_SUCCESS && ctx) {
+                        cuCtxSetCurrent(ctx);
+                    }
+                }
+            }
+            return true;
+        }();
+        (void)thread_bound;
+    }
 }
 
 class CudaEvent;
@@ -199,13 +230,16 @@ public:
         }
     }
 
-    void await_resume() const noexcept {}
+    void await_resume() const noexcept {
+        ensure_cuda_initialized();
+    }
 
 private:
     static void CUDA_CB resume_coroutine(void* userData) {
         if (userData) {
             auto handle = std::coroutine_handle<>::from_address(userData);
-            handle.resume();
+            // 将唤醒事件派发至 flowcoro 工作线程池，脱离 CUDA 驱动通知线程
+            schedule_coroutine_enhanced(handle);
         }
     }
 
@@ -222,6 +256,130 @@ inline CudaStreamAwaiter await_stream(const CudaStream& stream) {
 
 inline CudaStreamAwaiter operator co_await(const CudaStream& stream) {
     return CudaStreamAwaiter(stream.get());
+}
+
+/**
+ * @brief RAII 封装的 CUDA 显存缓冲区 (Device Buffer)
+ */
+template <typename T>
+class DeviceBuffer {
+public:
+    DeviceBuffer() = default;
+
+    explicit DeviceBuffer(size_t count) : count_(count) {
+        if (count_ > 0) {
+            ensure_cuda_initialized();
+            FLOWCORO_CUDA_CHECK(cuMemAlloc(&dptr_, count_ * sizeof(T)));
+        }
+    }
+
+    ~DeviceBuffer() {
+        if (dptr_) {
+            cuMemFree(dptr_);
+            dptr_ = 0;
+        }
+    }
+
+    DeviceBuffer(const DeviceBuffer&) = delete;
+    DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+
+    DeviceBuffer(DeviceBuffer&& other) noexcept : dptr_(other.dptr_), count_(other.count_) {
+        other.dptr_ = 0;
+        other.count_ = 0;
+    }
+
+    DeviceBuffer& operator=(DeviceBuffer&& other) noexcept {
+        if (this != &other) {
+            if (dptr_) cuMemFree(dptr_);
+            dptr_ = other.dptr_;
+            count_ = other.count_;
+            other.dptr_ = 0;
+            other.count_ = 0;
+        }
+        return *this;
+    }
+
+    CUdeviceptr get() const noexcept { return dptr_; }
+    operator CUdeviceptr() const noexcept { return dptr_; }
+    size_t size() const noexcept { return count_; }
+    size_t bytes() const noexcept { return count_ * sizeof(T); }
+
+private:
+    CUdeviceptr dptr_{0};
+    size_t count_{0};
+};
+
+/**
+ * @brief RAII 封装的 CUDA 锁页内存 (Pinned Host Buffer)，支持 CPU 协程直接读写与 GPU 零拷贝 DMA
+ */
+template <typename T>
+class PinnedHostBuffer {
+public:
+    PinnedHostBuffer() = default;
+
+    explicit PinnedHostBuffer(size_t count) : count_(count) {
+        if (count_ > 0) {
+            ensure_cuda_initialized();
+            void* ptr = nullptr;
+            FLOWCORO_CUDA_CHECK(cuMemAllocHost(&ptr, count_ * sizeof(T)));
+            data_ = static_cast<T*>(ptr);
+        }
+    }
+
+    ~PinnedHostBuffer() {
+        if (data_) {
+            cuMemFreeHost(data_);
+            data_ = nullptr;
+        }
+    }
+
+    PinnedHostBuffer(const PinnedHostBuffer&) = delete;
+    PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
+
+    PinnedHostBuffer(PinnedHostBuffer&& other) noexcept : data_(other.data_), count_(other.count_) {
+        other.data_ = nullptr;
+        other.count_ = 0;
+    }
+
+    PinnedHostBuffer& operator=(PinnedHostBuffer&& other) noexcept {
+        if (this != &other) {
+            if (data_) cuMemFreeHost(data_);
+            data_ = other.data_;
+            count_ = other.count_;
+            other.data_ = nullptr;
+            other.count_ = 0;
+        }
+        return *this;
+    }
+
+    T* data() noexcept { return data_; }
+    const T* data() const noexcept { return data_; }
+    T& operator[](size_t idx) { return data_[idx]; }
+    const T& operator[](size_t idx) const { return data_[idx]; }
+    size_t size() const noexcept { return count_; }
+    size_t bytes() const noexcept { return count_ * sizeof(T); }
+
+private:
+    T* data_{nullptr};
+    size_t count_{0};
+};
+
+/**
+ * @brief 异步 Host-to-Device 锁页内存 DMA 拷贝，返回 Awaiter 支持 co_await 零阻塞挂起
+ */
+template <typename T>
+inline CudaStreamAwaiter async_copy_h2d(CUstream stream, CUdeviceptr dst_device, const T* src_host, size_t count) {
+    FLOWCORO_CUDA_CHECK(cuMemcpyHtoDAsync(dst_device, src_host, count * sizeof(T), stream));
+    return CudaStreamAwaiter(stream);
+}
+
+/**
+ * @brief 异步 Device-to-Host 锁页内存 DMA 拷贝，返回 Awaiter 支持 co_await 零阻塞挂起
+ */
+template <typename T>
+inline CudaStreamAwaiter async_copy_d2h(CUstream stream, T* dst_host, CUdeviceptr src_device, size_t count) {
+    FLOWCORO_CUDA_CHECK(cuMemcpyDtoHAsync(dst_host, src_device, count * sizeof(T), stream));
+    return CudaStreamAwaiter(stream);
 }
 
 } // namespace flowcoro::cuda
