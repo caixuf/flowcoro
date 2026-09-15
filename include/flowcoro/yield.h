@@ -39,8 +39,7 @@ public:
     }
     
     void await_suspend(std::coroutine_handle<> h) noexcept {
-        auto& manager = CoroutineManager::get_instance();
-        manager.schedule_resume(h);
+        schedule_coroutine_enhanced(h);
     }
     
     void await_resume() const noexcept {}

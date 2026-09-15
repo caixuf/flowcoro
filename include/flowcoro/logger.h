@@ -15,6 +15,10 @@
 #include <cstdio>
 #include "lockfree.h"
 
+#ifndef PROJECT_SOURCE_DIR
+#define PROJECT_SOURCE_DIR "."
+#endif
+
 namespace flowcoro {
 
 // 日志级别枚举

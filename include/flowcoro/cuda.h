@@ -55,6 +55,12 @@ inline CUresult cuMemAllocHost(void** pp, size_t bytes) { *pp = std::malloc(byte
 inline CUresult cuMemFreeHost(void* p) { std::free(p); return CUDA_SUCCESS; }
 inline CUresult cuMemcpyHtoDAsync(CUdeviceptr dst, const void* src, size_t bytes, CUstream) { std::memcpy(reinterpret_cast<void*>(dst), src, bytes); return CUDA_SUCCESS; }
 inline CUresult cuMemcpyDtoHAsync(void* dst, CUdeviceptr src, size_t bytes, CUstream) { std::memcpy(dst, reinterpret_cast<const void*>(src), bytes); return CUDA_SUCCESS; }
+typedef struct CUmod_st* CUmodule;
+typedef struct CUfunc_st* CUfunction;
+inline CUresult cuModuleLoadData(CUmodule* mod, const void*) { *mod = nullptr; return CUDA_SUCCESS; }
+inline CUresult cuModuleUnload(CUmodule) { return CUDA_SUCCESS; }
+inline CUresult cuModuleGetFunction(CUfunction* func, CUmodule, const char*) { *func = nullptr; return CUDA_SUCCESS; }
+inline CUresult cuLaunchKernel(CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void**, void**) { return CUDA_SUCCESS; }
 #endif
 
 #include "flowcoro/scheduler_api.h"
