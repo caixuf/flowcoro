@@ -8,6 +8,7 @@
 #include <utility>
 #include <mutex>
 #include <condition_variable>
+#include <cstdint>
 #include "performance_monitor.h"
 #include "coroutine_manager.h"
 #include "result.h"
@@ -28,6 +29,40 @@ public:
     explicit TaskTimeoutException(const char* msg) : std::runtime_error(msg) {}
 };
 
+// co_await Task 的续体握手。
+//
+// 子 Task 可能在 EventLoop / CoroutinePool 线程上完成，与父协程的
+// await_ready / await_suspend 并发。若 final_suspend 读到空 continuation
+// 后再 set_continuation，父协程会永久挂起（localhost 持久 echo 即此症状）。
+//
+// 协议：continuation 槽位 nullptr → waiter 地址 或 completed_sentinel。
+// final_suspend 把槽位置为 sentinel 并取走 waiter；await_suspend 的 CAS
+// 失败则子 Task 已完成，父协程不得挂起。
+struct TaskContinuation {
+    // 合法 coroutine 帧地址按指针对齐，1 不会与真实 handle 冲突。
+    static void* completed_sentinel() noexcept {
+        return reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+    }
+
+    std::atomic<void*> addr_{nullptr};
+
+    std::coroutine_handle<> take_or_mark_complete() noexcept {
+        void* prev = addr_.exchange(completed_sentinel(), std::memory_order_acq_rel);
+        if (prev && prev != completed_sentinel()) {
+            return std::coroutine_handle<>::from_address(prev);
+        }
+        return {};
+    }
+
+    // true：父协程将由 final_suspend 对称转移唤醒；false：子 Task 已完成。
+    bool try_attach(std::coroutine_handle<> waiter) noexcept {
+        void* expected = nullptr;
+        return addr_.compare_exchange_strong(
+            expected, waiter.address(),
+            std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+};
+
 // 支持返回值的Task - 整合SafeTask的RAII和异常安全特性
 template<typename T>
 struct Task {
@@ -35,7 +70,7 @@ struct Task {
         std::optional<T> value;
         std::atomic<bool> has_error{false}; // 使用原子布尔确保线程安全
         std::exception_ptr exception_; // 保存异常（exception_ptr本身是线程安全的）
-        std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
+        TaskContinuation continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 融合SafeCoroutineHandle概念
         std::atomic<bool> is_cancelled_{false};
@@ -105,9 +140,8 @@ struct Task {
                 }
                 
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
-                    // 如果有continuation，恢复它
-                    if (promise->continuation) {
-                        return promise->continuation;
+                    if (auto cont = promise->continuation.take_or_mark_complete()) {
+                        return cont;
                     }
                     return std::noop_coroutine();
                 }
@@ -131,9 +165,9 @@ struct Task {
             LOG_ERROR("Task unhandled exception occurred");
         }
 
-        // Continuation支持
-        void set_continuation(std::coroutine_handle<> cont) noexcept {
-            continuation = cont;
+        // Continuation支持（原子握手；失败表示本 Task 已完成）
+        bool try_set_continuation(std::coroutine_handle<> cont) noexcept {
+            return continuation.try_attach(cont);
         }
 
         // 快速的取消支持 - 去除锁
@@ -422,30 +456,24 @@ struct Task {
 
         // 安全检查：验证句柄地址有效性
         if (!handle.address()) return true; // 无效地址视为ready
-        if (handle.done()) return true; // 已完成视为ready
 
-        // 只有在句柄有效时才检查promise状态
-        return handle.promise().is_destroyed();
+        // 用 settled_ 代替 handle.done()：后者跨线程读协程帧是 data race，
+        // 且与 await_suspend 之间存在「已完成但 continuation 未登记」窗口。
+        return handle.promise().settled_.load(std::memory_order_acquire)
+            || handle.promise().is_destroyed();
     }
 
-    void await_suspend(std::coroutine_handle<> waiting_handle) {
-        // 高性能实现：直接设置continuation
+    bool await_suspend(std::coroutine_handle<> waiting_handle) {
         if (!handle || handle.promise().is_destroyed()) {
-            // 句柄无效，直接恢复等待协程
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
-            return;
+            return false;
         }
 
-        if (handle.done()) {
-            // 任务已完成，直接恢复等待协程
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
-            return;
+        // CAS 失败 = 子 Task 已在 final_suspend 中标完成。不得挂起，
+        // 否则父协程永远等不到对称转移（persistent echo 超时的根因之一）。
+        if (!handle.promise().try_set_continuation(waiting_handle)) {
+            return false;
         }
-
-        // 设置continuation：当task完成时恢复waiting_handle
-        handle.promise().set_continuation(waiting_handle);
+        return true;
     }
 
     T await_resume() {

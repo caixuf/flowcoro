@@ -200,6 +200,36 @@ TEST_CASE(coroutine_sync_wait) {
     TEST_EXPECT_EQ(result, 42);
 }
 
+TEST_CASE(nested_task_cross_thread_continuation) {
+    // 子 Task 在另一线程 set_value 完成，父 co_await 必须用原子 continuation
+    // 握手，否则会丢失唤醒（与 persistent echo 同一类 hang）。
+    auto inner = []() -> Task<int> {
+        AsyncPromise<int> p;
+        std::thread worker([p]() mutable {
+            p.set_value(1);
+        });
+        int v = co_await p;
+        worker.join();
+        co_return v;
+    };
+
+    auto outer = [&inner]() -> Task<int> {
+        int sum = 0;
+        for (int i = 0; i < 800; ++i) {
+            sum += co_await inner();
+        }
+        co_return sum;
+    }();
+
+    int result = 0;
+    try {
+        result = outer.get(std::chrono::seconds(20));
+    } catch (const std::exception& e) {
+        std::cerr << "nested continuation get: " << e.what() << "\n";
+    }
+    TEST_EXPECT_EQ(result, 800);
+}
+
 int main() {
     TEST_SUITE("FlowCoro Core Functionality Tests");
 

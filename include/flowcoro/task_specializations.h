@@ -330,7 +330,7 @@ struct Task<void> {
     struct promise_type {
         bool has_error = false; // 替换exception_ptr
         std::exception_ptr exception_; // 保存异常
-        std::coroutine_handle<> continuation; // 懒加载Task的continuation支持
+        TaskContinuation continuation; // 懒加载Task的continuation支持
 
         // 增强版生命周期管理 - 与Task<T>保持一致
         std::atomic<bool> is_cancelled_{false};
@@ -395,9 +395,8 @@ struct Task<void> {
                 }
 
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
-                    // 如果有continuation，恢复它
-                    if (promise->continuation) {
-                        return promise->continuation;
+                    if (auto cont = promise->continuation.take_or_mark_complete()) {
+                        return cont;
                     }
                     return std::noop_coroutine();
                 }
@@ -418,9 +417,8 @@ struct Task<void> {
             LOG_ERROR("Task<void> unhandled exception occurred");
         }
 
-        // Continuation支持
-        void set_continuation(std::coroutine_handle<> cont) noexcept {
-            continuation = cont;
+        bool try_set_continuation(std::coroutine_handle<> cont) noexcept {
+            return continuation.try_attach(cont);
         }
 
         // 快速取消支持 - 去除锁
@@ -623,26 +621,20 @@ struct Task<void> {
     bool await_ready() const {
         if (!handle) return true; // 无效句柄视为ready
         if (handle.promise().is_destroyed()) return true; // 已销毁视为ready
-        return handle.done();
+        return handle.promise().completed_.load(std::memory_order_acquire);
     }
 
     bool await_suspend(std::coroutine_handle<> waiting_handle) {
-        // Task<void>版本 - 与Task<T>保持一致的实现
         if (!handle || handle.promise().is_destroyed()) {
             // 句柄无效：返回 false，C++ 机制立即恢复等待协程（无需 schedule_resume）
             // 注意：return false 时协程立即被恢复，再调用 schedule_resume 会导致双重唤醒崩溃
             return false;
         }
 
-        if (handle.done()) {
-            // 任务已完成：同上，return false 会立即恢复等待协程
+        // CAS 失败 = 子 Task 已完成。不得挂起，否则父协程丢失唤醒。
+        if (!handle.promise().try_set_continuation(waiting_handle)) {
             return false;
         }
-
-        // 设置continuation：当task完成时通过 final_suspend 恢复 waiting_handle
-        handle.promise().set_continuation(waiting_handle);
-
-        // 挂起等待协程，等待task通过continuation唤醒
         return true;
     }
 
@@ -693,7 +685,7 @@ struct Task<std::unique_ptr<T>> {
         std::unique_ptr<T> value;
         bool has_error = false;
         std::exception_ptr exception_; // 保存异常
-        std::coroutine_handle<> continuation;
+        TaskContinuation continuation;
 
         // 生命周期管理
         std::atomic<bool> is_cancelled_{false};
@@ -750,8 +742,8 @@ struct Task<std::unique_ptr<T>> {
                 }
 
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<>) const noexcept {
-                    if (promise->continuation) {
-                        return promise->continuation;
+                    if (auto cont = promise->continuation.take_or_mark_complete()) {
+                        return cont;
                     }
                     return std::noop_coroutine();
                 }
@@ -773,8 +765,8 @@ struct Task<std::unique_ptr<T>> {
             LOG_ERROR("Task<unique_ptr> unhandled exception occurred");
         }
 
-        void set_continuation(std::coroutine_handle<> cont) noexcept {
-            continuation = cont;
+        bool try_set_continuation(std::coroutine_handle<> cont) noexcept {
+            return continuation.try_attach(cont);
         }
 
         void request_cancellation() noexcept {
@@ -951,24 +943,19 @@ struct Task<std::unique_ptr<T>> {
     bool await_ready() const {
         if (!handle) return true;
         if (!handle.address()) return true;
-        if (handle.done()) return true;
-        return handle.promise().is_destroyed();
+        return handle.promise().completed_.load(std::memory_order_acquire)
+            || handle.promise().is_destroyed();
     }
 
-    void await_suspend(std::coroutine_handle<> waiting_handle) {
+    bool await_suspend(std::coroutine_handle<> waiting_handle) {
         if (!handle || handle.promise().is_destroyed()) {
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
-            return;
+            return false;
         }
 
-        if (handle.done()) {
-            auto& manager = CoroutineManager::get_instance();
-            manager.schedule_resume(waiting_handle);
-            return;
+        if (!handle.promise().try_set_continuation(waiting_handle)) {
+            return false;
         }
-
-        handle.promise().set_continuation(waiting_handle);
+        return true;
     }
 
     std::unique_ptr<T> await_resume() {
