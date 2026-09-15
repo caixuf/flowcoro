@@ -2,7 +2,58 @@
 
 本目录包含FlowCoro与Go、Rust的真实性能对比测试代码。
 
+## 诚实的真实性能测量（请先读）
+
+`professional_flowcoro_benchmark` 里名叫 **Echo Server / Concurrent Echo / HTTP Request Processing / Memory Pool** 的行是 **CPU-sim**（算循环 / `strlen` / `malloc`），**没有** `socket`/`accept`/`read`/`write`，不能当成 HTTP QPS 或网卡吞吐。下面两个二进制才是本目录的真实测量：
+
+| 二进制 | 测什么 | 不是什么 |
+|--------|--------|----------|
+| `real_net_benchmark` | localhost TCP echo：真实 `flowcoro::net`（Linux epoll / Windows WSAPoll） | 不是网卡/线缆；不是 HTTP |
+| `rt_cycle_jitter_benchmark` | `RtExecutor` 控制回路周期误差 / tardiness p50/p99/max | 不是硬实时证书 |
+
+### 真实套接字 IO
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target real_net_benchmark -j$(nproc)
+./build/benchmarks/real_net_benchmark
+# 或单独场景:
+./build/benchmarks/real_net_benchmark echo --duration-ms 2000 --clients 8 --payload 64
+./build/benchmarks/real_net_benchmark connect --connections 200 --payload 64
+```
+
+环境变量：`FLOWCORO_REAL_NET_DURATION_MS` / `CLIENTS` / `PAYLOAD` / `CONNECTIONS` / `PORT`。
+
+怎么读输出：
+
+- 标题写明 **TCP 127.0.0.1 kernel loopback**。这是本机回环，不是 NIC。
+- `req/s` / `conn/s` 以及 RTT 的 p50/p95/p99/max（微秒）。
+- 不要拿这些数字去除以 Go/Rust 再写「快 X 倍」——本程序不打印对照。
+- 已知缺口：每次 `Socket::read`/`write` 会 `add_fd`/`remove_fd`（one-shot epoll），所以这是当前栈的真实成本，不是调优后的上限。
+
+CI 冒烟：`test_real_net_echo`（少量 round-trip，不断言吞吐）。
+
+### FlowEngine 式周期抖动
+
+```bash
+cmake --build build --target rt_cycle_jitter_benchmark test_rt_cycle_jitter -j$(nproc)
+./build/benchmarks/rt_cycle_jitter_benchmark
+FLOWCORO_RT_SLO_STRICT=1 ./build/benchmarks/rt_cycle_jitter_benchmark --period-us 10000 --duration-ms 2000
+ctest --test-dir build -R test_rt_cycle_jitter --output-on-failure
+```
+
+三条路径：
+
+1. **host-tick + yield**：宿主 `sleep_until` 对齐绝对周期，任务 `co_await yield()`。
+2. **sleep_for**：相对睡眠，相对绝对 deadline 会漂移；宿主约 200µs 轮询 `run()`（当前 main 没有 `next_timer_deadline`；PR #20 若合入会更准）。
+3. **sensor `post_ready`**：生产者线程按周期 `post_ready`，执行器忙等 `run()`。
+
+报告 **interval**（相邻 tick 间隔）和 **late**（`max(0, now - deadline)`）的 p50/p99/max。`FLOWCORO_RT_SLO_STRICT=1` 按 10ms 周期打印本机闸门（p99 late ≤ 3ms），bench 不因此失败。CI 测试用宽松阈值（p99 late ≤ 200ms）。
+
+---
+
 ## 快速开始
+
 
 ### 环境要求
 - Go 1.20+

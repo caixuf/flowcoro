@@ -583,6 +583,8 @@ BenchmarkResult benchmark_lockfree_queue() {
 }
 
 // Echo服务器基准测试 - 使用真实的网络IO
+// 注意: 下面的 EchoServerBenchmark 类走 TcpServer，但 benchmark_echo_server_throughput
+// 并未启动它；该行是 CPU-sim。真实 socket 数字见 real_net_benchmark。
 class EchoServerBenchmark {
 private:
     static constexpr uint16_t ECHO_PORT = 18080;
@@ -737,7 +739,7 @@ public:
 };
 
 BenchmarkResult benchmark_echo_server_throughput() {
-    // 简化测试：直接测试网络连接开销，不涉及真实的echo服务器
+    // CPU-sim only: no listen/accept/read/write. Not HTTP, not socket QPS.
     return BenchmarkRunner::run("Echo Server Throughput", []() {
         // 模拟网络连接开销，但没有真实的IO阻塞
         volatile int network_simulation = 0;
@@ -832,6 +834,7 @@ BenchmarkResult benchmark_large_data_transfer() {
 }
 
 // 网络性能测试：模拟HTTP请求处理 (优化版本)
+// CPU-sim: strlen of a stack string. Not HTTP, not sockets. See real_net_benchmark.
 BenchmarkResult benchmark_http_request_processing() {
     return BenchmarkRunner::run("HTTP Request Processing", []() {
         // 直接同步处理，避免协程开销
@@ -865,6 +868,10 @@ void print_system_info() {
 
 void print_benchmark_header() {
     std::cout << "\n=== FlowCoro Performance Benchmarks ===" << std::endl;
+    std::cout << "NOTE: Echo Server / Concurrent Echo / HTTP Request / Memory Pool\n"
+              << "      rows below are CPU-sim or malloc/free. They are NOT socket QPS\n"
+              << "      and must not be quoted as HTTP throughput. For real TCP echo\n"
+              << "      on localhost loopback see ./real_net_benchmark.\n";
     std::cout << std::string(100, '=') << std::endl;
     std::cout << std::left << std::setw(30) << "Benchmark Name"
               << std::right << std::setw(10) << "Iterations"

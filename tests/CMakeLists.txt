@@ -101,6 +101,12 @@ target_link_libraries(test_c_api flowcoro_net Threads::Threads)
 # ============================================================================
 add_executable(test_rt_executor test_rt_executor.cpp)
 
+# FlowEngine 式周期抖动（CI 宽松闸门；严格报告在 rt_cycle_jitter_benchmark）
+add_executable(test_rt_cycle_jitter test_rt_cycle_jitter.cpp)
+
+# localhost 真实 socket echo 冒烟（不是 CPU-sim）
+add_executable(test_real_net_echo test_real_net_echo.cpp)
+
 # ============================================================================
 # 有界 MPMC Channel（Vyukov 环）+ CPU 亲和性/物理核契约
 # ============================================================================
@@ -202,6 +208,16 @@ target_link_libraries(test_rt_executor
     Threads::Threads
 )
 
+target_link_libraries(test_rt_cycle_jitter
+    flowcoro_net
+    Threads::Threads
+)
+
+target_link_libraries(test_real_net_echo
+    flowcoro_net
+    Threads::Threads
+)
+
 # 添加测试
 add_test(NAME test_core COMMAND test_core)
 add_test(NAME test_new_features COMMAND test_new_features)
@@ -221,6 +237,8 @@ add_test(NAME test_cancellation      COMMAND test_cancellation)
 add_test(NAME test_timeout           COMMAND test_timeout)
 add_test(NAME test_c_api             COMMAND test_c_api)
 add_test(NAME test_rt_executor       COMMAND test_rt_executor)
+add_test(NAME test_rt_cycle_jitter   COMMAND test_rt_cycle_jitter)
+add_test(NAME test_real_net_echo     COMMAND test_real_net_echo)
 add_test(NAME test_bounded_channel   COMMAND test_bounded_channel)
 add_test(NAME test_cpu_affinity      COMMAND test_cpu_affinity)
 
@@ -319,6 +337,16 @@ set_tests_properties(test_rt_executor PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+set_tests_properties(test_rt_cycle_jitter PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+set_tests_properties(test_real_net_echo PROPERTIES
+    TIMEOUT 30
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 set_tests_properties(test_bounded_channel PROPERTIES
     TIMEOUT 120
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
@@ -330,7 +358,7 @@ set_tests_properties(test_cpu_affinity PROPERTIES
 )
 
 # 设置输出目录
-set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_net_error_macro test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor test_bounded_channel test_cpu_affinity PROPERTIES
+set_target_properties(test_core test_new_features test_network test_database test_rpc test_cross_thread test_when_any test_sleep_for test_exception_propagation test_net_error_macro test_network_professional test_bus_awaitable test_lockfree_stress test_when_any_v2 test_cancellation test_timeout test_c_api test_rt_executor test_rt_cycle_jitter test_real_net_echo test_bounded_channel test_cpu_affinity PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 

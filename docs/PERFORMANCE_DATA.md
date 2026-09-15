@@ -75,3 +75,21 @@
 ---
 
 *注意: 此数据基于统一测试基准，确保三种语言使用相同的测试条件进行公平对比。*
+
+---
+
+## 真实套接字 IO 与 RT 抖动（与上表分离）
+
+上表 Echo / HTTP / 内存池数字来自 `professional_flowcoro_benchmark` 的 **CPU-sim** 行，**不是** TCP QPS。真实测量：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target real_net_benchmark rt_cycle_jitter_benchmark -j$(nproc)
+./build/benchmarks/real_net_benchmark
+./build/benchmarks/rt_cycle_jitter_benchmark
+```
+
+- `real_net_benchmark`：localhost 回环上的 `flowcoro::net` TCP echo（connections/s、req/s、RTT 分位数）。标明 loopback，不是网卡。
+- `rt_cycle_jitter_benchmark`：`RtExecutor` 周期误差 / tardiness。墙钟测量，不是硬实时证书。
+
+复现步骤与读数说明见 [benchmarks/README.md](../benchmarks/README.md) 文首「诚实的真实性能测量」。

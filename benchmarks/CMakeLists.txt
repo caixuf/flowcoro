@@ -32,3 +32,17 @@ else()
     target_include_directories(full_benchmarks PRIVATE ${BENCHMARK_INCLUDE_DIRS})
     target_compile_options(full_benchmarks PRIVATE ${BENCHMARK_CFLAGS_OTHER})
 endif()
+
+# Honest real-performance binaries (always, when FLOWCORO_BUILD_BENCHMARKS=ON).
+# These are not the CPU-sim Echo/HTTP rows in professional_flowcoro_benchmark.
+find_package(Threads REQUIRED)
+
+add_executable(real_net_benchmark real_net_benchmark.cpp)
+target_link_libraries(real_net_benchmark PRIVATE flowcoro_net Threads::Threads)
+target_include_directories(real_net_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(real_net_benchmark PRIVATE cxx_std_20)
+
+add_executable(rt_cycle_jitter_benchmark rt_cycle_jitter_benchmark.cpp)
+target_link_libraries(rt_cycle_jitter_benchmark PRIVATE flowcoro_net Threads::Threads)
+target_include_directories(rt_cycle_jitter_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(rt_cycle_jitter_benchmark PRIVATE cxx_std_20)
