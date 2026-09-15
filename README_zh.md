@@ -21,28 +21,19 @@
 
 ## 性能表现
 
-> **性能数据**: 详细性能指标和基准测试结果请参考 [性能数据参考](docs/PERFORMANCE_DATA.md)
+具体数字以 [性能数据参考](docs/PERFORMANCE_DATA.md) 为准。下面摘自作者机器 **2026-09-15** 的一次 Release 跑（`professional_flowcoro_benchmark`：i7-14650HX 6C/12T，Ubuntu 24.04.4 LTS WSL2，g++ 13.3.0，FlowCoro 4.0.0，`thread_count=12`）。这不是「已在超大规模生产验证」的声明。
 
-### 关键性能亮点
+| Benchmark | Mean | Throughput |
+|-----------|------|------------|
+| Simple Computation | 14 ns | 69.0M ops/s |
+| Coroutine Create & Execute | 132 ns | 7.60M ops/s |
+| WhenAny (2 tasks) | 630 ns | 1.59M ops/s |
+| LockFree Queue (enq+deq) | 132 ns | 7.56M ops/s |
+| Memory Allocation (1KB) | 24 ns | 41.3M ops/s |
 
-- **协程创建和执行**: PGO优化后性能表现良好
-- **Hello World吞吐量**: 相比传统线程有性能优势
-- **WhenAny操作**: 高效的并发调度
-- **无锁队列**: 高性能操作
-- **内存池分配**: 快于标准系统分配
-- **HTTP请求处理**: 良好的吞吐量表现
+部分行（HTTP、Echo）是 CPU 侧模拟，不是真实套接字。本次 **没有** 刷新 Go 数字；同机有一份 Rust 微基准，但方法不完全相同——请看 PERFORMANCE_DATA.md，不要用「比 Go/Rust 快 N 倍」来概括。
 
-### 核心性能对比
-
-FlowCoro在关键领域相比Go和Rust表现良好：
-
-- **协程创建和执行**: 与Go和Rust相比具有竞争力
-- **无锁队列**: 良好的性能特性
-- **HTTP请求处理**: 稳定的性能指标
-- **简单计算**: 高效的计算性能
-- **内存池分配**: 优化的内存管理
-
-**适用场景**: 基于协程的调度、批量处理、并发任务管理
+**适用场景**: 协程调度、批量/高吞吐，以及 `flowcoro::rt` 确定性实时路径。
 
 ## 快速开始
 
@@ -201,10 +192,11 @@ cd build && cmake .. && make ad_pipeline_demo
 ## 性能测试
 
 ```bash
-# 运行性能测试
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
 ./build/benchmarks/professional_flowcoro_benchmark
 
-# 测试不同规模
+# 可选：不同规模（与 professional 基准不是同一套方法）
 ./build/examples/hello_world 10000   # 1万任务
 ./build/examples/hello_world 100000  # 10万任务
 ```

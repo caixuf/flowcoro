@@ -36,62 +36,71 @@ echo "=== Rust测试 ==="
 - **内存增长**: 测试过程中的内存使用增量
 - **单任务内存**: 平均每个任务的内存开销
 
-### 最新专业基准测试结果 (16核Linux系统)
+### 最新专业基准测试结果（2026-09-15）
 
-#### 核心性能指标对比
+环境（作者机器，与 [docs/PERFORMANCE_DATA.md](../docs/PERFORMANCE_DATA.md) 相同）：
 
-| 性能指标 | FlowCoro | Go | Rust | 相对表现 |
-|----------|----------|-----|------|----------|
-| **协程/任务创建和执行** | 4.20M ops/s | 2.27M ops/s | 19.5K ops/s | 比Go快1.85倍，比Rust快215倍 |
-| **通道/队列操作** | 9.61M ops/s | 11.59M ops/s | 9.15M ops/s | 与Go差17%，比Rust快5% |
-| **HTTP请求处理** | 36.77M ops/s | 41.99M ops/s | 45.42M ops/s | 达到行业水平，差距12-19% |
-| **简单计算** | 46.19M ops/s | 21.82M ops/s | 46.34M ops/s | 与Rust基本相当 |
-| **内存分配(1KB)** | 10.18M ops/s | 41.43M ops/s | 46.75M ops/s | 有改进空间 |
+- CPU：Intel Core i7-14650HX（6 cores / 12 threads），**不是 16 核**
+- OS：Ubuntu 24.04.4 LTS（WSL2），Linux 6.6.x microsoft-standard-WSL2
+- 编译器：g++ 13.3.0；构建：Release，FlowCoro 4.0.0，`thread_count=12`
+- Go：**本次未跑**，下表没有 Go 列，也没有「比 Go 快 X 倍」
 
-#### 关键发现
+复现：
 
-**FlowCoro优势领域:**
-- 协程创建和执行性能显著领先
-- 专业的WhenAny/WhenAll并发控制特性
-- 在复杂协程调度场景中表现优秀
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
+./build/benchmarks/professional_flowcoro_benchmark
+```
 
-**需要改进的领域:**
-- 内存分配性能相对较弱
-- 简单通道操作有优化空间
+#### FlowCoro（`professional_flowcoro_benchmark`）
 
-**整体评估:**
-FlowCoro在核心协程功能上表现出色，特别适合复杂的并发控制场景。在基础性能指标上已达到行业竞争水平，在专业协程调度方面具有明显优势。
+| Benchmark | Mean | Throughput |
+|-----------|------|------------|
+| Simple Computation | 14 ns | 69.0M ops/s |
+| Coroutine Creation Only | 128 ns | 7.81M ops/s |
+| Coroutine Create & Execute | 132 ns | 7.60M ops/s |
+| Void Coroutine | 111 ns | 9.01M ops/s |
+| WhenAny (2 tasks) | 630 ns | 1.59M ops/s |
+| WhenAny 4 Tasks | 1513 ns | 0.66M ops/s |
+| LockFree Queue (enq+deq) | 132 ns | 7.56M ops/s |
+| Memory Allocation (1KB) | 24 ns | 41.3M ops/s |
+| Memory Pool Allocation (1KB) | 15 ns | 68.3M ops/s |
+| Echo Server Throughput | 34 ns | 29.2M ops/s |
+| Concurrent Echo Clients | 16771 ns | 59.6K ops/s |
+| HTTP Request Processing | 16 ns | 62.2M ops/s |
+| Concurrent Task Processing | 903 ns | 1.11M ops/s |
+| Sleep 1us | 129 ns | 7.73M ops/s |
 
-### 性能分析
+Echo / HTTP 等行是 CPU 侧模拟（无真实套接字 IO）；「Memory Pool Allocation」当前实现是 `malloc`/`free`。完整说明见 PERFORMANCE_DATA.md。
 
-**Go的优势：**
-- 轻量级goroutine，在通道操作中表现优秀(11.59M ops/s)
-- 成熟的运行时优化，HTTP处理性能领先(41.99M ops/s)
-- 内存分配效率高，达到41.43M ops/s
+#### 同机 Rust（可选，方法不完全相同）
 
-**FlowCoro的特点：**
-- 协程创建和执行性能显著领先(4.20M ops/s vs Go的2.27M ops/s)
-- 专业的WhenAny/WhenAll并发控制特性
-- 在复杂协程调度场景中具有优势
+同机跑了 `professional_rust_benchmark`（rustc 1.96.0）。近似吞吐：**不要**与上表逐行当作同一方法：
 
-**Rust的特色：**
-- 简单计算性能最优(46.34M ops/s)
-- HTTP处理效率最高(45.42M ops/s)
-- 内存安全保证，在基础操作上表现出色
+| Rust bench | 约 Throughput |
+|------------|----------------|
+| Task create+exec | 29.5K ops/s |
+| Channel | 6.04M ops/s |
+| Simple compute | 72.7M ops/s |
+| Concurrent tasks (10) | 867 ops/s |
+| Mem alloc 1KB | 68.2M ops/s |
+| Concurrent echo | 809 ops/s |
+| HTTP | 71.4M ops/s |
+
+较接近的形状：简单计算（69.0M vs 约 72.7M）、1KB 分配（41.3M vs 约 68.2M）。任务创建（7.60M vs 约 29.5K）不可比：FlowCoro 是 `suspend_never` 的 `Task`，Rust 是 `tokio::spawn` + await。
+
+旧的「16 核 / 4.20M 创建 / 比 Go 快 1.85 倍」表已从本文当前结果中撤下，见 PERFORMANCE_DATA.md 的历史隔离段。
 
 ## 测试设计
 
-所有测试都采用相同的设计原则：
-- 去除IO延迟，专注测试协程调度性能
-- 同机器同环境，确保公平对比
-- 统一的输出格式，便于结果对比
+`professional_*` 程序意图对齐输出格式，并尽量去掉真实 IO。对照源码后：**并非每一行测的是同一件事**（例如 HTTP/Echo 多为 CPU 模拟；Rust 任务创建走 `tokio::spawn`，FlowCoro 走 `suspend_never` 的 `Task`）。跨语言倍数只应在确认源码形状一致、且同机同次跑过之后再写。本次没有 Go 结果。
 
 ## 实际测试结果 (10,000并发请求)
 
-### 系统配置
+### 系统配置（历史 10K 批量测试当时记录，不是 2026-09-15 这次）
 
-- CPU：16核心
-- 操作系统：Linux
+- 当时文档写的是「CPU：16 核心 / Linux」；**未与本次 i7-14650HX 6C/12T WSL2 跑对齐，也未复现**
 ### 历史测试数据
 
 #### 10K任务规模测试 (历史参考)
@@ -157,23 +166,14 @@ Concurrent Coroutines: 100 次 | 127.076ms | 平均 1.270760ms | 786.93 ops/sec
 
 ### 现代基准测试 vs 历史批量测试
 
-**专业基准测试 (单操作性能)**：
-- 更准确反映各语言在协程核心操作上的性能
-- FlowCoro在协程创建执行方面领先
-- Go在内存分配和HTTP处理方面表现优秀
-- Rust在计算密集型任务中表现最佳
+**专业基准测试（单操作均值，`professional_*`）**：
+- 当前 FlowCoro 数字以 2026-09-15 作者机器那次 Release 跑为准（上表 / PERFORMANCE_DATA.md）
+- 本次 **没有** 刷新的 Go 数字；同机 Rust 数字方法不完全相同，见上
+- 若干行（HTTP、Echo）不是真实网络服务
 
-**历史批量测试 (任务规模性能)**：
+**历史批量测试（任务规模）**：
 - 反映大规模并发任务的整体处理能力
-- Go在大规模批量处理中优势明显
-- 测试方法与现代基准测试不同，结果不可直接对比
-
-### 结论
-
-- **复杂协程调度**：FlowCoro表现最佳，特别是在协程创建执行方面
-- **高并发HTTP服务**：Rust和Go表现优秀，差距较小
-- **内存敏感场景**：Go和Rust在内存分配方面领先
-- **计算密集型任务**：Rust和FlowCoro性能相当，显著优于Go
+- 与专业基准的单操作均值 **不可直接对比**
 
 ## 文件说明
 
