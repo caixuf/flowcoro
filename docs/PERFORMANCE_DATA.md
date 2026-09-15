@@ -124,7 +124,7 @@ cmake --build build --target real_net_benchmark rt_cycle_jitter_benchmark -j12
 ./build/benchmarks/rt_cycle_jitter_benchmark
 ```
 
-- `real_net_benchmark`：localhost 回环上的 `flowcoro::net` TCP echo（connections/s、req/s、RTT 分位数）。标明 loopback，不是网卡。
+- `real_net_benchmark`：localhost 回环上的 `flowcoro::net` TCP echo（connections/s、req/s、RTT 分位数）。标明 loopback，不是网卡。持久 echo 的 fd 保持 epoll 注册（Linux `MOD`+`EPOLLONESHOT`）；短连接 wave=32 的 p99 主要是 accept 排队，不要用拉长 timeout 或改 wave 来粉饰。WSL 是性能源，不要引用 cloud QPS。
 - `rt_cycle_jitter_benchmark`：`RtExecutor` 周期误差 / tardiness。墙钟测量，不是硬实时证书。
 
 复现步骤与读数说明见 [benchmarks/README.md](../benchmarks/README.md) 文首「诚实的真实性能测量」。

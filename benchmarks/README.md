@@ -29,7 +29,7 @@ cmake --build build --target real_net_benchmark -j$(nproc)
 - 标题写明 **TCP 127.0.0.1 kernel loopback**。这是本机回环，不是 NIC。
 - `req/s` / `conn/s` 以及 RTT 的 p50/p95/p99/max（微秒）。
 - 不要拿这些数字去除以 Go/Rust 再写「快 X 倍」——本程序不打印对照。
-- 已知缺口：每次 `Socket::read`/`write` 会 `add_fd`/`remove_fd`（one-shot epoll），所以这是当前栈的真实成本，不是调优后的上限。
+- 已知缺口：短连接 `connect+echo` 在 wave=32 下的 p99 主要受 listen backlog / accept 排队（内核握手队列）约束，不是「再 DEL 一次 epoll」能消掉的。持久连接上 `Socket::read`/`write` 保持 fd 注册（Linux：`EPOLL_CTL_MOD` + `EPOLLONESHOT`），不再每次 await 都 ADD+DEL。WSL 是性能源，不要引用 cloud QPS。
 
 CI 冒烟：`test_real_net_echo`（少量 round-trip，不断言吞吐）。
 
