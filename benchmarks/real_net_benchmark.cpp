@@ -223,7 +223,7 @@ struct EchoServer {
             std::cerr << "bind 127.0.0.1:" << requested_port << " failed\n";
             return false;
         }
-        if (!listen_sock->listen(512)) {
+        if (!listen_sock->listen(SOMAXCONN)) {
             std::cerr << "listen failed\n";
             return false;
         }
@@ -497,7 +497,10 @@ int main(int argc, char** argv) {
     std::cout
         << "\nGaps / how to read:\n"
         << "  - Loopback only. Do not quote as NIC or multi-host QPS.\n"
-        << "  - Each Socket::read/write currently add_fd/remove_fd (one-shot epoll).\n"
+        << "  - Steady-state read/write keeps the fd in epoll (MOD + EPOLLONESHOT on Linux),\n"
+        << "    not ADD+DEL every await. WSL numbers are the source of truth, not cloud QPS.\n"
+        << "  - connect+echo p99 under wave=32 is largely accept-queue / handshake physics;\n"
+        << "    draining the listen backlog helps, it does not remove kernel queuing.\n"
         << "  - Not HTTP; fixed-size echo. Do not label this 'HTTP throughput'.\n"
         << "  - No comparison multiplier vs Go/Rust is printed; none was measured here.\n";
     return rc;

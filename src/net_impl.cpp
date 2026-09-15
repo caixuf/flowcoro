@@ -345,6 +345,10 @@ void EventLoop::run_loop() {
             pfds.push_back(wake);
 
             for (const auto& [fd, handler] : handlers_) {
+                // events==0：已 complete_io，fd 仍注册但不参与本次 poll（ONESHOT 等价）
+                if (handler->events == 0) {
+                    continue;
+                }
                 WSAPOLLFD pfd{};
                 pfd.fd = fd;
                 pfd.events = 0;
@@ -467,14 +471,75 @@ void EventLoop::run_loop() {
 
 #endif
 
+namespace {
+
+void overlay_handler(IoEventHandler& dst, std::unique_ptr<IoEventHandler> src,
+                     socket_t fd, uint32_t events) {
+    dst.fd = fd;
+    dst.events = events;
+    dst.on_read = std::move(src->on_read);
+    dst.on_write = std::move(src->on_write);
+    dst.on_error = std::move(src->on_error);
+}
+
+#ifndef _WIN32
+epoll_event make_epoll_event(socket_t fd, uint32_t events) {
+    epoll_event event{};
+    // EPOLLONESHOT：投递一次后内核禁用该 fd，直到下次 MOD。
+    // complete_io 因此不必 DEL；无 waiter 时也不会 LT 空转。
+    event.events = EPOLLONESHOT;
+    if (events & static_cast<uint32_t>(IoEvent::READ)) {
+        event.events |= EPOLLIN;
+    }
+    if (events & static_cast<uint32_t>(IoEvent::WRITE)) {
+        event.events |= EPOLLOUT;
+    }
+    if (events & static_cast<uint32_t>(IoEvent::EDGE_TRIGGERED)) {
+        event.events |= EPOLLET;
+    }
+    event.data.fd = fd;
+    return event;
+}
+
+void epoll_apply(int epoll_fd, socket_t fd, uint32_t events, bool already_registered) {
+    epoll_event event = make_epoll_event(fd, events);
+    const int op = already_registered ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    if (epoll_ctl(epoll_fd, op, fd, &event) == 0) {
+        return;
+    }
+    // 与 worker 并发时可能 ADD 撞上仍在集内的 fd，或 MOD 撞上已 DEL。
+    if (errno == EEXIST) {
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &event) == -1) {
+            throw std::runtime_error("Failed to add fd to epoll: " +
+                                     std::string(strerror(errno)));
+        }
+    } else if (errno == ENOENT) {
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) {
+            throw std::runtime_error("Failed to add fd to epoll: " +
+                                     std::string(strerror(errno)));
+        }
+    } else {
+        throw std::runtime_error("Failed to add fd to epoll: " +
+                                 std::string(strerror(errno)));
+    }
+}
+#endif
+
+} // namespace
+
 #ifdef _WIN32
 
 void EventLoop::add_fd(socket_t fd, uint32_t events, std::unique_ptr<IoEventHandler> handler) {
-    handler->fd = fd;
-    handler->events = events;
     {
         std::lock_guard<std::mutex> lock(handlers_mutex_);
-        handlers_[fd] = std::move(handler);
+        auto it = handlers_.find(fd);
+        if (it != handlers_.end()) {
+            overlay_handler(*it->second, std::move(handler), fd, events);
+        } else {
+            handler->fd = fd;
+            handler->events = events;
+            handlers_[fd] = std::move(handler);
+        }
     }
     // 唤醒事件循环，使其立即以新的 fd 集合重建 WSAPoll 数组
     wakeup();
@@ -491,6 +556,21 @@ void EventLoop::modify_fd(socket_t fd, uint32_t events) {
     wakeup();
 }
 
+void EventLoop::complete_io(socket_t fd) {
+    {
+        std::lock_guard<std::mutex> lock(handlers_mutex_);
+        auto it = handlers_.find(fd);
+        if (it == handlers_.end()) {
+            return;
+        }
+        it->second->on_read = nullptr;
+        it->second->on_write = nullptr;
+        it->second->on_error = nullptr;
+        it->second->events = 0;
+    }
+    wakeup();
+}
+
 void EventLoop::remove_fd(socket_t fd) {
     {
         std::lock_guard<std::mutex> lock(handlers_mutex_);
@@ -502,66 +582,58 @@ void EventLoop::remove_fd(socket_t fd) {
 #else // POSIX / Linux
 
 void EventLoop::add_fd(socket_t fd, uint32_t events, std::unique_ptr<IoEventHandler> handler) {
-    epoll_event event{};
-    event.events = 0;
-    if (events & static_cast<uint32_t>(IoEvent::READ))  event.events |= EPOLLIN;
-    if (events & static_cast<uint32_t>(IoEvent::WRITE)) event.events |= EPOLLOUT;
-    if (events & static_cast<uint32_t>(IoEvent::EDGE_TRIGGERED)) event.events |= EPOLLET;
-    event.data.fd = fd;
-
-    int op = EPOLL_CTL_ADD;
+    bool already_registered = false;
     {
         std::lock_guard<std::mutex> lock(handlers_mutex_);
-        if (handlers_.find(fd) != handlers_.end()) {
-            op = EPOLL_CTL_MOD;
-        }
-    }
-
-    if (epoll_ctl(epoll_fd_, op, fd, &event) == -1) {
-        // 与 worker 并发时可能 ADD 撞上尚未 DEL 的 fd，或 MOD 撞上已 DEL。
-        if (errno == EEXIST) {
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) == -1) {
-                throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
-            }
-        } else if (errno == ENOENT) {
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &event) == -1) {
-                throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
-            }
+        auto it = handlers_.find(fd);
+        if (it != handlers_.end()) {
+            overlay_handler(*it->second, std::move(handler), fd, events);
+            already_registered = true;
         } else {
-            throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
+            handler->fd = fd;
+            handler->events = events;
+            handlers_[fd] = std::move(handler);
         }
     }
-
-    handler->fd = fd;
-    handler->events = events;
-    {
-        std::lock_guard<std::mutex> lock(handlers_mutex_);
-        handlers_[fd] = std::move(handler);
+    // 先写入 handlers_ 再 epoll_ctl，避免 ONESHOT 事件在 handler 就位前丢失。
+    try {
+        epoll_apply(epoll_fd_, fd, events, already_registered);
+    } catch (...) {
+        if (!already_registered) {
+            std::lock_guard<std::mutex> lock(handlers_mutex_);
+            handlers_.erase(fd);
+        }
+        throw;
     }
 }
 
 void EventLoop::modify_fd(socket_t fd, uint32_t events) {
-    epoll_event event{};
-    event.events = 0;
-    if (events & static_cast<uint32_t>(IoEvent::READ))  event.events |= EPOLLIN;
-    if (events & static_cast<uint32_t>(IoEvent::WRITE)) event.events |= EPOLLOUT;
-    if (events & static_cast<uint32_t>(IoEvent::EDGE_TRIGGERED)) event.events |= EPOLLET;
-    event.data.fd = fd;
-
-    if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) == -1) {
-        throw std::runtime_error("Failed to modify fd in epoll: " + std::string(strerror(errno)));
+    {
+        std::lock_guard<std::mutex> lock(handlers_mutex_);
+        auto handler_it = handlers_.find(fd);
+        if (handler_it != handlers_.end()) {
+            handler_it->second->events = events;
+        }
     }
+    epoll_apply(epoll_fd_, fd, events, true);
+}
 
+void EventLoop::complete_io(socket_t fd) {
     std::lock_guard<std::mutex> lock(handlers_mutex_);
-    auto handler_it = handlers_.find(fd);
-    if (handler_it != handlers_.end()) {
-        handler_it->second->events = events;
+    auto it = handlers_.find(fd);
+    if (it == handlers_.end()) {
+        return;
     }
+    it->second->on_read = nullptr;
+    it->second->on_write = nullptr;
+    it->second->on_error = nullptr;
+    it->second->events = 0;
+    // Linux：EPOLLONESHOT 已禁用该 fd，无需 DEL / MOD。
 }
 
 void EventLoop::remove_fd(socket_t fd) {
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) == -1) {
-        // 可能fd已经关闭，这里不抛异常
+        // 可能 fd 已经关闭，这里不抛异常
     }
 
     std::lock_guard<std::mutex> lock(handlers_mutex_);
@@ -665,7 +737,8 @@ Socket::~Socket() {
 }
 
 Socket::Socket(Socket&& other) noexcept
-    : fd_(other.fd_), loop_(other.loop_), connected_(other.connected_) {
+    : fd_(other.fd_), loop_(other.loop_), connected_(other.connected_),
+      pending_accepts_(std::move(other.pending_accepts_)) {
     other.fd_ = INVALID_SOCKET_HANDLE;
     other.loop_ = nullptr;
     other.connected_ = false;
@@ -677,6 +750,7 @@ Socket& Socket::operator=(Socket&& other) noexcept {
         fd_ = other.fd_;
         loop_ = other.loop_;
         connected_ = other.connected_;
+        pending_accepts_ = std::move(other.pending_accepts_);
         other.fd_ = INVALID_SOCKET_HANDLE;
         other.loop_ = nullptr;
         other.connected_ = false;
@@ -699,16 +773,16 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
                                  socket_error_string(last_socket_error()));
     }
 
-    // 等待连接完成
+    // 等待连接完成。fd 持久注册：回调里 complete_io（清 waiter、不 DEL），
+    // 再 set_value。worker 可能在回调返回前 resume 并再次 add_fd；若此处 DEL
+    // 会抹掉新 handler（#22）。
     AsyncPromise<void> connect_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_write = [&connect_promise, this]() {
-        // 必须先摘除 fd，再 set_value：CoroutinePool worker 可能在回调返回前
-        // 就 resume 并再次 add_fd。若后 remove_fd，会删掉新 handler → 永久挂起。
-        loop_->remove_fd(fd_);
         int error = 0;
         socklen_t len = sizeof(error);
+        complete_io();
         if (::getsockopt(fd_, SOL_SOCKET, SO_ERROR,
                          reinterpret_cast<char*>(&error), &len) == 0 && error == 0) {
             connected_ = true;
@@ -723,7 +797,7 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
     };
 
     handler->on_error = [&connect_promise, this]() {
-        loop_->remove_fd(fd_);
+        complete_io();
         connect_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Connect error"))
         );
@@ -748,6 +822,10 @@ bool Socket::listen(int backlog) {
 }
 
 Task<std::unique_ptr<Socket>> Socket::accept() {
+    if (socket_t queued = pop_pending_accept(); queued != INVALID_SOCKET_HANDLE) {
+        co_return std::make_unique<Socket>(queued, loop_);
+    }
+
     sockaddr_in client_addr{};
     socklen_t addr_len = sizeof(client_addr);
 
@@ -755,8 +833,8 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
         fd_, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
 
     if (client_fd != INVALID_SOCKET_HANDLE) {
-        auto client_socket = std::make_unique<Socket>(client_fd, loop_);
-        co_return std::move(client_socket);
+        drain_accepts();
+        co_return std::make_unique<Socket>(client_fd, loop_);
     }
 
     if (!err_would_block(last_socket_error())) {
@@ -764,22 +842,16 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
                                  socket_error_string(last_socket_error()));
     }
 
-    // 等待新连接
+    // 等待新连接。一次可读事件排空 listen backlog，减少 wave 连接的排队。
     AsyncPromise<std::unique_ptr<Socket>> accept_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_read = [&accept_promise, this]() {
-        sockaddr_in inner_addr{};
-        socklen_t inner_len = sizeof(inner_addr);
-
-        socket_t inner_fd = accept_non_blocking(
-            fd_, reinterpret_cast<sockaddr*>(&inner_addr), &inner_len);
-
-        // 先摘 fd，再唤醒等待 accept 的协程（见 connect 回调注释）。
-        loop_->remove_fd(fd_);
+        drain_accepts();
+        socket_t inner_fd = pop_pending_accept();
+        complete_io();
         if (inner_fd != INVALID_SOCKET_HANDLE) {
-            auto client_socket = std::make_unique<Socket>(inner_fd, loop_);
-            accept_promise.set_value(std::move(client_socket));
+            accept_promise.set_value(std::make_unique<Socket>(inner_fd, loop_));
         } else {
             accept_promise.set_exception(
                 std::make_exception_ptr(
@@ -791,7 +863,7 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
     };
 
     handler->on_error = [&accept_promise, this]() {
-        loop_->remove_fd(fd_);
+        complete_io();
         accept_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Accept error"))
         );
@@ -818,7 +890,7 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
                                  socket_error_string(last_socket_error()));
     }
 
-    // 等待数据可读
+    // 等待数据可读。complete_io 先于 set_value（#22）；fd 保持注册。
     AsyncPromise<ssize_t> read_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
@@ -831,18 +903,15 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
                 if (static_cast<size_t>(total) == size) {
                     break; // 满了
                 }
-                // 边沿触发下继续尝试，水平触发下也可提前返回
                 continue;
             }
             if (n == 0) {
-                // EOF
-                break;
+                break; // EOF
             }
             if (err_would_block(last_socket_error())) {
-                break; // 暂无更多可读
+                break;
             }
-            // 错误
-            loop_->remove_fd(fd_);
+            complete_io();
             read_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Read failed: " +
@@ -851,12 +920,12 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
             );
             return;
         }
-        loop_->remove_fd(fd_);
+        complete_io();
         read_promise.set_value(total);
     };
 
     handler->on_error = [&read_promise, this]() {
-        loop_->remove_fd(fd_);
+        complete_io();
         read_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Read error"))
         );
@@ -880,7 +949,7 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
                                  socket_error_string(last_socket_error()));
     }
 
-    // 等待可写
+    // 等待可写。complete_io 先于 set_value（#22）；fd 保持注册。
     AsyncPromise<ssize_t> write_promise;
 
     auto handler = std::make_unique<IoEventHandler>();
@@ -893,13 +962,12 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
                 if (static_cast<size_t>(total) == size) {
                     break; // 全部写完
                 }
-                continue; // 边沿触发下继续写
+                continue;
             }
             if (n < 0 && err_would_block(last_socket_error())) {
-                break; // 内核发送缓冲区已满，等待下次可写事件触发后继续
+                break;
             }
-            // 错误
-            loop_->remove_fd(fd_);
+            complete_io();
             write_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Write failed: " +
@@ -908,12 +976,12 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
             );
             return;
         }
-        loop_->remove_fd(fd_);
+        complete_io();
         write_promise.set_value(total);
     };
 
     handler->on_error = [&write_promise, this]() {
-        loop_->remove_fd(fd_);
+        complete_io();
         write_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Write error"))
         );
@@ -985,6 +1053,7 @@ Task<size_t> Socket::write_string(const std::string& data) {
 
 void Socket::close() {
     if (fd_ != INVALID_SOCKET_HANDLE) {
+        close_pending_accepts();
         if (loop_) {
             loop_->remove_fd(fd_);
         }
@@ -992,6 +1061,46 @@ void Socket::close() {
         fd_ = INVALID_SOCKET_HANDLE;
         connected_ = false;
     }
+}
+
+void Socket::complete_io() {
+    if (loop_ && fd_ != INVALID_SOCKET_HANDLE) {
+        loop_->complete_io(fd_);
+    }
+}
+
+void Socket::drain_accepts() {
+    std::lock_guard<std::mutex> lock(accept_mu_);
+    while (true) {
+        sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        socket_t client = accept_non_blocking(
+            fd_, reinterpret_cast<sockaddr*>(&addr), &len);
+        if (client == INVALID_SOCKET_HANDLE) {
+            break;
+        }
+        pending_accepts_.push_back(client);
+    }
+}
+
+socket_t Socket::pop_pending_accept() {
+    std::lock_guard<std::mutex> lock(accept_mu_);
+    if (pending_accepts_.empty()) {
+        return INVALID_SOCKET_HANDLE;
+    }
+    socket_t fd = pending_accepts_.front();
+    pending_accepts_.pop_front();
+    return fd;
+}
+
+void Socket::close_pending_accepts() {
+    std::lock_guard<std::mutex> lock(accept_mu_);
+    for (socket_t s : pending_accepts_) {
+        if (s != INVALID_SOCKET_HANDLE) {
+            close_socket(s);
+        }
+    }
+    pending_accepts_.clear();
 }
 
 void Socket::set_option(int option, int value) {

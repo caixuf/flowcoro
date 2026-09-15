@@ -52,6 +52,7 @@
 #include <functional>
 #include <chrono>
 #include <queue>
+#include <deque>
 #include <mutex>
 #include <atomic>
 #include <cstdint>
@@ -173,10 +174,11 @@ public:
     void wait_for_stop();
 
     /**
-     * @brief 添加文件描述符到事件循环
-     * @param fd 文件描述符
-     * @param events 监听的事件类型
-     * @param handler 事件处理器
+     * @brief 注册或重武装 fd 的等待回调。
+     *
+     * 首次调用 EPOLL_CTL_ADD（Windows：写入 handlers_）；之后只 MOD/更新回调，
+     * 不 DEL。Linux 侧带 EPOLLONESHOT，因此每次等待仍需调用一次以重新使能。
+     * 已存在的 handler 就地更新，避免替换 unique_ptr。
      */
     void add_fd(socket_t fd, uint32_t events, std::unique_ptr<IoEventHandler> handler);
 
@@ -188,7 +190,15 @@ public:
     void modify_fd(socket_t fd, uint32_t events);
 
     /**
-     * @brief 从事件循环中移除文件描述符
+     * @brief 结束一次 IO 等待：清掉 waiter 回调并去掉兴趣位，但保持 fd 注册。
+     *
+     * 必须在 set_value/set_exception 之前调用（#22）：worker 可能在回调返回前
+     * 就 resume 并再次 add_fd。此处不得 EPOLL_CTL_DEL / erase，否则会干掉新 waiter。
+     */
+    void complete_io(socket_t fd);
+
+    /**
+     * @brief 从事件循环中移除文件描述符（关闭路径：DEL + erase）
      * @param fd 文件描述符
      */
     void remove_fd(socket_t fd);
@@ -231,6 +241,9 @@ private:
     socket_t fd_{INVALID_SOCKET_HANDLE};
     EventLoop* loop_{nullptr};
     bool connected_{false};
+    // accept() 在一次可读事件里排空 listen 队列，后续 co_await accept() 直接取。
+    std::mutex accept_mu_;
+    std::deque<socket_t> pending_accepts_;
 
 public:
     explicit Socket(EventLoop* loop);
@@ -264,7 +277,7 @@ public:
      * @param backlog 连接队列大小
      * @return 是否成功
      */
-    bool listen(int backlog = 128);
+    bool listen(int backlog = SOMAXCONN);
 
     /**
      * @brief 接受新连接
@@ -335,6 +348,10 @@ public:
 private:
     void make_non_blocking();
     sockaddr_in create_address(const std::string& host, uint16_t port);
+    void complete_io();
+    void drain_accepts();
+    socket_t pop_pending_accept();
+    void close_pending_accepts();
 };
 
 /**

@@ -301,6 +301,77 @@ TEST_CASE(real_net_persistent_echo_no_timeout) {
     TEST_EXPECT_TRUE(ok_sum > 0);
 }
 
+// Wave of concurrent connect+echo. Covers listen-fd persistent registration plus
+// accept drain (one readable event may harvest several backlog connections).
+TEST_CASE(real_net_accept_burst) {
+#ifndef _WIN32
+    ::signal(SIGPIPE, SIG_IGN);
+#endif
+    GlobalLogger::get().set_level(LogLevel::LOG_ERROR);
+
+    EventLoop loop;
+    loop.start();
+    auto& manager = CoroutineManager::get_instance();
+    std::atomic<bool> stop_drive{false};
+    std::thread driver([&] {
+        while (!stop_drive.load(std::memory_order_acquire)) {
+            manager.drive();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    });
+
+    constexpr size_t kPayload = 32;
+    constexpr int kClients = 16;
+    constexpr int kMsgs = 1;
+
+    Socket listen_sock(&loop);
+    TEST_EXPECT_TRUE(listen_sock.bind("127.0.0.1", 0));
+    TEST_EXPECT_TRUE(listen_sock.listen());
+    const uint16_t port = bound_port(listen_sock.fd());
+    TEST_EXPECT_TRUE(port != 0);
+
+    std::atomic<bool> running{true};
+    std::atomic<int> served{0};
+    std::mutex sessions_mu;
+    std::vector<std::shared_ptr<Task<void>>> sessions;
+    auto accept_task = persist_accept_loop(listen_sock, running, sessions,
+                                           sessions_mu, served, kPayload);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::vector<Task<void>> clients;
+    clients.reserve(static_cast<size_t>(kClients));
+    std::atomic<int> ok{0};
+    for (int i = 0; i < kClients; ++i) {
+        clients.emplace_back(echo_client(&loop, port, ok, kMsgs, kPayload));
+    }
+
+    int timeouts = 0;
+    for (auto& t : clients) {
+        try {
+            t.get(std::chrono::seconds(8));
+        } catch (const std::exception& e) {
+            std::cerr << "burst client get: " << e.what() << "\n";
+            ++timeouts;
+        }
+    }
+
+    running.store(false, std::memory_order_release);
+    listen_sock.close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    stop_drive.store(true, std::memory_order_release);
+    driver.join();
+    loop.stop();
+    loop.wait_for_stop();
+
+    std::cout << "accept burst ok=" << ok.load()
+              << " served=" << served.load()
+              << " timeouts=" << timeouts
+              << " port=" << port << "\n";
+    TEST_EXPECT_EQ(timeouts, 0);
+    TEST_EXPECT_EQ(ok.load(), kClients * kMsgs);
+}
+
 int main() {
     TEST_SUITE("real localhost socket echo");
     flowcoro::test::TestRunner::print_summary();
