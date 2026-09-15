@@ -170,7 +170,7 @@ Task<void> test_producer_consumer_pattern() {
     std::atomic<int> produced_sum{0};
     std::atomic<int> consumed_sum{0};
     
-    // 记录执行协程的线程ID，验证多调度器工作
+    // 记录执行协程的线程ID
     std::mutex thread_ids_mutex;
     std::set<std::thread::id> producer_threads;
     std::set<std::thread::id> consumer_threads;
@@ -344,7 +344,6 @@ Task<void> test_producer_consumer_pattern() {
     TEST_EXPECT_EQ(consumed_count.load(), produced_count.load());
     TEST_EXPECT_EQ(consumed_sum.load(), produced_sum.load());
     
-    // 验证多调度器工作（应该使用多个线程）
     TEST_EXPECT_TRUE(producer_threads.size() >= 1);
     TEST_EXPECT_TRUE(consumer_threads.size() >= 1);
     

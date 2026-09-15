@@ -37,7 +37,7 @@ class HttpRequest;
 
 // FlowCoro核心模块
 #include "performance_monitor.h"     // 性能监控系统
-#include "load_balancer.h"          // 智能负载均衡器
+#include "load_balancer.h"          // 负载均衡器（仅多调度器 opt-in）
 #include "coroutine_state.h"        // 协程状态管理
 #include "safe_handle.h"            // 安全协程句柄
 #include "thread_pool_wrapper.h"    // 线程池包装器

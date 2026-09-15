@@ -7,7 +7,7 @@ English | [中文](README_zh.md)
 ## Features
 
 - **High Performance**: Optimized for high-throughput scenarios with Profile-Guided Optimization (PGO)
-- **Lock-free Architecture**: Efficient queue operations with load balancing  
+- **Lock-free Architecture**: Lock-free queues, a **single** coroutine scheduler by default, plus a thread pool for blocking/CPU work
 - **C++20 Coroutines**: Modern coroutine-based task scheduling
 - **Batch Processing**: Designed for concurrent task execution
 - **Advanced Concurrency**: WhenAny, WhenAll operations with optimized scheduling

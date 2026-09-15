@@ -5,7 +5,9 @@
 
 namespace flowcoro {
 
-// 智能负载均衡器 - 无锁实现
+// 负载均衡器 —— 仅在 FLOWCORO_NUM_SCHEDULERS>1（实验性 opt-in）时进入热路径。
+// 默认单调度器直达 schedulers_[0]，不会调用 select_scheduler()。
+// 这不是默认架构里的「智能多调度器」。
 class SmartLoadBalancer {
 private:
     static constexpr size_t MAX_SCHEDULERS = 32;
