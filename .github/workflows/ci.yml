@@ -241,10 +241,11 @@ jobs:
             test_exception_propagation test_bus_awaitable \
             test_lockfree_stress test_when_any_v2 test_cancellation \
             test_timeout test_c_api test_rt_executor test_rt_latency \
+            test_rt_cycle_jitter test_real_net_echo \
             test_bounded_channel test_cpu_affinity
 
       - name: Run portable tests
         run: |
           ctest --test-dir build --output-on-failure --parallel 2 \
             --label-exclude network_external \
-            -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor|test_rt_latency|test_bounded_channel|test_cpu_affinity'
+            -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor|test_rt_latency|test_rt_cycle_jitter|test_real_net_echo|test_bounded_channel|test_cpu_affinity'

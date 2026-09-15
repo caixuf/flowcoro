@@ -110,3 +110,21 @@ cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
 - `benchmarks/README.md` 里曾经的「16 核」环境与 4.20M 协程创建等「最新专业基准」表（环境与本次不符，且含未刷新的 Go 列）
 
 `benchmarks/README.md` 里 10K 批量任务那段仍标为历史参考，方法与本表的单操作均值不同，不可互换。
+
+---
+
+## 真实套接字 IO 与 RT 抖动（与上表分离）
+
+上表 Echo / HTTP / 内存池数字来自 `professional_flowcoro_benchmark` 的 **CPU-sim** 行，**不是** TCP QPS。真实测量：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target real_net_benchmark rt_cycle_jitter_benchmark -j12
+./build/benchmarks/real_net_benchmark
+./build/benchmarks/rt_cycle_jitter_benchmark
+```
+
+- `real_net_benchmark`：localhost 回环上的 `flowcoro::net` TCP echo（connections/s、req/s、RTT 分位数）。标明 loopback，不是网卡。
+- `rt_cycle_jitter_benchmark`：`RtExecutor` 周期误差 / tardiness。墙钟测量，不是硬实时证书。
+
+复现步骤与读数说明见 [benchmarks/README.md](../benchmarks/README.md) 文首「诚实的真实性能测量」。
