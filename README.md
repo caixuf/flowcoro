@@ -21,28 +21,19 @@ English | [中文](README_zh.md)
 
 ## Performance
 
-> **Performance Data**: For detailed performance metrics and benchmarks, see [Performance Data Reference](docs/PERFORMANCE_DATA.md)
+Measured numbers live in [Performance Data Reference](docs/PERFORMANCE_DATA.md). The figures below are from a **2026-09-15** Release run of `professional_flowcoro_benchmark` on the author's machine (Intel Core i7-14650HX 6C/12T, Ubuntu 24.04.4 LTS WSL2, g++ 13.3.0, FlowCoro 4.0.0, `thread_count=12`). They are not a claim of production-proven scale.
 
-### Key Performance Highlights
+| Benchmark | Mean | Throughput |
+|-----------|------|------------|
+| Simple Computation | 14 ns | 69.0M ops/s |
+| Coroutine Create & Execute | 132 ns | 7.60M ops/s |
+| WhenAny (2 tasks) | 630 ns | 1.59M ops/s |
+| LockFree Queue (enq+deq) | 132 ns | 7.56M ops/s |
+| Memory Allocation (1KB) | 24 ns | 41.3M ops/s |
 
-- **Coroutine Creation & Execution**: Optimized performance with PGO
-- **Hello World Throughput**: Competitive performance compared to traditional threading
-- **WhenAny Operations**: Efficient concurrent scheduling
-- **Lock-free Queue**: High-performance operations
-- **Memory Pool Allocation**: Faster than standard system allocation
-- **HTTP Request Processing**: Good throughput performance
+Some bench labels (HTTP, Echo) are CPU-side simulations, not real sockets. This run did **not** refresh Go numbers; a same-machine Rust microbench exists but is **not** the same methodology — see PERFORMANCE_DATA.md rather than “N× faster than Go/Rust” claims.
 
-### Core Performance Comparison
-
-FlowCoro demonstrates good performance compared to Go and Rust in key areas:
-
-- **Coroutine Creation & Execution**: Competitive performance against Go and Rust
-- **Lock-free Queue**: Good performance characteristics
-- **HTTP Request Processing**: Solid performance metrics
-- **Simple Computation**: Efficient computational performance
-- **Memory Pool Allocation**: Optimized memory management
-
-**Best suited for**: Coroutine-based scheduling, batch processing, concurrent task management
+**Best suited for**: coroutine scheduling, batch / high-throughput work, plus deterministic realtime via `flowcoro::rt`.
 
 ## Quick Start
 
@@ -228,10 +219,11 @@ cd build && cmake .. && make ad_pipeline_demo
 ## Benchmarks
 
 ```bash
-# Run performance tests
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWCORO_BUILD_BENCHMARKS=ON
+cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
 ./build/benchmarks/professional_flowcoro_benchmark
 
-# Test different scales
+# Optional scale checks (different from the professional bench)
 ./build/examples/hello_world 10000   # 10K tasks
 ./build/examples/hello_world 100000  # 100K tasks
 ```

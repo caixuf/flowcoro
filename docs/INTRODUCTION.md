@@ -289,17 +289,17 @@ int main() {
 
 ## 性能表现
 
-FlowCoro 在关键指标上与 Go 和 Rust (Tokio) 相比：
+当前数字来自作者机器 **2026-09-15** 的 Release 跑（i7-14650HX 6C/12T，WSL2，g++ 13.3.0，FlowCoro 4.0.0）。**没有**与本次对齐的 Go 刷新数据；不要使用旧的 13.3M / 183K 或「比 Go 快 N 倍」。
 
-| 指标 | FlowCoro | Go | Rust (Tokio) |
-|------|----------|----|--------------|
-| 协程/任务创建 | **13.3M ops/s** | 1.86M ops/s | 36.4K ops/s |
-| 并发客户端 (100任务) | **183K ops/s** | 2.9K ops/s | 854 ops/s |
-| 无锁队列操作 | **15.8M ops/s** | 11.0M ops/s | 7.2M ops/s |
-| 内存池分配 | **35.2M ops/s** | 32.7M ops/s | 35.0M ops/s |
-| HTTP 请求处理 | **34.9M ops/s** | 33.0M ops/s | 34.6M ops/s |
+| Benchmark | Mean | Throughput |
+|-----------|------|------------|
+| Simple Computation | 14 ns | 69.0M ops/s |
+| Coroutine Create & Execute | 132 ns | 7.60M ops/s |
+| WhenAny (2 tasks) | 630 ns | 1.59M ops/s |
+| LockFree Queue (enq+deq) | 132 ns | 7.56M ops/s |
+| Concurrent Echo Clients（模拟，非真实网络） | 16771 ns | 59.6K ops/s |
 
-> 详细测试方法和环境见 [性能数据参考](PERFORMANCE_DATA.md)。
+完整表、环境、复现命令，以及同机 Rust 微基准（方法不完全相同）见 [性能数据参考](PERFORMANCE_DATA.md)。
 
 ---
 
