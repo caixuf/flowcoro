@@ -509,8 +509,27 @@ void EventLoop::add_fd(socket_t fd, uint32_t events, std::unique_ptr<IoEventHand
     if (events & static_cast<uint32_t>(IoEvent::EDGE_TRIGGERED)) event.events |= EPOLLET;
     event.data.fd = fd;
 
-    if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &event) == -1) {
-        throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
+    int op = EPOLL_CTL_ADD;
+    {
+        std::lock_guard<std::mutex> lock(handlers_mutex_);
+        if (handlers_.find(fd) != handlers_.end()) {
+            op = EPOLL_CTL_MOD;
+        }
+    }
+
+    if (epoll_ctl(epoll_fd_, op, fd, &event) == -1) {
+        // 与 worker 并发时可能 ADD 撞上尚未 DEL 的 fd，或 MOD 撞上已 DEL。
+        if (errno == EEXIST) {
+            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) == -1) {
+                throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
+            }
+        } else if (errno == ENOENT) {
+            if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &event) == -1) {
+                throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
+            }
+        } else {
+            throw std::runtime_error("Failed to add fd to epoll: " + std::string(strerror(errno)));
+        }
     }
 
     handler->fd = fd;
@@ -685,7 +704,9 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
 
     auto handler = std::make_unique<IoEventHandler>();
     handler->on_write = [&connect_promise, this]() {
-        // 检查连接状态
+        // 必须先摘除 fd，再 set_value：CoroutinePool worker 可能在回调返回前
+        // 就 resume 并再次 add_fd。若后 remove_fd，会删掉新 handler → 永久挂起。
+        loop_->remove_fd(fd_);
         int error = 0;
         socklen_t len = sizeof(error);
         if (::getsockopt(fd_, SOL_SOCKET, SO_ERROR,
@@ -699,14 +720,13 @@ Task<void> Socket::connect(const std::string& host, uint16_t port) {
                 )
             );
         }
-        loop_->remove_fd(fd_);
     };
 
     handler->on_error = [&connect_promise, this]() {
+        loop_->remove_fd(fd_);
         connect_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Connect error"))
         );
-        loop_->remove_fd(fd_);
     };
 
     loop_->add_fd(fd_, static_cast<uint32_t>(IoEvent::WRITE), std::move(handler));
@@ -755,6 +775,8 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
         socket_t inner_fd = accept_non_blocking(
             fd_, reinterpret_cast<sockaddr*>(&inner_addr), &inner_len);
 
+        // 先摘 fd，再唤醒等待 accept 的协程（见 connect 回调注释）。
+        loop_->remove_fd(fd_);
         if (inner_fd != INVALID_SOCKET_HANDLE) {
             auto client_socket = std::make_unique<Socket>(inner_fd, loop_);
             accept_promise.set_value(std::move(client_socket));
@@ -766,15 +788,13 @@ Task<std::unique_ptr<Socket>> Socket::accept() {
                 )
             );
         }
-
-        loop_->remove_fd(fd_);
     };
 
     handler->on_error = [&accept_promise, this]() {
+        loop_->remove_fd(fd_);
         accept_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Accept error"))
         );
-        loop_->remove_fd(fd_);
     };
 
     loop_->add_fd(fd_, static_cast<uint32_t>(IoEvent::READ), std::move(handler));
@@ -822,24 +842,24 @@ Task<ssize_t> Socket::read(char* buffer, size_t size) {
                 break; // 暂无更多可读
             }
             // 错误
+            loop_->remove_fd(fd_);
             read_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Read failed: " +
                                        socket_error_string(last_socket_error()))
                 )
             );
-            loop_->remove_fd(fd_);
             return;
         }
-        read_promise.set_value(total);
         loop_->remove_fd(fd_);
+        read_promise.set_value(total);
     };
 
     handler->on_error = [&read_promise, this]() {
+        loop_->remove_fd(fd_);
         read_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Read error"))
         );
-        loop_->remove_fd(fd_);
     };
 
     loop_->add_fd(fd_, static_cast<uint32_t>(IoEvent::READ), std::move(handler));
@@ -879,24 +899,24 @@ Task<ssize_t> Socket::write(const char* data, size_t size) {
                 break; // 内核发送缓冲区已满，等待下次可写事件触发后继续
             }
             // 错误
+            loop_->remove_fd(fd_);
             write_promise.set_exception(
                 std::make_exception_ptr(
                     std::runtime_error("Write failed: " +
                                        socket_error_string(last_socket_error()))
                 )
             );
-            loop_->remove_fd(fd_);
             return;
         }
-        write_promise.set_value(total);
         loop_->remove_fd(fd_);
+        write_promise.set_value(total);
     };
 
     handler->on_error = [&write_promise, this]() {
+        loop_->remove_fd(fd_);
         write_promise.set_exception(
             std::make_exception_ptr(std::runtime_error("Write error"))
         );
-        loop_->remove_fd(fd_);
     };
 
     loop_->add_fd(fd_, static_cast<uint32_t>(IoEvent::WRITE), std::move(handler));

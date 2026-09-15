@@ -223,9 +223,6 @@ target_link_libraries(test_real_net_echo
     flowcoro_net
     Threads::Threads
 )
-    flowcoro_net
-    Threads::Threads
-)
 
 # 添加测试
 add_test(NAME test_core COMMAND test_core)
@@ -359,9 +356,6 @@ set_tests_properties(test_rt_cycle_jitter PROPERTIES
 )
 
 set_tests_properties(test_real_net_echo PROPERTIES
-    TIMEOUT 30
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-)
     TIMEOUT 30
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
