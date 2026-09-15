@@ -134,4 +134,5 @@ __pycache__/
 *.egg-info/
 python/build/
 dist/
-.pytest_cache/.deepseek/
+.pytest_cache/
+.deepseek/
