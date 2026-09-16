@@ -15,7 +15,8 @@ English | [中文](README_zh.md)
 - **Memory Pool**: Custom memory allocation inspired by Redis/Nginx design
 - **PGO Optimization**: Performance improvements through profile-guided compilation
 - **Deterministic Real-Time Execution**: Single-thread-affine `RtExecutor` for robotics / control / embedded — periodic ticks, CPU pinning, and a measured jitter lamp (`flowcoro::rt`). See the [rt control-loop demo](examples/autonomous_driving/rt_control_loop_demo.cpp); the [DDS pipeline demo](examples/autonomous_driving/ad_pipeline_demo.cpp) uses `Task<>`, not `RtExecutor`.
-- **Bounded Lock-Free MPMC Channel**: `BoundedChannel<T>` (Vyukov ring — no allocation, no SMR, immediate fail when full/empty); fills the gap left by the coroutine-only `Channel<T>`
+- **Bounded Lock-Free MPMC Channel**: `BoundedChannel<T>` (Vyukov ring — no allocation, no SMR, immediate fail when full/empty)
+- **CUDA stream awaiters**: `PinnedHostBuffer` / `DeviceBuffer` / `co_await stream` via `cuLaunchHostFunc` (used by flowtrain’s async 1F1B). Learn: [docs/LEARN_CUDA.md](docs/LEARN_CUDA.md)
 - **CPU Affinity**: `cpu_affinity.h` unifies pinning and **physical-core** enumeration (dedup by `thread_siblings_list`, so SMT siblings never go to two workers); `lockfree::ThreadPool` takes an affinity list directly
 - **Python Bindings (optional)**: `-DFLOWCORO_BUILD_PYTHON=ON` builds `flowcoro_py.so` — `CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`; see [Python binding docs](docs/PYTHON_BINDING.md)
 
@@ -33,7 +34,7 @@ Measured numbers live in [Performance Data Reference](docs/PERFORMANCE_DATA.md).
 
 Some bench labels (HTTP, Echo) are CPU-side simulations, not real sockets. This run did **not** refresh Go numbers; a same-machine Rust microbench exists but is **not** the same methodology — see PERFORMANCE_DATA.md rather than “N× faster than Go/Rust” claims.
 
-**Best suited for**: coroutine scheduling, batch / high-throughput work, plus deterministic realtime via `flowcoro::rt`.
+**Best suited for**: coroutine scheduling, batch / high-throughput work, plus deterministic realtime via `flowcoro::rt`. Sibling LLM testbeds: [flowserve](https://github.com/caixuf/flowserve) (serving schedule), [flowtrain](https://github.com/caixuf/flowtrain) (DP/TP/PP mechanism). This repo is not an LLM trainer.
 
 ## Quick Start
 
@@ -237,6 +238,7 @@ cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
 - [Performance Data](docs/PERFORMANCE_DATA.md)
 - [PGO Optimization Guide](docs/PGO_GUIDE.md)
 - [Python Bindings](docs/PYTHON_BINDING.md)
+- [CUDA awaiters & BoundedChannel (for flowtrain)](docs/LEARN_CUDA.md)
 
 ## License
 

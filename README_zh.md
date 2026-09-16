@@ -15,7 +15,8 @@
 - **内存池**: 参考Redis/Nginx设计的自定义内存分配
 - **PGO优化**: 通过Profile-Guided编译提升性能
 - **确定性实时执行**: 单线程亲和的 `RtExecutor`，面向机器人/控制/嵌入式——周期 tick、CPU 绑定、可测抖动（见 `flowcoro::rt`）。[实时控制回路示例](examples/autonomous_driving/rt_control_loop_demo.cpp)；[DDS 管道示例](examples/autonomous_driving/ad_pipeline_demo.cpp)走的是 `Task<>`，不是 `RtExecutor`。
-- **有界 MPMC 无锁通道**: `BoundedChannel<T>`（Vyukov 环，无分配、无 SMR、满/空立即返回），补齐 `Channel<T>` 只服务协程的空缺
+- **有界 MPMC 无锁通道**: `BoundedChannel<T>`（Vyukov 环，满/空立即返回）
+- **CUDA 流等待**: `PinnedHostBuffer` / `DeviceBuffer` / `co_await stream`（`cuLaunchHostFunc` 回调回工作池）。给 flowtrain 异步 1F1B 用，学： [docs/LEARN_CUDA.md](docs/LEARN_CUDA.md)
 - **CPU 亲和性**: `cpu_affinity.h` 统一绑核与**物理核**枚举（按 `thread_siblings_list` 去重，SMT 兄弟不会分给两个 worker），`lockfree::ThreadPool` 可直接绑核
 - **Python 绑定（可选）**: `-DFLOWCORO_BUILD_PYTHON=ON` 产出 `flowcoro_py.so`——`CoroutineThreadPool` + `when_all`/`wait_any` + `Channel`，见 [Python 绑定文档](docs/PYTHON_BINDING.md)
 
@@ -33,7 +34,7 @@
 
 部分行（HTTP、Echo）是 CPU 侧模拟，不是真实套接字。本次 **没有** 刷新 Go 数字；同机有一份 Rust 微基准，但方法不完全相同——请看 PERFORMANCE_DATA.md，不要用「比 Go/Rust 快 N 倍」来概括。
 
-**适用场景**: 协程调度、批量/高吞吐，以及 `flowcoro::rt` 确定性实时路径。
+**适用场景**: 协程调度、批量/高吞吐，以及 `flowcoro::rt` 确定性实时路径。旁边的 LLM 测试台：[flowserve](https://github.com/caixuf/flowserve)、[flowtrain](https://github.com/caixuf/flowtrain)。本库不是训练框架。
 
 ## 快速开始
 
@@ -210,6 +211,7 @@ cmake --build build --target professional_flowcoro_benchmark -j$(nproc)
 - [性能数据](docs/PERFORMANCE_DATA.md)
 - [PGO优化指南](docs/PGO_GUIDE.md)
 - [Python 绑定](docs/PYTHON_BINDING.md)
+- [CUDA 协程与有界通道（flowtrain 用法）](docs/LEARN_CUDA.md)
 
 ## 许可证
 
