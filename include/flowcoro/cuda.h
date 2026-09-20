@@ -13,6 +13,8 @@
 
 #include <coroutine>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -21,8 +23,6 @@
 
 #if __has_include(<cuda.h>)
 #include <cuda.h>
-#elif __has_include("/home/caixuf/.local/lib/python3.12/site-packages/nvidia/cu13/include/cuda.h")
-#include "/home/caixuf/.local/lib/python3.12/site-packages/nvidia/cu13/include/cuda.h"
 #else
 typedef struct CUstream_st* CUstream;
 typedef struct CUevent_st* CUevent;
