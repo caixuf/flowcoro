@@ -120,9 +120,29 @@ target_link_libraries(test_cpu_affinity flowcoro_net Threads::Threads)
 add_executable(test_idle_park test_idle_park.cpp)
 target_link_libraries(test_idle_park flowcoro_net Threads::Threads)
 
-# 原生 C++20 CUDA 协程 Awaiter 异构执行测试
+# 原生 C++20 CUDA 协程 Awaiter 异构执行测试。
+# 默认（无 GPU / 无 toolkit）走 include/flowcoro/cuda.h 内的 Driver API stub，
+# 不得注入开发机路径（例如 python nvidia/cu13），否则 CI 编译行会带上
+# -I/home/<user>/... 且与 stub/真实头文件选择不一致。
+# 仅当本机确实存在 cuda.h 时才加入 include；否则让 __has_include(<cuda.h>)
+# 失败并编译 stub（stub 需要 <cstring>/<cstdlib>）。
 add_executable(test_cuda_coro test_cuda_coro.cpp)
-target_include_directories(test_cuda_coro PRIVATE /home/caixuf/.local/lib/python3.12/site-packages/nvidia/cu13/include)
+set(_flowcoro_cuda_include "")
+if(DEFINED FLOWCORO_CUDA_INCLUDE_DIR AND EXISTS "${FLOWCORO_CUDA_INCLUDE_DIR}/cuda.h")
+    set(_flowcoro_cuda_include "${FLOWCORO_CUDA_INCLUDE_DIR}")
+elseif(DEFINED ENV{CUDA_HOME} AND EXISTS "$ENV{CUDA_HOME}/include/cuda.h")
+    set(_flowcoro_cuda_include "$ENV{CUDA_HOME}/include")
+elseif(DEFINED ENV{CUDA_PATH} AND EXISTS "$ENV{CUDA_PATH}/include/cuda.h")
+    set(_flowcoro_cuda_include "$ENV{CUDA_PATH}/include")
+elseif(EXISTS "/usr/local/cuda/include/cuda.h")
+    set(_flowcoro_cuda_include "/usr/local/cuda/include")
+endif()
+if(_flowcoro_cuda_include)
+    message(STATUS "FlowCoro: using CUDA headers at ${_flowcoro_cuda_include}")
+    target_include_directories(test_cuda_coro PRIVATE "${_flowcoro_cuda_include}")
+else()
+    message(STATUS "FlowCoro: no CUDA toolkit headers found; test_cuda_coro uses host stubs")
+endif()
 find_library(CUDA_DRIVER_LIB NAMES cuda PATHS /usr/lib/wsl/lib /usr/lib/x86_64-linux-gnu)
 if(CUDA_DRIVER_LIB)
     target_link_libraries(test_cuda_coro flowcoro_net Threads::Threads ${CUDA_DRIVER_LIB})
