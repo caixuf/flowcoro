@@ -54,6 +54,10 @@ target_link_libraries(app_io_demo PRIVATE flowcoro_net)
 add_executable(http_client_demo http_client_demo.cpp)
 target_link_libraries(http_client_demo PRIVATE flowcoro_net)
 
+# Agent tool fan-in demo (ToolFanIn + CancellationToken)
+add_executable(agent_tool_fanout_demo agent_tool_fanout_demo.cpp)
+target_link_libraries(agent_tool_fanout_demo PRIVATE flowcoro_net)
+
 # 聊天服务器 - 展示多客户端协程处理
 add_executable(chat_server chat_server.cpp)
 target_link_libraries(chat_server PRIVATE flowcoro_net)

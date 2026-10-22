@@ -15,6 +15,7 @@
 #include "http_server.h"
 #include "channel.h"
 #include "core.h"
+#include "cancellation.h"
 
 #include <chrono>
 #include <string>
@@ -55,5 +56,22 @@ public:
 private:
     std::chrono::steady_clock::time_point start_;
 };
+
+
+/**
+ * Named recipe: agent tool fan-in — wait for all tool Tasks (forwards to when_all).
+ * Pair with CancellationToken / CancellationTokenSource for cooperative cancel.
+ * Alias name documents agent-sched intent; no new framework.
+ */
+template <typename... Tasks>
+inline auto tool_fan_in(Tasks&&... tasks) {
+    return when_all(std::forward<Tasks>(tasks)...);
+}
+
+/** Optional spelling used in docs / contracts. */
+template <typename... Tasks>
+inline auto ToolFanIn(Tasks&&... tasks) {
+    return tool_fan_in(std::forward<Tasks>(tasks)...);
+}
 
 }  // namespace flowcoro::app
