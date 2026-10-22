@@ -217,6 +217,8 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          # inherit: keep runner PATH; UCRT64 still first for PE loader.
+          path-type: inherit
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
@@ -244,8 +246,30 @@ jobs:
             test_rt_cycle_jitter test_real_net_echo \
             test_bounded_channel test_cpu_affinity
 
+      # MSYS2 renamed/split gcc-libs -> cc-libs/libgcc/libstdc++ after 2026-09.
+      # ctest-spawned .exe then hit STATUS_DLL_NOT_FOUND (0xc0000135) when the
+      # Windows PE loader cannot resolve UCRT64 runtime DLLs. Prepend PATH and
+      # copy runtime DLLs next to the test executables (build/tests).
       - name: Run portable tests
         run: |
+          export PATH="/ucrt64/bin:$PATH"
+          mkdir -p build/tests
+          shopt -s nullglob
+          dlls=(/ucrt64/bin/libstdc++*.dll /ucrt64/bin/libgcc_s_*.dll \
+                /ucrt64/bin/libwinpthread*.dll /ucrt64/bin/libatomic*.dll \
+                /ucrt64/bin/libssp*.dll)
+          if ((${#dlls[@]})); then
+            cp -f "${dlls[@]}" build/tests/
+            echo "Copied MinGW runtime DLLs into build/tests:"
+            ls -la build/tests/*.dll
+          else
+            echo "WARNING: no MinGW runtime DLLs matched; listing /ucrt64/bin/*.dll"
+            ls /ucrt64/bin/*.dll | head -80 || true
+          fi
+          if command -v ldd >/dev/null 2>&1; then
+            echo "ldd build/tests/test_core.exe:"
+            ldd build/tests/test_core.exe || true
+          fi
           ctest --test-dir build --output-on-failure --parallel 2 \
             --label-exclude network_external \
             -R 'test_core|test_new_features|test_network_professional|test_cross_thread|test_when_any|test_sleep_for|test_exception_propagation|test_bus_awaitable|test_lockfree_stress|test_when_any_v2|test_cancellation|test_timeout|test_c_api|test_rt_executor|test_rt_latency|test_rt_cycle_jitter|test_real_net_echo|test_bounded_channel|test_cpu_affinity'
