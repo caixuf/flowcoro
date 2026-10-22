@@ -142,7 +142,8 @@ server.stop();
 GlobalEventLoop::shutdown();
 ```
 
-See `examples/http_channel_demo.cpp` for a runnable end-to-end demo.
+See `examples/http_channel_demo.cpp` / `examples/app_io_demo/` for runnable demos.
+Map of façade → primitives: [`docs/APP_FACING.md`](docs/APP_FACING.md).
 
 ### Python (optional)
 

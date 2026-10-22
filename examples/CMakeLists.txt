@@ -46,6 +46,11 @@ target_link_libraries(echo_server PRIVATE flowcoro_net)
 add_executable(http_channel_demo http_channel_demo.cpp)
 target_link_libraries(http_channel_demo PRIVATE flowcoro_net)
 
+
+# App-facing IO demo (HttpServer + Channel + when_all)
+add_executable(app_io_demo app_io_demo/main.cpp)
+target_link_libraries(app_io_demo PRIVATE flowcoro_net)
+
 add_executable(http_client_demo http_client_demo.cpp)
 target_link_libraries(http_client_demo PRIVATE flowcoro_net)
 
