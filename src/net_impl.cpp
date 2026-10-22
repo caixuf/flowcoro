@@ -1163,6 +1163,19 @@ Task<void> TcpServer::listen(const std::string& host, uint16_t port) {
     co_return;
 }
 
+uint16_t TcpServer::local_port() const {
+    if (!listen_socket_ || listen_socket_->fd() == INVALID_SOCKET_HANDLE) {
+        return 0;
+    }
+    sockaddr_in addr{};
+    socklen_t len = sizeof(addr);
+    if (::getsockname(listen_socket_->fd(),
+                      reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+        return 0;
+    }
+    return ntohs(addr.sin_port);
+}
+
 void TcpServer::stop() {
     running_.store(false, std::memory_order_release);
     if (listen_socket_) {

@@ -122,6 +122,29 @@ int main() {
 }
 ```
 
+### App-facing HTTP + Channel (demo API)
+
+```cpp
+#include <flowcoro.hpp>
+using namespace flowcoro;
+using namespace flowcoro::net;
+
+auto& loop = GlobalEventLoop::get();
+HttpServer server(&loop);
+server.get("/health", [](const HttpIncomingRequest&) -> Task<HttpResponse> {
+    co_return HttpResponse{200, "OK", "ok"};
+});
+sync_wait(server.listen("127.0.0.1", 18080));
+
+HttpClient client;
+auto r = client.request_sync(HttpMethod::GET, "http://127.0.0.1:18080/health");
+server.stop();
+GlobalEventLoop::shutdown();
+```
+
+See `examples/http_channel_demo.cpp` / `examples/app_io_demo/` for runnable demos.
+Map of façade → primitives: [`docs/APP_FACING.md`](docs/APP_FACING.md).
+
 ### Python (optional)
 
 ```bash

@@ -42,6 +42,18 @@ target_link_libraries(performance_monitor_demo PRIVATE flowcoro_net)
 add_executable(echo_server echo_server.cpp)
 target_link_libraries(echo_server PRIVATE flowcoro_net)
 
+# App-facing HTTP + Channel demo (HttpServer façade)
+add_executable(http_channel_demo http_channel_demo.cpp)
+target_link_libraries(http_channel_demo PRIVATE flowcoro_net)
+
+
+# App-facing IO demo (HttpServer + Channel + when_all)
+add_executable(app_io_demo app_io_demo/main.cpp)
+target_link_libraries(app_io_demo PRIVATE flowcoro_net)
+
+add_executable(http_client_demo http_client_demo.cpp)
+target_link_libraries(http_client_demo PRIVATE flowcoro_net)
+
 # 聊天服务器 - 展示多客户端协程处理
 add_executable(chat_server chat_server.cpp)
 target_link_libraries(chat_server PRIVATE flowcoro_net)
