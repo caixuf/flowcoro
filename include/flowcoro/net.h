@@ -402,6 +402,11 @@ public:
      */
     bool is_running() const { return running_.load(std::memory_order_acquire); }
 
+    /**
+     * @brief Bound listen port (useful after listen(..., 0)).
+     */
+    uint16_t local_port() const;
+
 private:
     Task<void> accept_loop();
 };

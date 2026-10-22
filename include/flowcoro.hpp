@@ -37,6 +37,7 @@
 #include "flowcoro/network.h"
 #include "flowcoro/net.h"
 #include "flowcoro/http_client.h"
+#include "flowcoro/http_server.h"
 #include "flowcoro/simple_db.h"
 #include "flowcoro/rpc.h"
 #include "flowcoro/channel.h"
