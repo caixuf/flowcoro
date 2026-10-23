@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Agent-like N-tool fanout on FlowCoro — not a full LLM agent.
 
-Shows: submit_tool × N → gather / wait_first → cooperative cancel.
+Shows: submit_tool × N → gather / wait_first → cooperative cancel via token.
+Knife A cancel_event remains accepted as a wide-in bridge.
 """
 from __future__ import annotations
 
@@ -9,7 +10,6 @@ import json
 import pathlib
 import sys
 import time
-import threading
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -32,11 +32,12 @@ from flowcoro_agent import AgentScheduler  # noqa: E402
 import flowcoro_py as fc  # noqa: E402
 
 
-def stub_tool(tool_id: int, work_ms: int, cancel_event: threading.Event) -> dict:
+def stub_tool(tool_id: int, work_ms: int, cancel_token=None) -> dict:
+    """Prefer cancel_token poll; ignore token ⇒ may finish ok (honest)."""
     step = 0.02
     waited = 0.0
     while waited < work_ms / 1000.0:
-        if cancel_event.is_set():
+        if cancel_token is not None and cancel_token.is_cancelled():
             return {"id": tool_id, "status": "cancelled", "waited_ms": int(waited * 1000)}
         time.sleep(step)
         waited += step
@@ -53,7 +54,7 @@ def main() -> int:
             for i, ms in enumerate(durations)
         ]
 
-        # Cancel two long tools cooperatively.
+        # Cancel two long tools cooperatively (token + Event bridge).
         sched.cancel(handles[4])
         sched.cancel(handles[5])
 

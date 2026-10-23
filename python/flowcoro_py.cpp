@@ -56,6 +56,7 @@
 #include <pybind11/stl.h>
 
 #include "flowcoro/bounded_channel.h"
+#include "flowcoro/cancellation.h"
 #include "flowcoro/cpu_affinity.h"
 #include "flowcoro/hazard_pointer.h"
 #include "flowcoro/thread_pool.h"
@@ -690,6 +691,40 @@ PYBIND11_MODULE(flowcoro_py, m) {
         .def_property_readonly("capacity", &PyChannel::capacity)
         .def("__len__", &PyChannel::size)
         .def("__repr__", &PyChannel::repr);
+
+    // -----------------------------------------------------------------------
+    // Cancellation (Knife B) — cooperative poll only; no Future preempt.
+    // Token methods are trivial atomics: no wait, GIL cost is irrelevant.
+    // throw_if_cancellation_requested → CancelledError (maps C++ exception).
+    // -----------------------------------------------------------------------
+    py::register_exception<flowcoro::CancellationTokenException>(m, "CancelledError");
+
+    py::class_<flowcoro::CancellationToken>(m, "CancellationToken",
+                                            "Shared cooperative cancel view (value type). "
+                                            "Poll is_cancelled() or throw_if_cancellation_requested().")
+        .def("is_cancelled", &flowcoro::CancellationToken::is_cancelled,
+             "True if the owning CancellationTokenSource has been cancelled.")
+        .def("throw_if_cancellation_requested",
+             &flowcoro::CancellationToken::throw_if_cancellation_requested,
+             "Raise CancelledError if cancelled; otherwise return.")
+        .def("__repr__", [](const flowcoro::CancellationToken& self) {
+            return std::string("<flowcoro_py.CancellationToken ") +
+                   (self.is_cancelled() ? "cancelled>" : "active>");
+        });
+
+    py::class_<flowcoro::CancellationTokenSource>(m, "CancellationTokenSource",
+                                                  "Cancel source: mint tokens via token(); cancel() is idempotent.")
+        .def(py::init<>())
+        .def("token", &flowcoro::CancellationTokenSource::token,
+             "Return a CancellationToken sharing this source's state.")
+        .def("cancel", &flowcoro::CancellationTokenSource::cancel,
+             "Mark cancelled (idempotent). Tokens observe via is_cancelled().")
+        .def("is_cancelled", &flowcoro::CancellationTokenSource::is_cancelled,
+             "True after cancel() has been called.")
+        .def("__repr__", [](const flowcoro::CancellationTokenSource& self) {
+            return std::string("<flowcoro_py.CancellationTokenSource ") +
+                   (self.is_cancelled() ? "cancelled>" : "active>");
+        });
 
     m.def("physical_core_cpus", &flowcoro::physical_core_cpus,
           "本机物理核代表 CPU 列表（与 cpu_topology.sh 的 thread_siblings_list 同口径）。");

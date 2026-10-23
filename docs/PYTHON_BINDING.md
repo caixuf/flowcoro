@@ -79,6 +79,30 @@ msg = channel.try_pop()    # -> Optional[bytes]
 关闭后 `try_push` 立即失败但已入队元素仍可 `try_pop` 取完。
 `len(channel)` 等于 `size`。
 
+
+
+### Cancellation (Knife B)
+
+Cooperative cancel only — bind of C++ `CancellationTokenSource` / `CancellationToken`.
+**Not** `Future` preempt / thread kill. Tools must poll.
+
+```python
+src = fc.CancellationTokenSource()
+tok = src.token()
+assert not tok.is_cancelled()
+src.cancel()           # idempotent
+assert src.is_cancelled() and tok.is_cancelled()
+tok.throw_if_cancellation_requested()  # raises fc.CancelledError
+```
+
+| Type | Methods |
+|---|---|
+| `CancelledError` | Python exception (maps `CancellationTokenException`) |
+| `CancellationTokenSource` | `__init__()` / `token()` / `cancel()` / `is_cancelled()` |
+| `CancellationToken` | `is_cancelled()` / `throw_if_cancellation_requested()` |
+
+GIL note: token methods are trivial atomics; there is no wait path. Skip: `register_callback`, TaskGroup, inventing a Cancelled `TaskState`.
+
 ### 其它
 
 `fc.physical_core_cpus() -> list[int]`、`fc.shutdown()`（回收 hazard retired 节点，可重复调用）。

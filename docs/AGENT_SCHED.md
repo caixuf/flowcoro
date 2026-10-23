@@ -25,7 +25,8 @@ agent turn
 | Wait all tools | `when_all(futures)` |
 | First done | `wait_any(futures, timeout)` |
 | Stream results | `Channel` + serialize to `bytes` |
-| Cancel | Knife A: `threading.Event` checked by tool; Knife B: bind `CancellationToken` |
+| Cancel | `CancellationTokenSource.cancel()`; tool polls `cancel_token` |
+| Bind | `flowcoro_py.CancellationTokenSource` / `CancellationToken` / `CancelledError` |
 
 See `PYTHON_BINDING.md` for GIL rules (waits release GIL; CPU-bound Python still holds GIL).
 
@@ -34,9 +35,17 @@ See `PYTHON_BINDING.md` for GIL rules (waits release GIL; CPU-bound Python still
 `examples/python/flowcoro_agent.py` → `AgentScheduler` / `ToolHandle`  
 Demo: `examples/python/agent_tool_fanout_demo.py`
 
+## Cancel
+
+`AgentScheduler` Prefer one Source per tool; `cancel_all` cancels each. Knife A `cancel_event` remains wide-in one release.
+
+### Risk (honest)
+
+**Pool ≠ Task.** Cancel is cooperative poll only — not `Future` preempt, not thread kill. Tools that ignore the token may still finish successfully.
+
 ## Limits (honest)
 
-- Knife A cancel is **cooperative**, not preempt.
+- Cancel is **cooperative**, not preempt (see above).
 - Channel payloads are `bytes` only.
 - Same-process only; no cross-container Channel.
 - Do not claim speedups vs `concurrent.futures.ThreadPoolExecutor`.
