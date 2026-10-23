@@ -375,6 +375,162 @@ def test_channel_no_loss_or_duplication_under_python_threads():
     assert channel.size == 0
 
 
+
+# ---------------------------------------------------------------------------
+# Cancellation (Knife B) — Token bind; cooperative poll; no Future preempt
+# ---------------------------------------------------------------------------
+
+
+def test_cancellation_token_source_cancel_and_throw():
+    src = fc.CancellationTokenSource()
+    tok = src.token()
+    assert src.is_cancelled() is False
+    assert tok.is_cancelled() is False
+    src.cancel()
+    src.cancel()  # idempotent
+    assert src.is_cancelled() is True
+    assert tok.is_cancelled() is True
+    with pytest.raises(fc.CancelledError):
+        tok.throw_if_cancellation_requested()
+
+
+def test_cancellation_shared_source_fans_out_to_tokens():
+    src = fc.CancellationTokenSource()
+    a, b = src.token(), src.token()
+    assert a.is_cancelled() is False and b.is_cancelled() is False
+    src.cancel()
+    assert a.is_cancelled() is True and b.is_cancelled() is True
+
+
+def test_cancellation_throw_before_cancel_is_noop():
+    tok = fc.CancellationTokenSource().token()
+    tok.throw_if_cancellation_requested()  # must not raise
+
+
+def test_agent_cancel_before_run_via_token():
+    """Cancel source before the tool body polls → tool observes cancelled."""
+    import pathlib
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    agent_dir = root / "examples" / "python"
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+    from flowcoro_agent import AgentScheduler
+
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def gated(cancel_token):
+        started.set()
+        proceed.wait(timeout=5)
+        if cancel_token.is_cancelled():
+            return "cancelled-before-poll-done"
+        return "ran"
+
+    with AgentScheduler(threads=2) as sched:
+        h = sched.submit_tool("gated", gated)
+        assert started.wait(timeout=5)
+        sched.cancel(h)  # cancel while tool is blocked before its poll
+        proceed.set()
+        assert h.result(timeout=5) == "cancelled-before-poll-done"
+        assert h.cancelled() is True
+
+
+def test_agent_cancel_during_poll():
+    import pathlib
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    agent_dir = root / "examples" / "python"
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+    from flowcoro_agent import AgentScheduler
+
+    def slow(cancel_token):
+        for _ in range(200):
+            if cancel_token.is_cancelled():
+                return "cancelled"
+            time.sleep(0.01)
+        return "ok"
+
+    with AgentScheduler(threads=2) as sched:
+        h = sched.submit_tool("slow", slow)
+        time.sleep(0.05)
+        sched.cancel(h)
+        assert h.result(timeout=5) == "cancelled"
+        assert h.cancelled() is True
+
+
+def test_agent_cancel_after_done_is_harmless():
+    import pathlib
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    agent_dir = root / "examples" / "python"
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+    from flowcoro_agent import AgentScheduler
+
+    with AgentScheduler(threads=2) as sched:
+        h = sched.submit_tool("quick", lambda: 42)
+        assert h.result(timeout=5) == 42
+        sched.cancel(h)  # after done
+        assert h.result(timeout=1) == 42
+        assert h.source.is_cancelled() is True
+
+
+def test_agent_cancel_all_cancels_each_per_tool_source():
+    import pathlib
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    agent_dir = root / "examples" / "python"
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+    from flowcoro_agent import AgentScheduler
+
+    def poller(cancel_token):
+        for _ in range(300):
+            if cancel_token.is_cancelled():
+                return "cancelled"
+            time.sleep(0.01)
+        return "ok"
+
+    with AgentScheduler(threads=4) as sched:
+        handles = [sched.submit_tool(f"t{i}", poller) for i in range(3)]
+        time.sleep(0.05)
+        sched.cancel_all()
+        results = sched.gather(handles)
+        assert results == ["cancelled", "cancelled", "cancelled"]
+        assert all(h.source.is_cancelled() for h in handles)
+
+
+def test_agent_keeps_event_bridge_wide_in():
+    """Knife A cancel_event inject still works for one release."""
+    import pathlib
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    agent_dir = root / "examples" / "python"
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+    from flowcoro_agent import AgentScheduler
+
+    def event_tool(cancel_event):
+        for _ in range(200):
+            if cancel_event.is_set():
+                return "event-cancelled"
+            time.sleep(0.01)
+        return "ok"
+
+    with AgentScheduler(threads=2) as sched:
+        h = sched.submit_tool("ev", event_tool)
+        time.sleep(0.05)
+        sched.cancel(h)
+        assert h.result(timeout=5) == "event-cancelled"
+
+
 # ---------------------------------------------------------------------------
 # 退出与全局
 # ---------------------------------------------------------------------------

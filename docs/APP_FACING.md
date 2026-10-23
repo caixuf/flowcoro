@@ -25,7 +25,7 @@ Prefer `#include <flowcoro.hpp>` (umbrella). Optional thin map: `flowcoro/app.hp
 | `examples/python/channel_pipeline_demo.py` | Minimal Channel pipeline |
 | `examples/python/agent_tool_fanout_demo.py` | Agent-like N-tool fanout + coop cancel |
 | `examples/agent_tool_fanout_demo.cpp` | C++ ToolFanIn + CancellationToken mirror |
-| `examples/python/flowcoro_agent.py` | `AgentScheduler` facade (Knife A) |
+| `examples/python/flowcoro_agent.py` | `AgentScheduler` facade (Knife B: per-tool `CancellationTokenSource`) |
 
 ## Out of scope
 
